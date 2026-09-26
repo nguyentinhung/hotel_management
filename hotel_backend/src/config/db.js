@@ -1,0 +1,83 @@
+const sql = require('mssql');
+
+const config = {
+  user: 'sa',
+  password: '123',
+  server: 'localhost',
+  database: 'hotel_management',
+  port: 1433,
+  options: {
+    encrypt: true,
+    trustServerCertificate: true,
+    enableArithAbort: true,
+  },
+  pool: {
+    max: 10,
+    min: 0,
+    idleTimeoutMillis: 30000,
+  },
+};
+
+let pool;
+
+async function getPool() {
+  if (!pool) {
+    pool = await sql.connect(config);
+  }
+  return pool;
+}
+
+async function ensureAuthTables() {
+  const currentPool = await getPool();
+
+  await currentPool.request().query(`
+    IF OBJECT_ID(N'dbo.email_verifications', N'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.email_verifications (
+        id BIGINT IDENTITY(1,1) PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        token VARCHAR(255) NOT NULL UNIQUE,
+        type VARCHAR(30) NOT NULL DEFAULT 'email_verification',
+        expires_at DATETIMEOFFSET NOT NULL,
+        used_at DATETIMEOFFSET NULL,
+        created_at DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT FK_email_verifications_users FOREIGN KEY (user_id) REFERENCES dbo.users(id)
+      );
+    END;
+  `);
+
+  await currentPool.request().query(`
+    IF OBJECT_ID(N'dbo.refresh_tokens', N'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.refresh_tokens (
+        id BIGINT IDENTITY(1,1) PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        token VARCHAR(255) NOT NULL UNIQUE,
+        expires_at DATETIMEOFFSET NOT NULL,
+        revoked_at DATETIMEOFFSET NULL,
+        created_at DATETIMEOFFSET NOT NULL DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT FK_refresh_tokens_users FOREIGN KEY (user_id) REFERENCES dbo.users(id)
+      );
+    END;
+  `);
+
+  await currentPool.request().query(`
+    IF NOT EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'CUSTOMER')
+      INSERT INTO dbo.roles (id, code, name) VALUES (1, 'CUSTOMER', 'Khách hàng');
+
+    IF NOT EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'RECEPTIONIST')
+      INSERT INTO dbo.roles (id, code, name) VALUES (2, 'RECEPTIONIST', 'Lễ tân');
+
+    IF NOT EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'HOUSEKEEPER')
+      INSERT INTO dbo.roles (id, code, name) VALUES (3, 'HOUSEKEEPER', 'Buồng phòng');
+
+    IF NOT EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'ADMIN')
+      INSERT INTO dbo.roles (id, code, name) VALUES (4, 'ADMIN', 'Quản trị viên');
+  `);
+}
+
+module.exports = {
+  sql,
+  getPool,
+  ensureAuthTables,
+};
