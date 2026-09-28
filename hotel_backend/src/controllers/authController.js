@@ -24,43 +24,60 @@ const buildUserResponse = (user) => ({
 });
 
 async function sendVerificationEmail(user, token) {
-  const baseUrl = process.env.APP_BASE_URL || 'http://localhost:5173';
-  const verificationUrl = `${baseUrl}/verify-email?token=${token}`;
-
   const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'localhost',
-    port: Number(process.env.SMTP_PORT || 1025),
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: Number(process.env.SMTP_PORT || 587),
     secure: false,
-    ignoreTLS: true,
-    ...(process.env.SMTP_USER
-      ? {
-          auth: {
-            user: process.env.SMTP_USER,
-            pass: process.env.SMTP_PASS,
-          },
-        }
-      : {}),
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
   });
 
-  try {
-    await transporter.sendMail({
-      from: process.env.SMTP_FROM || 'noreply@hotelmanagement.local',
-      to: user.email,
-      subject: 'Xác thực tài khoản Hotel Management',
-      html: `
-        <p>Xin chào ${user.full_name},</p>
-        <p>Vui lòng nhấn vào liên kết bên dưới để xác thực tài khoản:</p>
-        <p><a href="${verificationUrl}">${verificationUrl}</a></p>
-        <p>Liên kết này có hiệu lực trong vòng 24 giờ.</p>
-      `,
-    });
-    return true;
-  } catch (error) {
-    console.warn('Verification email send failed:', error.message);
-    return false;
-  }
-}
+  const baseUrl = process.env.APP_BASE_URL || 'http://localhost:4173';
 
+  const verificationUrl =
+    `${baseUrl}/verify-email?token=${encodeURIComponent(token)}`;
+
+  await transporter.sendMail({
+    from: process.env.SMTP_FROM || process.env.SMTP_USER,
+
+    // QUAN TRỌNG: gửi tới email người vừa đăng ký
+    to: user.email,
+
+    subject: 'Xác nhận tài khoản Hotel Management',
+
+    html: `
+      <h2>Chào ${user.full_name}</h2>
+
+      <p>Cảm ơn bạn đã đăng ký tài khoản Hotel Management.</p>
+
+      <p>Vui lòng bấm vào nút bên dưới để xác nhận email:</p>
+
+      <p>
+        <a href="${verificationUrl}"
+           style="
+             display:inline-block;
+             padding:10px 20px;
+             background:#007bff;
+             color:white;
+             text-decoration:none;
+             border-radius:5px;
+           ">
+          Xác nhận email
+        </a>
+      </p>
+
+      <p>Liên kết có hiệu lực trong 24 giờ.</p>
+
+      <p>Nếu bạn không đăng ký tài khoản này, hãy bỏ qua email.</p>
+    `,
+  });
+
+  console.log(`Verification email sent to: ${user.email}`);
+
+  return true;
+}
 // Tạo access token để client dùng cho request tiếp theo trong vòng 1 giờ
 const createAccessToken = (user) => jwt.sign(
   {
@@ -147,7 +164,6 @@ async function register(req, res) {
     return res.status(201).json({
       message: 'Đăng ký tài khoản thành công. Vui lòng kiểm tra email để xác thực tài khoản.',
       user: buildUserResponse(user),
-      verificationToken: emailSent ? undefined : verificationToken,
     });
   } catch (error) {
     console.error('Register error:', error);
