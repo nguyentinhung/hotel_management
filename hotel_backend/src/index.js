@@ -8,6 +8,8 @@ const { getPool, ensureAuthTables } = require('./config/db');
 // Seed data đã được tắt để dùng dữ liệu mẫu bạn insert trực tiếp trong SQL Server.
 const { getHomeData, getRoomTypes, getPromotions, getServices, getReviews } = require('./controllers/homeController');
 const { register, login, logout, verifyEmail } = require('./controllers/authController');
+const { checkAvailability, getAvailableRooms } = require('./controllers/roomController');
+const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, getActiveBookingsHandler, checkOutBookingHandler, finishRoomCleaningHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
 
 const app = express();
 const PORT = 5000;
@@ -66,6 +68,33 @@ app.get('/api/promotions/active', getPromotions);
 app.get('/api/services', getServices);
 // Lấy đánh giá từ khách hàng
 app.get('/api/reviews', getReviews);
+
+// ============================================================================
+// --- Chức năng: Check Room Availability & Đặt phòng tại quầy cho Lễ tân ---
+// ============================================================================
+// 1. Khách vãng lai (Guest), khách hàng (Customer) và Lễ tân (Receptionist) kiểm tra loại phòng còn trống theo ngày
+app.get('/api/rooms/availability', checkAvailability);
+
+// 2. Lấy danh sách số phòng vật lý còn trống theo từng loại phòng để lễ tân chọn tại quầy
+app.get('/api/rooms/available-list', getAvailableRooms);
+
+// 3. Lễ tân tạo đơn đặt phòng trực tiếp tại quầy (walk-in) cho khách
+app.post('/api/bookings/walk-in', createWalkInBookingHandler);
+
+// Khách hàng đã đăng nhập tạo booking online
+app.post('/api/bookings/customer', createCustomerBookingHandler);
+app.post('/api/bookings/:bookingId/check-in', checkInBookingHandler);
+app.post('/api/bookings/:bookingId/check-out', checkOutBookingHandler);
+app.get('/api/bookings/:bookingId/assignable-rooms', getAssignableRoomsHandler);
+app.post('/api/bookings/:bookingId/assign-room', assignRoomHandler);
+app.post('/api/rooms/:roomId/cleaning-complete', finishRoomCleaningHandler);
+app.get('/api/rooms/statuses', getRoomStatusesHandler);
+
+// 4. Lấy danh sách đặt phòng gần đây cho màn hình Dashboard Lễ tân
+app.get('/api/bookings/recent', getRecentBookingsHandler);
+app.get('/api/bookings/history', getBookingHistoryHandler);
+app.get('/api/bookings/active', getActiveBookingsHandler);
+
 
 // Upload ảnh chính cho loại phòng
 app.post('/api/room-types/:roomTypeId/image', upload.single('image'), async (req, res) => {

@@ -23,8 +23,21 @@ export const api = {
 
     if (!response.ok) {
       const errorText = await response.text();
-      const parsed = errorText ? JSON.parse(errorText) : null;
-      throw new Error(parsed?.message || `Request failed: ${response.status}`);
+      let message: string | undefined;
+      try {
+        const parsed = errorText ? JSON.parse(errorText) : null;
+        message = parsed?.message;
+      } catch {
+        // Some servers return an HTML 404 page when the API route is not loaded.
+      }
+
+      if (!message && /<!doctype html|<html/i.test(errorText)) {
+        message = response.status === 404
+          ? 'Backend chưa nhận endpoint đặt phòng mới. Hãy khởi động lại hotel_backend rồi thử lại.'
+          : `Backend trả về trang HTML thay vì JSON (HTTP ${response.status}).`;
+      }
+
+      throw new Error(message || `Request failed: ${response.status}`);
     }
 
     return response.json();
