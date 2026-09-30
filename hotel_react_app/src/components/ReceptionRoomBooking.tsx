@@ -847,50 +847,38 @@ export default function ReceptionRoomBooking() {
                       ) : '—'}
                     </td>
                   </tr>
-                  {selectedCheckInBooking?.id === b.id && (
-                    <tr>
-                      <td colSpan={11}>
-                        <form className="checkin-verification-form" onSubmit={(event) => void handleSubmitCheckIn(event)}>
-                          <strong>Đối chiếu giấy tờ trước khi nhận phòng: {b.guest_full_name}</strong>
-                          <label>
-                            <span>Số CCCD/CMND hoặc hộ chiếu</span>
-                            <input
-                              type="text"
-                              value={checkInIdCard}
-                              onChange={(event) => setCheckInIdCard(event.target.value)}
-                              minLength={5}
-                              maxLength={50}
-                              required
-                              autoComplete="off"
-                            />
-                          </label>
-                          <label className="checkbox-inline">
-                            <input
-                              type="checkbox"
-                              checked={hasVerifiedOriginalId}
-                              onChange={(event) => setHasVerifiedOriginalId(event.target.checked)}
-                            />
-                            Đã xem giấy tờ bản gốc và đối chiếu với khách đặt phòng
-                          </label>
-                          {checkInMessage && <p className={checkInMessage.type === 'error' ? 'inline-error' : 'success-message'}>{checkInMessage.text}</p>}
-                          <div className="booking-actions">
-                            <button type="submit" className="btn btn-primary" disabled={isCheckingIn || !hasVerifiedOriginalId}>
-                              {isCheckingIn ? 'Đang xác nhận...' : 'Lưu giấy tờ và check-in'}
-                            </button>
-                            <button type="button" className="btn btn-outline" onClick={() => setSelectedCheckInBooking(null)}>
-                              Hủy
-                            </button>
-                          </div>
-                        </form>
-                      </td>
-                    </tr>
-                  )}
                   </React.Fragment>
                 ))
               )}
             </tbody>
           </table>
         </div>
+        {selectedCheckInBooking && (
+          <div className="checkin-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !isCheckingIn) setSelectedCheckInBooking(null); }}>
+            <section className="checkin-modal" role="dialog" aria-modal="true" aria-labelledby="checkin-modal-title">
+              <header className="checkin-modal-header">
+                <div><span className="checkin-modal-eyebrow">Xác nhận nhận phòng</span><h3 id="checkin-modal-title">Đối chiếu giấy tờ khách</h3></div>
+                <button type="button" className="checkin-modal-close" aria-label="Đóng" onClick={() => !isCheckingIn && setSelectedCheckInBooking(null)} disabled={isCheckingIn}>×</button>
+              </header>
+              <div className="checkin-modal-booking"><strong>{selectedCheckInBooking.guest_full_name}</strong><span>{selectedCheckInBooking.booking_code} · {selectedCheckInBooking.room_type_name || 'Phòng'}{selectedCheckInBooking.room_number ? ` · P.${selectedCheckInBooking.room_number}` : ''}</span></div>
+              <form className="checkin-verification-form" onSubmit={(event) => void handleSubmitCheckIn(event)}>
+                <label>
+                  <span>Số CCCD/CMND hoặc hộ chiếu</span>
+                  <input type="text" value={checkInIdCard} onChange={(event) => setCheckInIdCard(event.target.value)} minLength={5} maxLength={50} required autoComplete="off" autoFocus placeholder="Nhập số giấy tờ tùy thân" />
+                </label>
+                <label className="checkbox-inline">
+                  <input type="checkbox" checked={hasVerifiedOriginalId} onChange={(event) => setHasVerifiedOriginalId(event.target.checked)} />
+                  Đã xem giấy tờ bản gốc và đối chiếu với khách đặt phòng
+                </label>
+                {checkInMessage && <p className={checkInMessage.type === 'error' ? 'inline-error' : 'success-message'} role="alert">{checkInMessage.text}</p>}
+                <div className="booking-actions">
+                  <button type="submit" className="btn btn-primary" disabled={isCheckingIn || !hasVerifiedOriginalId}>{isCheckingIn ? 'Đang xác nhận...' : 'Lưu giấy tờ và check-in'}</button>
+                  <button type="button" className="btn btn-outline" onClick={() => setSelectedCheckInBooking(null)} disabled={isCheckingIn}>Hủy</button>
+                </div>
+              </form>
+            </section>
+          </div>
+        )}
       </div>
     </div>
   );

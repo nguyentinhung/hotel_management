@@ -200,6 +200,10 @@ function ReceptionBookingHistory() {
   const [query, setQuery] = useState('');
   const [createdFrom, setCreatedFrom] = useState('');
   const [createdTo, setCreatedTo] = useState('');
+  const [checkInFrom, setCheckInFrom] = useState('');
+  const [checkInTo, setCheckInTo] = useState('');
+  const [checkOutFrom, setCheckOutFrom] = useState('');
+  const [checkOutTo, setCheckOutTo] = useState('');
   const [message, setMessage] = useState('Đang tải lịch sử booking...');
   const load = async () => {
     const accessToken = localStorage.getItem('accessToken');
@@ -211,12 +215,32 @@ function ReceptionBookingHistory() {
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Không tải được lịch sử booking.'); }
   };
   useEffect(() => { void load(); }, []);
+  const parseCreatedAt = (createdAt: string | null | undefined) => {
+    if (!createdAt) return null;
+    const date = new Date(createdAt);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+  const getCreatedDate = (createdAt: string | null | undefined) => {
+    return parseCreatedAt(createdAt)?.toISOString().slice(0, 10) ?? '';
+  };
+  const formatCreatedAt = (createdAt: string | null | undefined) => {
+    const date = parseCreatedAt(createdAt);
+    if (!date) return '—';
+    const pad = (value: number) => String(value).padStart(2, '0');
+    return `${pad(date.getUTCDate())}/${pad(date.getUTCMonth() + 1)}/${date.getUTCFullYear()} ${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
+  };
   const filtered = bookings.filter((booking) => {
     const matchesText = `${booking.booking_code} ${booking.guest_full_name} ${booking.guest_phone} ${booking.status}`.toLowerCase().includes(query.trim().toLowerCase());
-    const createdDate = booking.created_at ? String(booking.created_at).slice(0, 10) : '';
+    const createdDate = getCreatedDate(booking.created_at);
     const matchesDateFrom = !createdFrom || createdDate >= createdFrom;
     const matchesDateTo = !createdTo || createdDate <= createdTo;
-    return matchesText && matchesDateFrom && matchesDateTo;
+    const checkInDate = String(booking.check_in_date).slice(0, 10);
+    const checkOutDate = String(booking.check_out_date).slice(0, 10);
+    const matchesCheckInFrom = !checkInFrom || checkInDate >= checkInFrom;
+    const matchesCheckInTo = !checkInTo || checkInDate <= checkInTo;
+    const matchesCheckOutFrom = !checkOutFrom || checkOutDate >= checkOutFrom;
+    const matchesCheckOutTo = !checkOutTo || checkOutDate <= checkOutTo;
+    return matchesText && matchesDateFrom && matchesDateTo && matchesCheckInFrom && matchesCheckInTo && matchesCheckOutFrom && matchesCheckOutTo;
   });
   return <div className="reception-recent-bookings-card booking-history-card">
     <div className="recent-card-header">
@@ -224,15 +248,25 @@ function ReceptionBookingHistory() {
       <button className="btn btn-secondary btn-sm" onClick={() => void load()}>Làm mới</button>
     </div>
     <div className="booking-history-filters">
-      <label className="booking-history-search"><span>Tìm theo mã, tên khách, số điện thoại hoặc trạng thái</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Nhập nội dung cần tìm" /></label>
-      <label className="booking-history-search"><span>Ngày đặt từ</span><input type="date" value={createdFrom} max={createdTo || undefined} onChange={(event) => setCreatedFrom(event.target.value)} /></label>
-      <label className="booking-history-search"><span>Ngày đặt đến</span><input type="date" value={createdTo} min={createdFrom || undefined} onChange={(event) => setCreatedTo(event.target.value)} /></label>
-      {(query || createdFrom || createdTo) && <button className="btn btn-outline btn-sm" onClick={() => { setQuery(''); setCreatedFrom(''); setCreatedTo(''); }}>Xóa bộ lọc</button>}
+      <label className="booking-history-search booking-history-query"><span>Tìm theo mã, tên khách, số điện thoại hoặc trạng thái</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Nhập nội dung cần tìm" /></label>
+      <div className="booking-history-date-group"><span className="booking-history-group-title">Ngày tạo booking</span><div className="booking-history-date-range">
+        <label><span>Từ ngày</span><input type="date" value={createdFrom} max={createdTo || undefined} onChange={(event) => setCreatedFrom(event.target.value)} /></label>
+        <label><span>Đến ngày</span><input type="date" value={createdTo} min={createdFrom || undefined} onChange={(event) => setCreatedTo(event.target.value)} /></label>
+      </div></div>
+      <div className="booking-history-date-group"><span className="booking-history-group-title">Ngày nhận phòng</span><div className="booking-history-date-range">
+        <label><span>Từ ngày</span><input type="date" value={checkInFrom} max={checkInTo || undefined} onChange={(event) => setCheckInFrom(event.target.value)} /></label>
+        <label><span>Đến ngày</span><input type="date" value={checkInTo} min={checkInFrom || undefined} onChange={(event) => setCheckInTo(event.target.value)} /></label>
+      </div></div>
+      <div className="booking-history-date-group"><span className="booking-history-group-title">Ngày trả phòng</span><div className="booking-history-date-range">
+        <label><span>Từ ngày</span><input type="date" value={checkOutFrom} max={checkOutTo || undefined} onChange={(event) => setCheckOutFrom(event.target.value)} /></label>
+        <label><span>Đến ngày</span><input type="date" value={checkOutTo} min={checkOutFrom || undefined} onChange={(event) => setCheckOutTo(event.target.value)} /></label>
+      </div></div>
+      {(query || createdFrom || createdTo || checkInFrom || checkInTo || checkOutFrom || checkOutTo) && <button className="btn btn-outline btn-sm" onClick={() => { setQuery(''); setCreatedFrom(''); setCreatedTo(''); setCheckInFrom(''); setCheckInTo(''); setCheckOutFrom(''); setCheckOutTo(''); }}>Xóa bộ lọc</button>}
     </div>
     {message ? <p className="room-empty-state">{message}</p> : <div className="table-wrap"><table className="reception-table booking-history-table"><thead><tr><th>Mã booking</th><th>Khách hàng</th><th>Số điện thoại</th><th>Loại phòng</th><th>Số phòng</th><th>Ngày lưu trú</th><th>Ngày tạo booking</th><th>Trạng thái booking</th><th>Tổng tiền</th></tr></thead>
       <tbody>{filtered.map((booking) => <tr key={booking.id}>
         <td><strong className="booking-code-text">{booking.booking_code}</strong></td><td>{booking.guest_full_name}</td><td>{booking.guest_phone}</td><td>{booking.room_type_name || '—'}</td><td>{booking.room_number ? `P.${booking.room_number}` : 'Chưa gán'}</td>
-        <td>{String(booking.check_in_date).slice(0, 10)} → {String(booking.check_out_date).slice(0, 10)}</td><td>{booking.created_at ? new Date(booking.created_at).toLocaleString('vi-VN') : '—'}</td><td><span className="status-badge">{booking.status}</span></td><td>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(booking.total_amount)}</td>
+        <td>{String(booking.check_in_date).slice(0, 10)} → {String(booking.check_out_date).slice(0, 10)}</td><td>{formatCreatedAt(booking.created_at)}</td><td><span className="status-badge">{booking.status}</span></td><td>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(booking.total_amount)}</td>
       </tr>)}{filtered.length === 0 && <tr><td colSpan={9}>Không tìm thấy booking phù hợp.</td></tr>}</tbody></table></div>}
   </div>;
 }

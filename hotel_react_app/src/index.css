@@ -2356,9 +2356,19 @@ a:focus-visible {
 .booking-history-card { display: grid; gap: 16px; }
 .booking-history-search { display: grid; gap: 7px; max-width: 460px; color: var(--muted); font-size: 0.88rem; font-weight: 600; }
 .booking-history-search input { min-height: 42px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--text); }
-.booking-history-filters { display: flex; flex-wrap: wrap; align-items: end; gap: 14px; margin: 16px 0; }
-.booking-history-filters .booking-history-search { flex: 1 1 180px; }
+.booking-history-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); align-items: stretch; gap: 14px; margin: 16px 0; }
+.booking-history-query { grid-column: 1 / -1; max-width: none; }
+.booking-history-date-group { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: linear-gradient(145deg, #fff, #f8faf9); box-shadow: 0 2px 8px rgba(15, 61, 62, 0.04); }
+.booking-history-group-title { display: block; margin-bottom: 12px; color: var(--primary); font-size: 0.92rem; font-weight: 700; }
+.booking-history-date-range { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.booking-history-date-range label { display: grid; min-width: 0; gap: 6px; color: var(--muted); font-size: 0.78rem; font-weight: 600; }
+.booking-history-date-range input { width: 100%; min-width: 0; min-height: 42px; padding: 8px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--text); }
+.booking-history-search input:focus, .booking-history-date-range input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(15, 61, 62, 0.1); }
 .booking-history-table { min-width: 1100px; }
+
+@media (max-width: 520px) {
+  .booking-history-date-range { grid-template-columns: 1fr; }
+}
 
 @media (max-width: 600px) {
   .room-status-section { padding: 14px; }
@@ -2420,6 +2430,31 @@ a:focus-visible {
     grid-template-columns: 1fr;
     padding: 15px;
   }
+}
+
+.checkin-modal-backdrop { position: fixed; inset: 0; z-index: 1100; display: flex; align-items: center; justify-content: center; padding: 20px; background: rgba(15, 23, 42, 0.58); backdrop-filter: blur(3px); }
+.checkin-modal { width: min(100%, 520px); overflow: hidden; border: 1px solid rgba(15, 61, 62, 0.1); border-radius: 18px; background: #fff; box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24); }
+.checkin-modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 22px 24px 16px; border-bottom: 1px solid #edf1ef; }
+.checkin-modal-header h3 { margin: 3px 0 0; color: var(--primary); font-size: 1.35rem; }
+.checkin-modal-eyebrow { color: var(--secondary-dark); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
+.checkin-modal-close { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; border: 0; border-radius: 50%; background: #f1f5f4; color: #475569; font-size: 1.45rem; line-height: 1; cursor: pointer; }
+.checkin-modal-close:hover { background: #e6edeb; }
+.checkin-modal-booking { display: grid; gap: 4px; margin: 18px 24px 0; padding: 12px 14px; border: 1px solid #dcebe5; border-radius: 10px; background: #f5faf7; }
+.checkin-modal-booking strong { color: var(--primary); }
+.checkin-modal-booking span { color: var(--muted); font-size: 0.86rem; }
+.checkin-modal .checkin-verification-form { grid-template-columns: 1fr; padding: 18px 24px 24px; background: transparent; border: 0; }
+.checkin-modal .checkin-verification-form > label:not(.checkbox-inline) span { color: #334155; font-size: 0.9rem; font-weight: 700; }
+.checkin-modal .checkin-verification-form input[type='text'] { min-height: 48px; font-size: 1rem; }
+.checkin-modal .checkin-verification-form .booking-actions { justify-content: flex-end; }
+
+@media (max-width: 600px) {
+  .checkin-modal-backdrop { align-items: flex-end; padding: 12px; }
+  .checkin-modal { border-radius: 18px 18px 12px 12px; }
+  .checkin-modal-header { padding: 18px 18px 14px; }
+  .checkin-modal-booking { margin: 14px 18px 0; }
+  .checkin-modal .checkin-verification-form { padding: 16px 18px 20px; }
+  .checkin-modal .checkin-verification-form .booking-actions { flex-direction: column-reverse; }
+  .checkin-modal .checkin-verification-form .booking-actions button { width: 100%; }
 }
 
 .customer-booking-prompt {
