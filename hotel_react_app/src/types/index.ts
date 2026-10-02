@@ -83,8 +83,9 @@ export interface RoomAvailabilityItem extends RoomType {
 
 // Dữ liệu gửi lên khi Lễ tân tạo đơn đặt phòng trực tiếp tại quầy (Walk-in)
 export interface WalkInBookingPayload {
-  room_type_id: number;
+  room_type_id?: number;
   room_id?: number | null;
+  room_selections?: { room_type_id: number; room_id?: number | null }[];
   check_in_date: string;
   check_out_date: string;
   adults: number;
@@ -118,7 +119,8 @@ export interface WalkInBookingResponse {
 }
 
 export interface CustomerBookingPayload {
-  room_type_id: number;
+  room_type_id?: number;
+  room_selections?: { room_type_id: number; quantity: number }[];
   check_in_date: string;
   check_out_date: string;
   adults: number;

@@ -75,10 +75,10 @@ export const getRoomStatuses = (accessToken: string) =>
   api.get<{ success: boolean; rooms: RoomStatusRecord[] }>('/api/rooms/statuses', accessToken);
 
 export const getAssignableRooms = (bookingId: string | number, accessToken: string) =>
-  api.get<{ success: boolean; rooms: RoomStatusRecord[]; assigned_room_id: number | null }>(`/api/bookings/${bookingId}/assignable-rooms`, accessToken);
+  api.get<{ success: boolean; room_slots: { booking_room_id: number; room_type_id: number; room_type_name: string; assigned_room_id: number | null; rooms: RoomStatusRecord[] }[] }>(`/api/bookings/${bookingId}/assignable-rooms`, accessToken);
 
-export const assignRoomToBooking = (bookingId: string | number, roomId: number, accessToken: string) =>
-  api.post<{ success: boolean; message: string }>(`/api/bookings/${bookingId}/assign-room`, { room_id: roomId }, accessToken);
+export const assignRoomToBooking = (bookingId: string | number, roomAssignments: { booking_room_id: number; room_id: number }[], accessToken: string) =>
+  api.post<{ success: boolean; message: string }>(`/api/bookings/${bookingId}/assign-room`, { room_assignments: roomAssignments }, accessToken);
 
 export const finishRoomCleaning = (roomId: number, accessToken: string, currentStatus: 'AVAILABLE' | 'OCCUPIED' | 'CLEANING' | 'MAINTENANCE' = 'CLEANING', status: 'AVAILABLE' | 'MAINTENANCE' = 'AVAILABLE') =>
   api.post<{ success: boolean; message: string }>(`/api/rooms/${roomId}/cleaning-complete`, { status, current_status: currentStatus }, accessToken);
@@ -90,6 +90,23 @@ export const getRecentBookings = async (limit = 10, accessToken?: string): Promi
 
 export const getBookingHistory = (accessToken: string) =>
   api.get<{ success: boolean; count: number; bookings: RecentBooking[] }>('/api/bookings/history', accessToken);
+
+export interface UpdateBookingPayload {
+  check_in_date: string;
+  check_out_date: string;
+  guest_full_name: string;
+  guest_phone: string;
+  guest_email?: string;
+  adults: number;
+  children: number;
+  special_request?: string;
+}
+
+export const updateBooking = (bookingId: string | number, payload: UpdateBookingPayload, accessToken: string) =>
+  api.patch<{ success: boolean; message: string }>(`/api/bookings/${bookingId}`, payload, accessToken);
+
+export const cancelBooking = (bookingId: string | number, accessToken: string) =>
+  api.post<{ success: boolean; message: string }>(`/api/bookings/${bookingId}/cancel`, {}, accessToken);
 
 export const getActiveBookings = (accessToken: string) =>
   api.get<{ success: boolean; count: number; bookings: RecentBooking[] }>('/api/bookings/active', accessToken);

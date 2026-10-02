@@ -16,7 +16,13 @@ export default function CustomerBookingPage() {
   const [checkOut, setCheckOut] = useState(params.get('check_out_date') || tomorrowValue());
   const [adults, setAdults] = useState(Number(params.get('adults') || 2));
   const [children, setChildren] = useState(Number(params.get('children') || 0));
-  const [room, setRoom] = useState<RoomAvailabilityItem | null>(null);
+  const [roomOptions, setRoomOptions] = useState<RoomAvailabilityItem[]>([]);
+  const [selectedRoomQuantities, setSelectedRoomQuantities] = useState<Record<number, number>>(() => {
+    const initialRoomTypeId = Number(params.get('room_type_id'));
+    return initialRoomTypeId > 0 ? { [initialRoomTypeId]: 1 } : {};
+  });
+  const [isRoomPickerOpen, setIsRoomPickerOpen] = useState(false);
+  const [additionalRoomQuantities, setAdditionalRoomQuantities] = useState<Record<number, number>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -51,7 +57,7 @@ export default function CustomerBookingPage() {
       setIsLoading(false);
       return;
     }
-    if (!Number.isInteger(roomTypeId) || roomTypeId < 1) {
+    if (params.has('room_type_id') && (!Number.isInteger(roomTypeId) || roomTypeId < 1)) {
       setError('Không tìm thấy loại phòng cần đặt. Vui lòng chọn phòng từ trang chủ.');
       setIsLoading(false);
       return;
@@ -62,13 +68,10 @@ export default function CustomerBookingPage() {
     checkRoomAvailability({ check_in_date: checkIn, check_out_date: checkOut, adults, children })
       .then((result) => {
         if (!isActive) return;
+        setRoomOptions(result.data);
         const matchingRoom = result.data.find((item) => item.id === roomTypeId) ?? null;
-        setRoom(matchingRoom);
-        setError(
-          matchingRoom?.is_available && matchingRoom.capacity_matched
-            ? ''
-            : 'Loại phòng này không còn phù hợp hoặc đã hết phòng trong khoảng ngày đã chọn.',
-        );
+        setError(roomTypeId === 0 || matchingRoom?.is_available ? '' : 'Loại phòng ban đầu đã hết; bạn có thể chọn loại phòng khác bên dưới.');
+        if (roomTypeId === 0) setIsRoomPickerOpen(true);
       })
       .catch((err: unknown) => {
         if (isActive) setError(err instanceof Error ? err.message : 'Không thể kiểm tra tình trạng phòng.');
@@ -87,6 +90,21 @@ export default function CustomerBookingPage() {
     const end = new Date(`${checkOut}T00:00:00Z`).getTime();
     return Math.max(0, Math.ceil((end - start) / 86400000));
   }, [checkIn, checkOut]);
+  const selectedRoomTypes = Object.entries(selectedRoomQuantities)
+    .map(([id, quantity]) => ({ room: roomOptions.find((option) => option.id === Number(id)), quantity }))
+    .filter((selection): selection is { room: RoomAvailabilityItem; quantity: number } => Boolean(selection.room));
+  const selectedRoomsAvailable = selectedRoomTypes.length > 0 && selectedRoomTypes.every(({ room: selectedRoom, quantity }) => selectedRoom.is_available && quantity <= selectedRoom.available_rooms);
+  const selectedCapacityMatched = selectedRoomTypes.reduce((total, { room: selectedRoom, quantity }) => total + selectedRoom.max_adults * quantity, 0) >= adults
+    && selectedRoomTypes.reduce((total, { room: selectedRoom, quantity }) => total + selectedRoom.max_children * quantity, 0) >= children;
+  const totalPricePerNight = selectedRoomTypes.reduce((total, { room: selectedRoom, quantity }) => total + selectedRoom.base_price * quantity, 0);
+  const additionalRoomCount = Object.values(additionalRoomQuantities).reduce((total, quantity) => total + quantity, 0);
+  const confirmAdditionalRooms = () => {
+    const additions = Object.fromEntries(Object.entries(additionalRoomQuantities).filter(([, quantity]) => quantity > 0));
+    setSelectedRoomQuantities({ ...selectedRoomQuantities, ...Object.fromEntries(Object.entries(additions).map(([id, quantity]) => [id, Number(quantity)])) });
+    setAdditionalRoomQuantities({});
+    setIsRoomPickerOpen(false);
+    setError('');
+  };
 
   const handleSubmit = async () => {
     if (!accessToken) return;
@@ -98,8 +116,8 @@ export default function CustomerBookingPage() {
       setError('Ngày trả phòng phải sau ngày nhận phòng.');
       return;
     }
-    if (!room?.is_available || !room.capacity_matched) {
-      setError('Phòng không còn phù hợp hoặc đã hết. Vui lòng kiểm tra lại ngày và số khách.');
+    if (!selectedRoomsAvailable || !selectedCapacityMatched) {
+      setError('Các phòng đã chọn không còn đủ số lượng hoặc sức chứa. Vui lòng kiểm tra lại.');
       return;
     }
 
@@ -107,7 +125,7 @@ export default function CustomerBookingPage() {
       setIsSubmitting(true);
       setError('');
       const result = await createCustomerBooking(
-        { room_type_id: roomTypeId, check_in_date: checkIn, check_out_date: checkOut, adults, children, special_request: specialRequest },
+        { room_selections: selectedRoomTypes.map(({ room: selectedRoom, quantity }) => ({ room_type_id: selectedRoom.id, quantity })), check_in_date: checkIn, check_out_date: checkOut, adults, children, special_request: specialRequest },
         accessToken,
       );
       setBooking(result.booking);
@@ -172,13 +190,16 @@ export default function CustomerBookingPage() {
       {error && <p className="inline-error" role="alert">{error}</p>}
       {isLoading ? <p>Đang kiểm tra tình trạng phòng...</p> : (
         <div className="booking-box">
-          {room && <div className="booking-room-summary">
-            <h2>{room.name}</h2>
-            <p>{room.description}</p>
-            <p>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(room.base_price)} / đêm</p>
-            <p>{nights} đêm · Tổng dự kiến: <strong>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(room.base_price * nights)}</strong></p>
-            <p>Còn {room.available_rooms} phòng</p>
-          </div>}
+          <div className="booking-room-summary multi-room-selection">
+            <h2>Phòng đã chọn</h2>
+            {selectedRoomTypes.length ? selectedRoomTypes.map(({ room: selectedRoom, quantity }) => <div className="multi-room-item" key={selectedRoom.id}>
+              <div><strong>{selectedRoom.name}</strong><span>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(selectedRoom.base_price)} / phòng / đêm · Còn {selectedRoom.available_rooms}</span></div>
+              <label>Số phòng<input type="number" min={1} max={selectedRoom.available_rooms} value={quantity} onChange={(event) => setSelectedRoomQuantities({ ...selectedRoomQuantities, [selectedRoom.id]: Math.max(1, Math.min(selectedRoom.available_rooms, Number(event.target.value) || 1)) })} /></label>
+              <button type="button" className="btn btn-outline btn-sm" onClick={() => { const next = { ...selectedRoomQuantities }; delete next[selectedRoom.id]; setSelectedRoomQuantities(next); setError(''); }}>Bỏ</button>
+            </div>) : <p>Chưa chọn loại phòng.</p>}
+            <div className="multi-room-add"><button type="button" className="btn btn-secondary btn-sm" disabled={!roomOptions.some((option) => option.is_available && !selectedRoomQuantities[option.id])} onClick={() => { setAdditionalRoomQuantities({}); setIsRoomPickerOpen(true); }}>Chọn thêm loại phòng</button></div>
+            <p>{nights} đêm · Tổng dự kiến: <strong>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(totalPricePerNight * nights)}</strong></p>
+          </div>
 
           <div className="field-grid">
             <label><span>Ngày nhận phòng</span><input type="date" value={checkIn} min={dateValue(new Date())} onChange={(event) => setCheckIn(event.target.value)} /></label>
@@ -193,11 +214,25 @@ export default function CustomerBookingPage() {
             <label><span>Yêu cầu thêm (không bắt buộc)</span><textarea maxLength={500} value={specialRequest} onChange={(event) => setSpecialRequest(event.target.value)} /></label>
           </div>
 
-          <button className="btn btn-primary" type="button" disabled={isSubmitting || isLoading || !room?.is_available || !room.capacity_matched} onClick={() => void handleSubmit()}>
+          <button className="btn btn-primary" type="button" disabled={isSubmitting || isLoading || !selectedRoomsAvailable || !selectedCapacityMatched} onClick={() => void handleSubmit()}>
             {isSubmitting ? 'Đang tạo đặt phòng...' : 'Xác nhận đặt phòng'}
           </button>
         </div>
       )}
+      {isRoomPickerOpen && <div className="modal-backdrop" onClick={() => setIsRoomPickerOpen(false)}>
+        <div className="room-picker-modal" role="dialog" aria-modal="true" aria-labelledby="customer-room-picker-title" onClick={(event) => event.stopPropagation()}>
+          <div className="modal-header"><div><h3 id="customer-room-picker-title">Chọn thêm phòng</h3><p>Chọn số lượng cho từng loại phòng. Có thể chọn nhiều loại cùng lúc.</p></div><button type="button" className="modal-close-btn" onClick={() => setIsRoomPickerOpen(false)}>Đóng</button></div>
+          <div className="room-picker-list">{roomOptions.filter((option) => option.is_available && !selectedRoomQuantities[option.id]).map((option) => {
+            const quantity = additionalRoomQuantities[option.id] || 0;
+            return <div className={`room-picker-option ${quantity > 0 ? 'selected' : ''}`} key={option.id}>
+              <input aria-label={`Số lượng ${option.name}`} type="number" min="0" max={option.available_rooms} value={quantity} onChange={(event) => setAdditionalRoomQuantities({ ...additionalRoomQuantities, [option.id]: Math.max(0, Math.min(option.available_rooms, Number(event.target.value) || 0)) })} />
+              <span className="room-picker-option-copy"><strong>{option.name}</strong><small>Còn {option.available_rooms} phòng · Tối đa {option.max_adults} người lớn, {option.max_children} trẻ em</small></span>
+              <strong className="room-picker-price">{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(option.base_price)} / đêm</strong>
+            </div>;
+          })}</div>
+          <div className="room-picker-footer"><span>{additionalRoomCount} phòng được chọn thêm</span><div><button type="button" className="btn btn-outline" onClick={() => setIsRoomPickerOpen(false)}>Hủy</button><button type="button" className="btn btn-primary" disabled={!additionalRoomCount} onClick={confirmAdditionalRooms}>Thêm phòng</button></div></div>
+        </div>
+      </div>}
     </main>
   );
 }

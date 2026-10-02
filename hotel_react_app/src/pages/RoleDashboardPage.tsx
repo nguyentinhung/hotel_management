@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import ReceptionRoomBooking from '../components/ReceptionRoomBooking';
 import type { Role } from '../types';
-import { assignRoomToBooking, finishRoomCleaning, getActiveBookings, getAssignableRooms, getBookingHistory, getRoomStatuses, type RoomStatusRecord } from '../services/roomService';
+import { assignRoomToBooking, cancelBooking, finishRoomCleaning, getActiveBookings, getAssignableRooms, getBookingHistory, getRoomStatuses, updateBooking, type RoomStatusRecord } from '../services/roomService';
 import type { RecentBooking } from '../types';
 
 /**
@@ -62,12 +62,7 @@ const dashboardConfig: Record<
     subtitle: 'Xem và quản lý thông tin đặt phòng của bạn',
     accent: 'Customer',
     nav: [
-      { label: 'Tổng quan', description: 'Xem thông tin chuyến đi và trạng thái đặt phòng.' },
-      { label: 'Đặt phòng', description: 'Quản lý các booking hiện tại và mới.' },
-      { label: 'Lịch sử', description: 'Xem các chuyến đi trước đây.' },
-      { label: 'Ưu đãi', description: 'Xem mã khuyến mãi và chương trình giảm giá.' },
-      { label: 'Hồ sơ', description: 'Cập nhật thông tin cá nhân và tài khoản.' },
-      { label: 'Đánh giá', description: 'Gửi đánh giá sau khi lưu trú.' },
+      { label: 'Bookings', description: 'Xem, cập nhật hoặc hủy booking của tài khoản.' },
     ],
   },
 };
@@ -83,6 +78,13 @@ const roleFromId = (roleId?: number): Role => {
     default:
       return 'CUSTOMER';
   }
+};
+
+const nextDate = (date: string) => {
+  if (!date) return '';
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + 1);
+  return value.toISOString().slice(0, 10);
 };
 
 function RoomStatusPanel({ role }: { role: Role }) {
@@ -127,8 +129,8 @@ function ReceptionRoomManagement() {
   const [rooms, setRooms] = useState<RoomStatusRecord[]>([]);
   const [bookings, setBookings] = useState<RecentBooking[]>([]);
   const [selectedBooking, setSelectedBooking] = useState<RecentBooking | null>(null);
-  const [assignableRooms, setAssignableRooms] = useState<RoomStatusRecord[]>([]);
-  const [selectedRoomId, setSelectedRoomId] = useState('');
+  const [roomSlots, setRoomSlots] = useState<{ booking_room_id: number; room_type_id: number; room_type_name: string; assigned_room_id: number | null; rooms: RoomStatusRecord[] }[]>([]);
+  const [selectedRoomIds, setSelectedRoomIds] = useState<Record<number, string>>({});
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const token = () => localStorage.getItem('accessToken') || '';
@@ -146,25 +148,25 @@ function ReceptionRoomManagement() {
     setLoading(true);
     setMessage('');
     setSelectedBooking(booking);
-    setSelectedRoomId('');
+    setSelectedRoomIds({});
+    setRoomSlots([]);
     try {
       const result = await getAssignableRooms(booking.id, token());
-      setAssignableRooms(result.rooms);
-      if (result.assigned_room_id) {
-        setSelectedRoomId(String(result.assigned_room_id));
-        setMessage(`Phòng hiện tại: ${booking.room_number || result.assigned_room_id}. Có thể giữ nguyên hoặc chọn phòng phù hợp khác.`);
-      }
+      if (!Array.isArray(result.room_slots)) throw new Error('Backend chưa hỗ trợ gán nhiều phòng. Hãy khởi động lại hotel_backend rồi thử lại.');
+      setRoomSlots(result.room_slots);
+      setSelectedRoomIds(Object.fromEntries(result.room_slots.filter((slot) => slot.assigned_room_id && slot.rooms.some((room) => room.id === slot.assigned_room_id)).map((slot) => [slot.booking_room_id, String(slot.assigned_room_id)])));
+      setMessage(`Booking này có ${result.room_slots.length} phòng cần được gán. Chọn số phòng riêng cho từng dòng.`);
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Không tải được danh sách phòng phù hợp.'); }
     finally { setLoading(false); }
   };
   const saveAssignment = async () => {
-    if (!selectedBooking || !selectedRoomId) return;
+    if (!selectedBooking || !roomSlots.length || roomSlots.some((slot) => !selectedRoomIds[slot.booking_room_id])) return;
     setLoading(true);
     try {
-      const result = await assignRoomToBooking(selectedBooking.id, Number(selectedRoomId), token());
+      const result = await assignRoomToBooking(selectedBooking.id, roomSlots.map((slot) => ({ booking_room_id: slot.booking_room_id, room_id: Number(selectedRoomIds[slot.booking_room_id]) })), token());
       setMessage(result.message);
       setSelectedBooking(null);
-      setAssignableRooms([]);
+      setRoomSlots([]);
       await reload();
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Không gán được phòng. Hãy tải lại danh sách.'); }
     finally { setLoading(false); }
@@ -181,12 +183,16 @@ function ReceptionRoomManagement() {
       <div className="room-management-heading"><div><h3>Booking chờ gán hoặc cần đổi phòng</h3><p>Booking giữ chỗ theo loại phòng; lễ tân chủ động chọn số phòng sau khi xem trạng thái.</p></div><span className="room-assignment-count">{waitingBookings.length} booking</span></div>
       {waitingBookings.length ? <div className="room-assignment-list">{waitingBookings.map((booking) => <article className="room-assignment-card" key={booking.id}>
         <div className="room-assignment-details"><strong>{booking.booking_code} · {booking.guest_full_name}</strong><span>{booking.room_type_name} · {String(booking.check_in_date).slice(0, 10)} → {String(booking.check_out_date).slice(0, 10)}</span><span>Ngày tạo: {booking.created_at ? new Date(booking.created_at).toLocaleString('vi-VN') : '—'}</span><span>{booking.guest_phone}</span><span>{booking.room_number ? `Đang gán phòng ${booking.room_number} · ${booking.room_status || 'chưa rõ trạng thái'}` : 'Chưa gán số phòng'}</span></div>
-        {selectedBooking?.id === booking.id ? <div className="room-assignment-controls">
-          <select aria-label="Chọn phòng để gán" value={selectedRoomId} onChange={(event) => setSelectedRoomId(event.target.value)} disabled={loading || !assignableRooms.length}>
-            <option value="">{loading ? 'Đang tải phòng...' : assignableRooms.length ? 'Chọn phòng phù hợp' : 'Không có phòng phù hợp'}</option>
-            {assignableRooms.map((room) => <option key={room.id} value={room.id}>P.{room.room_number} · {names[room.status]} · tầng {room.floor}</option>)}
-          </select>
-          <button className="btn btn-primary btn-sm" onClick={() => void saveAssignment()} disabled={loading || !selectedRoomId}>Gán phòng</button>
+        {selectedBooking?.id === booking.id ? <div className="room-assignment-controls room-assignment-multi-controls">
+          {roomSlots.map((slot, index) => {
+            const usedByOtherSlot = new Set(Object.entries(selectedRoomIds).filter(([slotId]) => Number(slotId) !== slot.booking_room_id).map(([, roomId]) => roomId));
+            const selectableRooms = slot.rooms.filter((room) => !usedByOtherSlot.has(String(room.id)) || selectedRoomIds[slot.booking_room_id] === String(room.id));
+            return <label className="room-assignment-slot" key={slot.booking_room_id}><span>{slot.room_type_name} · Phòng {index + 1}</span><select aria-label={`Chọn phòng ${index + 1} cho ${slot.room_type_name}`} value={selectedRoomIds[slot.booking_room_id] || ''} onChange={(event) => setSelectedRoomIds({ ...selectedRoomIds, [slot.booking_room_id]: event.target.value })} disabled={loading || !selectableRooms.length}>
+              <option value="">{loading ? 'Đang tải phòng...' : selectableRooms.length ? 'Chọn phòng phù hợp' : 'Không có phòng phù hợp'}</option>
+              {selectableRooms.map((room) => <option key={room.id} value={room.id}>P.{room.room_number} · {names[room.status]} · tầng {room.floor}</option>)}
+            </select></label>;
+          })}
+          <button className="btn btn-primary btn-sm" onClick={() => void saveAssignment()} disabled={loading || !roomSlots.length || roomSlots.some((slot) => !selectedRoomIds[slot.booking_room_id])}>Gán tất cả phòng</button>
           <button className="btn btn-outline btn-sm" onClick={() => setSelectedBooking(null)}>Hủy</button>
         </div> : <button className="btn btn-secondary btn-sm" onClick={() => void selectBooking(booking)}>{booking.assigned_room_id ? 'Xem / đổi phòng' : 'Xem phòng phù hợp'}</button>}
       </article>)}</div> : <p className="room-empty-state">Hiện không có booking online nào chờ gán phòng.</p>}
@@ -195,8 +201,13 @@ function ReceptionRoomManagement() {
   </div>;
 }
 
-function ReceptionBookingHistory() {
+function ReceptionBookingHistory({ customerMode = false }: { customerMode?: boolean }) {
   const [bookings, setBookings] = useState<RecentBooking[]>([]);
+  const [selectedBooking, setSelectedBooking] = useState<RecentBooking | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [actionMessage, setActionMessage] = useState('');
+  const [draft, setDraft] = useState({ check_in_date: '', check_out_date: '', guest_full_name: '', guest_phone: '', guest_email: '', adults: 1, children: 0, special_request: '' });
   const [query, setQuery] = useState('');
   const [createdFrom, setCreatedFrom] = useState('');
   const [createdTo, setCreatedTo] = useState('');
@@ -213,6 +224,46 @@ function ReceptionBookingHistory() {
       setBookings(result.bookings);
       setMessage(result.count ? '' : 'Chưa có booking nào trong lịch sử.');
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Không tải được lịch sử booking.'); }
+  };
+  const openBooking = (booking: RecentBooking) => {
+    setSelectedBooking(booking);
+    setEditing(false);
+    setActionMessage('');
+    setDraft({
+      check_in_date: String(booking.check_in_date).slice(0, 10),
+      check_out_date: String(booking.check_out_date).slice(0, 10),
+      guest_full_name: booking.guest_full_name,
+      guest_phone: booking.guest_phone,
+      guest_email: booking.guest_email || '',
+      adults: booking.adults,
+      children: booking.children,
+      special_request: booking.special_request || '',
+    });
+  };
+  const saveChanges = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!selectedBooking) return;
+    const accessToken = localStorage.getItem('accessToken');
+    if (!accessToken) return setActionMessage('Vui lòng đăng nhập lại.');
+    try {
+      setSaving(true);
+      await updateBooking(selectedBooking.id, draft, accessToken);
+      await load();
+      setSelectedBooking(null);
+    } catch (error) { setActionMessage(error instanceof Error ? error.message : 'Không thể cập nhật booking.'); }
+    finally { setSaving(false); }
+  };
+  const cancelSelectedBooking = async () => {
+    if (!selectedBooking || !window.confirm(`Bạn có chắc muốn hủy booking ${selectedBooking.booking_code}?`)) return;
+    const accessToken = localStorage.getItem('accessToken');
+    if (!accessToken) return setActionMessage('Vui lòng đăng nhập lại.');
+    try {
+      setSaving(true);
+      await cancelBooking(selectedBooking.id, accessToken);
+      await load();
+      setSelectedBooking(null);
+    } catch (error) { setActionMessage(error instanceof Error ? error.message : 'Không thể hủy booking.'); }
+    finally { setSaving(false); }
   };
   useEffect(() => { void load(); }, []);
   const parseCreatedAt = (createdAt: string | null | undefined) => {
@@ -242,9 +293,11 @@ function ReceptionBookingHistory() {
     const matchesCheckOutTo = !checkOutTo || checkOutDate <= checkOutTo;
     return matchesText && matchesDateFrom && matchesDateTo && matchesCheckInFrom && matchesCheckInTo && matchesCheckOutFrom && matchesCheckOutTo;
   });
+  const now = new Date();
+  const localToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   return <div className="reception-recent-bookings-card booking-history-card">
     <div className="recent-card-header">
-      <div><h3>Lịch sử booking</h3><p>{filtered.length}/{bookings.length} booking, bao gồm booking đang hoạt động, đã checkout và đã hủy.</p></div>
+      <div><h3>{customerMode ? 'Booking của tôi' : 'Lịch sử booking'}</h3><p>{filtered.length}/{bookings.length} booking{customerMode ? ' thuộc tài khoản của bạn.' : ', bao gồm booking đang hoạt động, đã checkout và đã hủy.'}</p></div>
       <button className="btn btn-secondary btn-sm" onClick={() => void load()}>Làm mới</button>
     </div>
     <div className="booking-history-filters">
@@ -264,10 +317,31 @@ function ReceptionBookingHistory() {
       {(query || createdFrom || createdTo || checkInFrom || checkInTo || checkOutFrom || checkOutTo) && <button className="btn btn-outline btn-sm" onClick={() => { setQuery(''); setCreatedFrom(''); setCreatedTo(''); setCheckInFrom(''); setCheckInTo(''); setCheckOutFrom(''); setCheckOutTo(''); }}>Xóa bộ lọc</button>}
     </div>
     {message ? <p className="room-empty-state">{message}</p> : <div className="table-wrap"><table className="reception-table booking-history-table"><thead><tr><th>Mã booking</th><th>Khách hàng</th><th>Số điện thoại</th><th>Loại phòng</th><th>Số phòng</th><th>Ngày lưu trú</th><th>Ngày tạo booking</th><th>Trạng thái booking</th><th>Tổng tiền</th></tr></thead>
-      <tbody>{filtered.map((booking) => <tr key={booking.id}>
+      <tbody>{filtered.map((booking) => <tr key={booking.id} className="booking-history-row" onClick={() => openBooking(booking)} title="Nhấn để xem chi tiết booking">
         <td><strong className="booking-code-text">{booking.booking_code}</strong></td><td>{booking.guest_full_name}</td><td>{booking.guest_phone}</td><td>{booking.room_type_name || '—'}</td><td>{booking.room_number ? `P.${booking.room_number}` : 'Chưa gán'}</td>
-        <td>{String(booking.check_in_date).slice(0, 10)} → {String(booking.check_out_date).slice(0, 10)}</td><td>{formatCreatedAt(booking.created_at)}</td><td><span className="status-badge">{booking.status}</span></td><td>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(booking.total_amount)}</td>
+        <td>{String(booking.check_in_date).slice(0, 10)} → {String(booking.check_out_date).slice(0, 10)}</td><td>{formatCreatedAt(booking.created_at)}</td><td><span className={`status-badge ${booking.status === 'CONFIRMED' ? 'status-confirmed' : booking.status === 'CHECKED_IN' ? 'status-checked-in' : booking.status === 'CHECKED_OUT' ? 'status-checked-out' : booking.status === 'CANCELLED' ? 'status-cancelled' : 'status-pending'}`}>{booking.status}</span></td><td>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(booking.total_amount)}</td>
       </tr>)}{filtered.length === 0 && <tr><td colSpan={9}>Không tìm thấy booking phù hợp.</td></tr>}</tbody></table></div>}
+    {selectedBooking && <div className="booking-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !saving) setSelectedBooking(null); }}>
+      <section className="booking-detail-modal" role="dialog" aria-modal="true" aria-labelledby="booking-detail-title">
+        <header className="booking-detail-header"><div><span>Chi tiết đặt phòng</span><h3 id="booking-detail-title">{selectedBooking.booking_code}</h3></div><button type="button" aria-label="Đóng" onClick={() => !saving && setSelectedBooking(null)}>×</button></header>
+        {editing ? <form className="booking-edit-form" onSubmit={(event) => void saveChanges(event)}>
+          <label>Họ tên khách<input required maxLength={150} value={draft.guest_full_name} onChange={(event) => setDraft({ ...draft, guest_full_name: event.target.value })} /></label>
+          <label>Số điện thoại<input required maxLength={20} value={draft.guest_phone} onChange={(event) => setDraft({ ...draft, guest_phone: event.target.value })} /></label>
+          <label>Email<input type="email" value={draft.guest_email} onChange={(event) => setDraft({ ...draft, guest_email: event.target.value })} /></label>
+          <label>Ngày nhận phòng<input type="date" required min={nextDate(localToday)} value={draft.check_in_date} onChange={(event) => setDraft({ ...draft, check_in_date: event.target.value, check_out_date: event.target.value >= draft.check_out_date ? nextDate(event.target.value) : draft.check_out_date })} /></label>
+          <label>Ngày trả phòng<input type="date" required min={nextDate(draft.check_in_date) || undefined} value={draft.check_out_date} onChange={(event) => setDraft({ ...draft, check_out_date: event.target.value })} /></label>
+          <label>Người lớn<input type="number" required min={1} max={20} value={draft.adults} onChange={(event) => setDraft({ ...draft, adults: Number(event.target.value) })} /></label>
+          <label>Trẻ em<input type="number" required min={0} max={20} value={draft.children} onChange={(event) => setDraft({ ...draft, children: Number(event.target.value) })} /></label>
+          <label className="booking-edit-wide">Yêu cầu đặc biệt<textarea maxLength={500} rows={3} value={draft.special_request} onChange={(event) => setDraft({ ...draft, special_request: event.target.value })} /></label>
+          {actionMessage && <p className="inline-error booking-edit-wide">{actionMessage}</p>}
+          <div className="booking-detail-actions booking-edit-wide"><button className="btn btn-primary" type="submit" disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu thay đổi'}</button><button className="btn btn-outline" type="button" onClick={() => { setEditing(false); setActionMessage(''); }}>Quay lại</button></div>
+        </form> : <>
+          <dl className="booking-detail-grid"><div><dt>Khách hàng</dt><dd>{selectedBooking.guest_full_name}</dd></div><div><dt>Điện thoại</dt><dd>{selectedBooking.guest_phone}</dd></div><div><dt>Email</dt><dd>{selectedBooking.guest_email || '—'}</dd></div><div><dt>Loại phòng / phòng</dt><dd>{selectedBooking.room_type_name || '—'}{selectedBooking.room_number ? ` · P.${selectedBooking.room_number}` : ' · Chưa gán'}</dd></div><div><dt>Nhận phòng</dt><dd>{String(selectedBooking.check_in_date).slice(0, 10)}</dd></div><div><dt>Trả phòng</dt><dd>{String(selectedBooking.check_out_date).slice(0, 10)}</dd></div><div><dt>Số khách</dt><dd>{selectedBooking.adults} người lớn, {selectedBooking.children} trẻ em</dd></div><div><dt>Trạng thái</dt><dd>{selectedBooking.status}</dd></div><div><dt>Tổng tiền</dt><dd>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(selectedBooking.total_amount)}</dd></div><div><dt>Đã cọc</dt><dd>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(selectedBooking.deposit_amount)}</dd></div><div className="booking-detail-wide"><dt>Yêu cầu đặc biệt</dt><dd>{selectedBooking.special_request || 'Không có'}</dd></div></dl>
+          {actionMessage && <p className="inline-error">{actionMessage}</p>}
+          <div className="booking-detail-actions">{selectedBooking.status === 'CONFIRMED' && String(selectedBooking.check_in_date).slice(0, 10) > localToday ? <><button type="button" className="btn btn-primary" onClick={() => { setEditing(true); setActionMessage(''); }}>Cập nhật booking</button><button type="button" className="btn btn-outline" onClick={() => void cancelSelectedBooking()} disabled={saving}>Hủy booking</button></> : selectedBooking.status === 'CONFIRMED' ? <p className="booking-manage-note">Chỉ có thể cập nhật hoặc hủy trước ngày nhận phòng. Lễ tân có thể check-in trong ngày nhận phòng đến 18:00; sau thời điểm này booking sẽ tự hủy.</p> : null}<button type="button" className="btn btn-outline" onClick={() => setSelectedBooking(null)}>Đóng</button></div>
+        </>}
+      </section>
+    </div>}
   </div>;
 }
 
@@ -374,6 +448,8 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
             <ReceptionRoomManagement />
           ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Booking' ? (
             <ReceptionBookingHistory />
+          ) : currentRole === 'CUSTOMER' && activeItem.label === 'Bookings' ? (
+            <ReceptionBookingHistory customerMode />
           ) : currentRole === 'HOUSEKEEPER' && ['Phòng cần dọn', 'Phòng đang làm', 'Tổng quan'].includes(activeItem.label) ? (
             <RoomStatusPanel role={currentRole} />
           ) : currentRole === 'ADMIN' && activeItem.label === 'Quản lý phòng' ? (

@@ -90,7 +90,7 @@ async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, ch
           AND b.check_in_date < @checkOut
           AND b.check_out_date > @checkIn
       ) bk ON bk.room_id = r.id
-      WHERE r.status NOT IN ('MAINTENANCE', 'CLEANING');
+      WHERE r.status <> 'MAINTENANCE';
     `);
 
   const rooms = roomsResult.recordset;
@@ -200,7 +200,7 @@ async function getAvailableRoomsForType({ roomTypeId, checkInDate, checkOutDate 
         r.status
       FROM rooms r
       WHERE r.room_type_id = @roomTypeId
-        AND r.status NOT IN ('MAINTENANCE', 'CLEANING')
+        AND r.status <> 'MAINTENANCE'
         AND r.id NOT IN (
           SELECT DISTINCT br.room_id
           FROM booking_rooms br

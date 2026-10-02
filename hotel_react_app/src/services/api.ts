@@ -6,7 +6,8 @@ export const api = {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
     if (!response.ok) {
-      throw new Error(`Request failed: ${response.status}`);
+      const errorBody = await response.json().catch(() => null);
+      throw new Error(errorBody?.message || `Request failed: ${response.status}`);
     }
     return response.json();
   },
@@ -41,6 +42,20 @@ export const api = {
     }
 
     return response.json();
+  },
+
+  patch: async <T>(url: string, body: unknown, token?: string): Promise<T> => {
+    const response = await fetch(`${API_BASE_URL}${url}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+    const result = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(result?.message || `Request failed: ${response.status}`);
+    return result as T;
   },
 };
 

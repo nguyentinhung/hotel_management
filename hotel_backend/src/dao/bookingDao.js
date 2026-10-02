@@ -39,8 +39,7 @@ function generateBookingCode() {
  */
 async function createWalkInBooking(data) {
   const {
-    roomTypeId,
-    roomId,
+    roomSelections = [{ roomTypeId: data.roomTypeId, roomId: data.roomId }],
     checkInDate,
     checkOutDate,
     adults = 1,
@@ -56,75 +55,52 @@ async function createWalkInBooking(data) {
 
   const pool = await getPool();
 
-  // 1. Kiểm tra loại phòng có tồn tại không và lấy đơn giá (base_price)
-  const roomTypeResult = await pool.request()
-    .input('roomTypeId', sql.Int, Number(roomTypeId))
-    .query('SELECT TOP 1 id, name, base_price, max_adults, max_children FROM room_types WHERE id = @roomTypeId;');
-
-  if (!roomTypeResult.recordset.length) {
-    throw new Error('Loại phòng không tồn tại trong hệ thống.');
-  }
-
-  const roomType = roomTypeResult.recordset[0];
-  const basePrice = Number(roomType.base_price);
+  // Kiểm tra từng loại phòng được chọn và chọn phòng vật lý cho từng dòng.
   const nights = calculateNights(checkInDate, checkOutDate);
-  const totalAmount = basePrice * nights;
-
-  // 2. Kiểm tra nếu có chọn phòng cụ thể (roomId), phòng đó phải còn trống trong khoảng thời gian này
-  let selectedRoom = null;
-  if (roomId) {
-    const roomCheck = await pool.request()
-      .input('roomId', sql.Int, Number(roomId))
+  const selectedRooms = [];
+  const selectedPhysicalRoomIds = new Set();
+  let totalPerNight = 0;
+  let totalCapacityAdults = 0;
+  let totalCapacityChildren = 0;
+  for (const selection of roomSelections) {
+    const roomTypeResult = await pool.request()
+      .input('roomTypeId', sql.Int, Number(selection.roomTypeId))
+      .query('SELECT TOP 1 id, name, base_price, max_adults, max_children FROM room_types WHERE id = @roomTypeId;');
+    if (!roomTypeResult.recordset.length) throw new Error('Loại phòng không tồn tại trong hệ thống.');
+    const roomType = roomTypeResult.recordset[0];
+    let selectedRoom = null;
+    const roomQuery = pool.request()
+      .input('roomTypeId', sql.Int, roomType.id)
       .input('checkIn', sql.Date, checkInDate)
-      .input('checkOut', sql.Date, checkOutDate)
-      .query(`
-        SELECT TOP 1 r.id, r.room_number, r.status
-        FROM rooms r
-        WHERE r.id = @roomId
-          AND r.status NOT IN ('MAINTENANCE', 'CLEANING')
-          AND r.id NOT IN (
-            SELECT DISTINCT br.room_id
-            FROM booking_rooms br
-            JOIN bookings b ON b.id = br.booking_id
-            WHERE br.room_id = @roomId
-              AND b.status NOT IN ('CANCELLED')
-              AND b.check_in_date < @checkOut
-              AND b.check_out_date > @checkIn
-          );
-      `);
-
-    if (!roomCheck.recordset.length) {
-      throw new Error(`Phòng đã được đặt hoặc đang bảo trì trong khoảng thời gian từ ${checkInDate} đến ${checkOutDate}.`);
+      .input('checkOut', sql.Date, checkOutDate);
+    let roomFilter = 'r.room_type_id = @roomTypeId';
+    if (selection.roomId) {
+      roomQuery.input('roomId', sql.Int, Number(selection.roomId));
+      roomFilter += ' AND r.id = @roomId';
     }
-
-    selectedRoom = roomCheck.recordset[0];
-  } else {
-    // Nếu lễ tân không chỉ định số phòng cụ thể, tự động chọn 1 phòng trống đầu tiên của loại này
-    const autoRoom = await pool.request()
-      .input('roomTypeId', sql.Int, Number(roomTypeId))
-      .input('checkIn', sql.Date, checkInDate)
-      .input('checkOut', sql.Date, checkOutDate)
-      .query(`
-        SELECT TOP 1 r.id, r.room_number, r.status
-        FROM rooms r
-        WHERE r.room_type_id = @roomTypeId
-          AND r.status NOT IN ('MAINTENANCE', 'CLEANING')
-          AND r.id NOT IN (
-            SELECT DISTINCT br.room_id
-            FROM booking_rooms br
-            JOIN bookings b ON b.id = br.booking_id
-            WHERE br.room_id IS NOT NULL
-              AND b.status NOT IN ('CANCELLED')
-              AND b.check_in_date < @checkOut
-              AND b.check_out_date > @checkIn
-          )
-        ORDER BY r.room_number;
-      `);
-
-    if (autoRoom.recordset.length) {
-      selectedRoom = autoRoom.recordset[0];
-    }
+    const roomCheck = await roomQuery.query(`
+      SELECT TOP 100 r.id, r.room_number, r.status
+      FROM rooms r
+      WHERE ${roomFilter}
+        AND r.status NOT IN ('MAINTENANCE', 'CLEANING')
+        AND NOT EXISTS (
+          SELECT 1 FROM booking_rooms br JOIN bookings b ON b.id = br.booking_id
+          WHERE br.room_id = r.id AND b.status <> 'CANCELLED'
+            AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn
+        )
+      ORDER BY r.room_number;
+    `);
+    if (selection.roomId && !roomCheck.recordset.length) throw new Error(`Phòng đã chọn không còn trống cho loại ${roomType.name}.`);
+    selectedRoom = roomCheck.recordset.find((room) => !selectedPhysicalRoomIds.has(Number(room.id))) || null;
+    if (selectedRoom) selectedPhysicalRoomIds.add(Number(selectedRoom.id));
+    if (!selectedRoom && selection.roomId) throw new Error(`Không còn phòng trống cho loại ${roomType.name}.`);
+    selectedRooms.push({ roomType, room: selectedRoom });
+    totalPerNight += Number(roomType.base_price);
+    totalCapacityAdults += Number(roomType.max_adults);
+    totalCapacityChildren += Number(roomType.max_children);
   }
+  if (Number(adults) > totalCapacityAdults || Number(children) > totalCapacityChildren) throw new Error('Số khách vượt quá sức chứa của các phòng đã chọn.');
+  const totalAmount = totalPerNight * nights;
 
   // 3. Tìm hoặc tạo khách hàng (customer) trong bảng users
   // Vì bảng bookings có FK customer_id NOT NULL -> bắt buộc cần user id
@@ -168,6 +144,7 @@ async function createWalkInBooking(data) {
   const bookingCode = generateBookingCode();
   const initialStatus = checkInNow ? 'CHECKED_IN' : 'CONFIRMED';
   const finalDeposit = Number(depositAmount ?? 0);
+  if (checkInNow && selectedRooms.some(({ room }) => !room)) throw new Error('Cannot check in before every room is assigned and ready.');
 
   // 5. Thêm bản ghi vào bảng bookings
   const insertBookingResult = await pool.request()
@@ -201,17 +178,19 @@ async function createWalkInBooking(data) {
   const createdBooking = insertBookingResult.recordset[0];
   const newBookingId = createdBooking.id;
 
-  // 6. Thêm bản ghi vào bảng booking_rooms (gán loại phòng và số phòng)
-  await pool.request()
-    .input('booking_id', sql.BigInt, newBookingId)
-    .input('room_type_id', sql.Int, Number(roomTypeId))
-    .input('room_id', sql.Int, selectedRoom ? selectedRoom.id : null)
-    .input('price_per_night', sql.Decimal(12, 2), basePrice)
-    .input('actual_check_in', sql.DateTime2, checkInNow ? new Date() : null)
-    .query(`
-      INSERT INTO booking_rooms (booking_id, room_type_id, room_id, price_per_night, actual_check_in)
-      VALUES (@booking_id, @room_type_id, @room_id, @price_per_night, @actual_check_in);
-    `);
+  // Thêm một dòng booking_rooms cho mỗi phòng đã chọn.
+  for (const selected of selectedRooms) {
+    await pool.request()
+      .input('booking_id', sql.BigInt, newBookingId)
+      .input('room_type_id', sql.Int, selected.roomType.id)
+      .input('room_id', sql.Int, selected.room?.id ?? null)
+      .input('price_per_night', sql.Decimal(12, 2), Number(selected.roomType.base_price))
+      .input('actual_check_in', sql.DateTime2, checkInNow ? new Date() : null)
+      .query(`
+        INSERT INTO booking_rooms (booking_id, room_type_id, room_id, price_per_night, actual_check_in)
+        VALUES (@booking_id, @room_type_id, @room_id, @price_per_night, @actual_check_in);
+      `);
+  }
 
   // 7. Thêm thông tin khách lưu trú vào booking_guests
   await pool.request()
@@ -226,28 +205,30 @@ async function createWalkInBooking(data) {
     `);
 
   // 8. Nếu nhận phòng ngay (checkInNow) và đã chọn số phòng, cập nhật trạng thái phòng vật lý
-  if (checkInNow && selectedRoom) {
+  if (checkInNow) {
+    for (const selected of selectedRooms) {
     await pool.request()
-      .input('roomId', sql.Int, selectedRoom.id)
+      .input('roomId', sql.Int, selected.room?.id)
       .query(`
         UPDATE rooms
         SET status = 'OCCUPIED'
         WHERE id = @roomId;
       `);
+    }
   }
 
   // 9. Trả về kết quả hoàn chỉnh
   return {
     booking_id: newBookingId,
     booking_code: createdBooking.booking_code,
-    room_type_name: roomType.name,
-    room_number: selectedRoom ? selectedRoom.room_number : null,
+    room_type_name: selectedRooms.map(({ roomType }) => roomType.name).join(', '),
+    room_number: selectedRooms.map(({ room }) => room?.room_number).filter(Boolean).join(', ') || null,
     guest_full_name: guestFullName.trim(),
     guest_phone: guestPhone.trim(),
     check_in_date: checkInDate,
     check_out_date: checkOutDate,
     nights,
-    price_per_night: basePrice,
+    price_per_night: totalPerNight,
     total_amount: totalAmount,
     deposit_amount: finalDeposit,
     remaining_balance: totalAmount - finalDeposit,
@@ -264,7 +245,7 @@ async function createWalkInBooking(data) {
 async function createCustomerBooking(data) {
   const {
     customerId,
-    roomTypeId,
+    roomSelections = [{ roomTypeId: data.roomTypeId, quantity: 1 }],
     checkInDate,
     checkOutDate,
     adults = 1,
@@ -286,36 +267,44 @@ async function createCustomerBooking(data) {
     if (!customerResult.recordset.length) throw new Error('Customer account is unavailable.');
     const customer = customerResult.recordset[0];
 
-    const roomTypeResult = await transaction.request()
-      .input('roomTypeId', sql.Int, Number(roomTypeId))
-      .query('SELECT TOP 1 id, name, base_price, max_adults, max_children FROM room_types WHERE id = @roomTypeId;');
-    if (!roomTypeResult.recordset.length) throw new Error('Room type was not found.');
-    const roomType = roomTypeResult.recordset[0];
-    if (Number(adults) < 1 || Number(adults) > roomType.max_adults || Number(children) > roomType.max_children) {
-      throw new Error('Guest count exceeds this room type capacity.');
-    }
-
-    const inventoryResult = await transaction.request()
-      .input('roomTypeId', sql.Int, Number(roomTypeId))
-      .input('checkIn', sql.Date, checkInDate)
-      .input('checkOut', sql.Date, checkOutDate)
-      .query(`
-        SELECT
-          (SELECT COUNT(*) FROM rooms r WITH (UPDLOCK, HOLDLOCK)
-           WHERE r.room_type_id = @roomTypeId AND r.status NOT IN ('MAINTENANCE', 'CLEANING')) AS inventory_count,
-          (SELECT COUNT(*) FROM booking_rooms br WITH (UPDLOCK, HOLDLOCK)
-           JOIN bookings b WITH (UPDLOCK, HOLDLOCK) ON b.id = br.booking_id
-           WHERE br.room_type_id = @roomTypeId AND b.status <> 'CANCELLED'
-             AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn) AS reserved_count;
-      `);
-    const inventory = inventoryResult.recordset[0];
-    if (!inventory || Number(inventory.reserved_count) >= Number(inventory.inventory_count)) {
-      throw new Error('No rooms are available for those dates.');
-    }
-
     const nights = calculateNights(checkInDate, checkOutDate);
-    const pricePerNight = Number(roomType.base_price);
-    const totalAmount = pricePerNight * nights;
+    const selectedTypes = [];
+    let totalCapacityAdults = 0;
+    let totalCapacityChildren = 0;
+    let totalPerNight = 0;
+    for (const selection of roomSelections) {
+      const roomTypeResult = await transaction.request()
+        .input('roomTypeId', sql.Int, Number(selection.roomTypeId))
+        .query('SELECT TOP 1 id, name, base_price, max_adults, max_children FROM room_types WHERE id = @roomTypeId;');
+      if (!roomTypeResult.recordset.length) throw new Error('Room type was not found.');
+      const roomType = roomTypeResult.recordset[0];
+      const quantity = Number(selection.quantity);
+      const inventoryResult = await transaction.request()
+        .input('roomTypeId', sql.Int, Number(selection.roomTypeId))
+        .input('checkIn', sql.Date, checkInDate)
+        .input('checkOut', sql.Date, checkOutDate)
+        .query(`
+          SELECT
+            (SELECT COUNT(*) FROM rooms r WITH (UPDLOCK, HOLDLOCK)
+             WHERE r.room_type_id = @roomTypeId AND r.status <> 'MAINTENANCE') AS inventory_count,
+            (SELECT COUNT(*) FROM booking_rooms br WITH (UPDLOCK, HOLDLOCK)
+             JOIN bookings b WITH (UPDLOCK, HOLDLOCK) ON b.id = br.booking_id
+             WHERE br.room_type_id = @roomTypeId AND b.status <> 'CANCELLED'
+               AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn) AS reserved_count;
+        `);
+      const inventory = inventoryResult.recordset[0];
+      if (!inventory || Number(inventory.inventory_count) - Number(inventory.reserved_count) < quantity) {
+        throw new Error(`Not enough rooms available for room type ${roomType.name}.`);
+      }
+      totalCapacityAdults += Number(roomType.max_adults) * quantity;
+      totalCapacityChildren += Number(roomType.max_children) * quantity;
+      totalPerNight += Number(roomType.base_price) * quantity;
+      selectedTypes.push({ ...roomType, quantity });
+    }
+    if (Number(adults) < 1 || Number(adults) > totalCapacityAdults || Number(children) > totalCapacityChildren) {
+      throw new Error('Guest count exceeds selected rooms capacity.');
+    }
+    const totalAmount = totalPerNight * nights;
     const bookingCode = generateBookingCode();
     const bookingResult = await transaction.request()
       .input('booking_code', sql.VarChar(20), bookingCode)
@@ -344,14 +333,18 @@ async function createCustomerBooking(data) {
       `);
     const booking = bookingResult.recordset[0];
 
-    await transaction.request()
-      .input('booking_id', sql.BigInt, booking.id)
-      .input('room_type_id', sql.Int, Number(roomTypeId))
-      .input('price_per_night', sql.Decimal(12, 2), pricePerNight)
-      .query(`
-        INSERT INTO booking_rooms (booking_id, room_type_id, room_id, price_per_night)
-        VALUES (@booking_id, @room_type_id, NULL, @price_per_night);
-      `);
+    for (const roomType of selectedTypes) {
+      for (let index = 0; index < roomType.quantity; index += 1) {
+        await transaction.request()
+          .input('booking_id', sql.BigInt, booking.id)
+          .input('room_type_id', sql.Int, roomType.id)
+          .input('price_per_night', sql.Decimal(12, 2), Number(roomType.base_price))
+          .query(`
+            INSERT INTO booking_rooms (booking_id, room_type_id, room_id, price_per_night)
+            VALUES (@booking_id, @room_type_id, NULL, @price_per_night);
+          `);
+      }
+    }
 
     await transaction.request()
       .input('booking_id', sql.BigInt, booking.id)
@@ -366,13 +359,13 @@ async function createCustomerBooking(data) {
     return {
       booking_id: booking.id,
       booking_code: booking.booking_code,
-      room_type_name: roomType.name,
+      room_type_name: selectedTypes.map((roomType) => `${roomType.name}${roomType.quantity > 1 ? ` × ${roomType.quantity}` : ''}`).join(', '),
       room_number: null,
       guest_full_name: customer.full_name,
       check_in_date: checkInDate,
       check_out_date: checkOutDate,
       nights,
-      price_per_night: pricePerNight,
+      price_per_night: totalPerNight,
       total_amount: totalAmount,
       deposit_amount: 0,
       remaining_balance: totalAmount,
@@ -396,6 +389,7 @@ async function checkInBooking({ bookingId, idCardNumber }) {
       .query(`
         SELECT TOP 1
           b.id, b.booking_code, b.status, b.check_in_date, b.check_out_date,
+          CASE WHEN DATEADD(hour, 7, SYSUTCDATETIME()) < DATEADD(hour, 18, CONVERT(datetime2, b.check_in_date)) THEN 1 ELSE 0 END AS before_checkin_deadline,
           b.guest_full_name, b.guest_phone, br.room_id
         FROM bookings b WITH (UPDLOCK, HOLDLOCK)
         LEFT JOIN booking_rooms br ON br.booking_id = b.id
@@ -405,11 +399,18 @@ async function checkInBooking({ bookingId, idCardNumber }) {
     const booking = bookingResult.recordset[0];
     if (booking.status !== 'CONFIRMED') throw new Error('Booking is not waiting for check-in.');
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const checkInDate = new Date(booking.check_in_date).toISOString().slice(0, 10);
     const checkOutDate = new Date(booking.check_out_date).toISOString().slice(0, 10);
     if (today < checkInDate || today >= checkOutDate) {
       throw new Error('Booking is outside its check-in dates.');
+    }
+    if (!booking.before_checkin_deadline) {
+      await transaction.request()
+        .input('bookingId', sql.BigInt, booking.id)
+        .query("UPDATE bookings SET status = 'CANCELLED' WHERE id = @bookingId AND status = 'CONFIRMED';");
+      await transaction.commit();
+      return { booking_id: booking.id, booking_code: booking.booking_code, status: 'CANCELLED', auto_cancelled: true };
     }
     if (!booking.room_id) throw new Error('Assign a room before checking in this booking.');
 
@@ -464,7 +465,8 @@ async function checkInBooking({ bookingId, idCardNumber }) {
   }
 }
 
-async function getRecentBookings(limit = 10, activeOnly = false) {
+async function getRecentBookings(limit = 10, activeOnly = false, customerId = null) {
+  await cancelExpiredBookings();
   const pool = await getPool();
 
   await pool.request().query(`
@@ -480,7 +482,13 @@ async function getRecentBookings(limit = 10, activeOnly = false) {
   const request = pool.request();
   const limitClause = Number.isInteger(limit) && limit > 0 ? 'TOP (@limit)' : '';
   if (limitClause) request.input('limit', sql.Int, limit);
-  const activeFilter = activeOnly ? "WHERE b.status IN ('CONFIRMED', 'CHECKED_IN')" : '';
+  const filters = [];
+  if (activeOnly) filters.push("b.status IN ('CONFIRMED', 'CHECKED_IN')");
+  if (customerId !== null) {
+    request.input('customerId', sql.BigInt, Number(customerId));
+    filters.push('b.customer_id = @customerId');
+  }
+  const activeFilter = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
   const result = await request.query(`
       SELECT ${limitClause}
         b.id,
@@ -497,19 +505,32 @@ async function getRecentBookings(limit = 10, activeOnly = false) {
         b.deposit_amount,
         b.created_at,
         b.special_request,
-        rt.name AS room_type_name,
-        br.room_type_id,
-        r.room_number,
-        r.id AS assigned_room_id,
-        CASE WHEN EXISTS (
-          SELECT 1 FROM booking_rooms active_br
-          JOIN bookings active_b ON active_b.id = active_br.booking_id
-          WHERE active_br.room_id = r.id AND active_b.status = 'CHECKED_IN'
-        ) THEN 'OCCUPIED' ELSE r.status END AS room_status
+        type_summary.room_type_name,
+        type_summary.room_type_id,
+        room_summary.room_number,
+        room_summary.assigned_room_id,
+        room_summary.room_status
       FROM bookings b
-      LEFT JOIN booking_rooms br ON br.booking_id = b.id
-      LEFT JOIN room_types rt ON rt.id = br.room_type_id
-      LEFT JOIN rooms r ON r.id = br.room_id
+      OUTER APPLY (
+        SELECT MIN(type_counts.room_type_id) AS room_type_id,
+          STRING_AGG(type_counts.type_label, ', ') AS room_type_name
+        FROM (
+          SELECT rt2.id AS room_type_id,
+            CONCAT(rt2.name, CASE WHEN COUNT(*) > 1 THEN CONCAT(' × ', COUNT(*)) ELSE '' END) AS type_label
+          FROM booking_rooms br2
+          JOIN room_types rt2 ON rt2.id = br2.room_type_id
+          WHERE br2.booking_id = b.id
+          GROUP BY rt2.id, rt2.name
+        ) type_counts
+      ) type_summary
+      OUTER APPLY (
+        SELECT MIN(r.id) AS assigned_room_id,
+          STRING_AGG(CAST(r.room_number AS nvarchar(max)), ', ') AS room_number,
+          MIN(r.status) AS room_status
+        FROM booking_rooms br3
+        LEFT JOIN rooms r ON r.id = br3.room_id
+        WHERE br3.booking_id = b.id
+      ) room_summary
       ${activeFilter}
       ORDER BY b.id DESC;
     `);
@@ -541,67 +562,162 @@ async function getActiveBookings() {
   return getRecentBookings(null, true);
 }
 
+async function updateBooking({ bookingId, customerId, ...changes }) {
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+  await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+  try {
+    const request = transaction.request().input('bookingId', sql.BigInt, Number(bookingId));
+    const ownerFilter = customerId == null ? '' : 'AND b.customer_id = @customerId';
+    if (customerId != null) request.input('customerId', sql.BigInt, Number(customerId));
+    const currentResult = await request.query(`
+      SELECT b.id, b.customer_id, b.status, b.check_in_date, b.check_out_date,
+        b.guest_full_name, b.guest_phone, b.guest_email,
+        booking_rooms.max_adults, booking_rooms.max_children, booking_rooms.price_per_night
+      FROM bookings b WITH (UPDLOCK, HOLDLOCK)
+      OUTER APPLY (
+        SELECT SUM(rt.max_adults) AS max_adults, SUM(rt.max_children) AS max_children,
+          SUM(COALESCE(br.price_per_night, rt.base_price)) AS price_per_night
+        FROM booking_rooms br JOIN room_types rt ON rt.id = br.room_type_id
+        WHERE br.booking_id = b.id
+      ) booking_rooms
+      WHERE b.id = @bookingId ${ownerFilter};
+    `);
+    const current = currentResult.recordset[0];
+    if (!current) throw new Error('Booking not found.');
+    if (current.status !== 'CONFIRMED') throw new Error('Only confirmed bookings can be updated.');
+    const vietnamToday = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    if (new Date(current.check_in_date).toISOString().slice(0, 10) <= vietnamToday) {
+      throw new Error('Booking can only be changed before its check-in date.');
+    }
+    if (changes.checkInDate <= vietnamToday) {
+      throw new Error('New check-in date must be after today.');
+    }
+    if (changes.checkOutDate <= changes.checkInDate) throw new Error('Check-out must be after check-in.');
+    if (Number(changes.adults) < 1 || Number(changes.adults) > current.max_adults || Number(changes.children) < 0 || Number(changes.children) > current.max_children) {
+      throw new Error('Guest count exceeds room capacity.');
+    }
+    const roomSelectionResult = await transaction.request()
+      .input('bookingId', sql.BigInt, Number(bookingId))
+      .query('SELECT room_type_id, COUNT(*) AS quantity FROM booking_rooms WHERE booking_id = @bookingId GROUP BY room_type_id;');
+    for (const selection of roomSelectionResult.recordset) {
+      const inventoryResult = await transaction.request()
+        .input('roomTypeId', sql.Int, selection.room_type_id)
+        .input('quantity', sql.Int, selection.quantity)
+        .input('bookingId', sql.BigInt, Number(bookingId))
+        .input('checkIn', sql.Date, changes.checkInDate)
+        .input('checkOut', sql.Date, changes.checkOutDate)
+        .query(`
+          SELECT
+            (SELECT COUNT(*) FROM rooms WHERE room_type_id = @roomTypeId AND status <> 'MAINTENANCE') AS inventory_count,
+            (SELECT COUNT(*) FROM booking_rooms br JOIN bookings b ON b.id = br.booking_id
+             WHERE br.room_type_id = @roomTypeId AND b.id <> @bookingId AND b.status <> 'CANCELLED'
+               AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn) AS reserved_count,
+            (SELECT COUNT(*) FROM booking_rooms own_br JOIN rooms own_room ON own_room.id = own_br.room_id
+             WHERE own_br.booking_id = @bookingId AND own_br.room_type_id = @roomTypeId) AS assigned_count;
+        `);
+      const inventory = inventoryResult.recordset[0];
+      if (!inventory || Number(inventory.inventory_count) - Number(inventory.reserved_count) < Number(selection.quantity)) throw new Error('No rooms are available for those dates.');
+      if (Number(inventory.assigned_count) > 0) {
+        const assignedRoomConflict = await transaction.request()
+          .input('roomTypeId', sql.Int, selection.room_type_id)
+          .input('bookingId', sql.BigInt, Number(bookingId))
+          .input('checkIn', sql.Date, changes.checkInDate)
+          .input('checkOut', sql.Date, changes.checkOutDate)
+          .query(`
+            SELECT TOP 1 other_b.id FROM booking_rooms own_br
+            JOIN booking_rooms other_br ON other_br.room_id = own_br.room_id AND other_br.booking_id <> own_br.booking_id
+            JOIN bookings other_b ON other_b.id = other_br.booking_id
+            WHERE own_br.booking_id = @bookingId AND own_br.room_type_id = @roomTypeId
+              AND other_b.status <> 'CANCELLED'
+              AND other_b.check_in_date < @checkOut AND other_b.check_out_date > @checkIn;
+          `);
+        if (assignedRoomConflict.recordset.length) throw new Error('The assigned room is unavailable for those dates.');
+      }
+    }
+
+    const nights = calculateNights(changes.checkInDate, changes.checkOutDate);
+    const totalAmount = Number(current.price_per_night) * nights;
+    await transaction.request()
+      .input('bookingId', sql.BigInt, Number(bookingId))
+      .input('checkInDate', sql.Date, changes.checkInDate)
+      .input('checkOutDate', sql.Date, changes.checkOutDate)
+      .input('guestName', sql.NVarChar(150), changes.guestFullName.trim())
+      .input('guestPhone', sql.VarChar(20), changes.guestPhone.trim())
+      .input('guestEmail', sql.VarChar(150), changes.guestEmail?.trim() || null)
+      .input('adults', sql.TinyInt, Number(changes.adults))
+      .input('children', sql.TinyInt, Number(changes.children))
+      .input('specialRequest', sql.NVarChar(500), changes.specialRequest?.trim() || null)
+      .input('totalAmount', sql.Decimal(12, 2), totalAmount)
+      .query(`
+        UPDATE bookings SET check_in_date = @checkInDate, check_out_date = @checkOutDate,
+          guest_full_name = @guestName, guest_phone = @guestPhone, guest_email = @guestEmail,
+          adults = @adults, children = @children, special_request = @specialRequest,
+          total_amount = @totalAmount
+        WHERE id = @bookingId;
+        UPDATE booking_guests SET full_name = @guestName, phone = @guestPhone WHERE booking_id = @bookingId;
+      `);
+    await transaction.commit();
+    return { booking_id: bookingId, check_in_date: changes.checkInDate, check_out_date: changes.checkOutDate, total_amount: totalAmount };
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+}
+
+async function cancelBooking({ bookingId, customerId = null }) {
+  const pool = await getPool();
+  const request = pool.request().input('bookingId', sql.BigInt, Number(bookingId));
+  const ownerFilter = customerId == null ? '' : 'AND customer_id = @customerId';
+  if (customerId != null) request.input('customerId', sql.BigInt, Number(customerId));
+  const result = await request.query(`
+    UPDATE bookings SET status = 'CANCELLED'
+    WHERE id = @bookingId ${ownerFilter} AND status = 'CONFIRMED'
+      AND check_in_date > CONVERT(date, DATEADD(hour, 7, SYSUTCDATETIME()));
+    SELECT @@ROWCOUNT AS updated_count;
+  `);
+  if (!result.recordset[0]?.updated_count) throw new Error('Booking not found or cannot be cancelled.');
+  return { booking_id: bookingId, status: 'CANCELLED' };
+}
+
+async function cancelExpiredBookings() {
+  const pool = await getPool();
+  const result = await pool.request().query(`
+    UPDATE bookings
+    SET status = 'CANCELLED'
+    WHERE status = 'CONFIRMED'
+      AND DATEADD(hour, 18, CONVERT(datetime2, check_in_date)) <= DATEADD(hour, 7, SYSUTCDATETIME());
+    SELECT @@ROWCOUNT AS cancelled_count;
+  `);
+  return Number(result.recordset[0]?.cancelled_count ?? 0);
+}
+
 async function getAssignableRooms(bookingId) {
   const pool = await getPool();
   const result = await pool.request()
     .input('bookingId', sql.BigInt, bookingId)
     .query(`
       SELECT b.id AS booking_id, b.status AS booking_status, b.check_in_date, b.check_out_date,
-        br.room_type_id, br.room_id AS assigned_room_id
+        br.id AS booking_room_id, br.room_type_id, br.room_id AS assigned_room_id,
+        rt.name AS room_type_name
       FROM bookings b
       JOIN booking_rooms br ON br.booking_id = b.id
+      JOIN room_types rt ON rt.id = br.room_type_id
       WHERE b.id = @bookingId;
     `);
   const booking = result.recordset[0];
   if (!booking) throw new Error('Booking not found.');
   if (booking.booking_status !== 'CONFIRMED') throw new Error('Booking is not waiting for room assignment.');
-  const roomsResult = await pool.request()
-    .input('bookingId', sql.BigInt, bookingId)
-    .input('roomTypeId', sql.Int, booking.room_type_id)
-    .input('checkIn', sql.Date, booking.check_in_date)
-    .input('checkOut', sql.Date, booking.check_out_date)
-    .query(`
-      SELECT r.id, r.room_number, r.floor, r.status, rt.name AS room_type_name
-      FROM rooms r JOIN room_types rt ON rt.id = r.room_type_id
-      WHERE r.room_type_id = @roomTypeId
-        AND r.status NOT IN ('MAINTENANCE', 'CLEANING')
-        AND NOT EXISTS (
-          SELECT 1 FROM booking_rooms br
-          JOIN bookings b ON b.id = br.booking_id
-          WHERE br.room_id = r.id AND br.booking_id <> @bookingId
-            AND b.status <> 'CANCELLED'
-            AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn
-        )
-      ORDER BY CASE WHEN r.status = 'AVAILABLE' THEN 0 ELSE 1 END, r.room_number;
-    `);
-  return { booking_id: bookingId, rooms: roomsResult.recordset, assigned_room_id: null };
-}
-
-async function assignRoomToBooking({ bookingId, roomId }) {
-  const pool = await getPool();
-  const transaction = new sql.Transaction(pool);
-  await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
-  try {
-    const bookingResult = await transaction.request()
+  const roomSlots = await Promise.all(result.recordset.map(async (slot) => {
+    const roomsResult = await pool.request()
       .input('bookingId', sql.BigInt, bookingId)
-      .query(`
-        SELECT b.id, b.status, b.check_in_date, b.check_out_date, br.room_type_id, br.room_id
-        FROM bookings b WITH (UPDLOCK, HOLDLOCK)
-        JOIN booking_rooms br WITH (UPDLOCK, HOLDLOCK) ON br.booking_id = b.id
-        WHERE b.id = @bookingId;
-      `);
-    const booking = bookingResult.recordset[0];
-    if (!booking) throw new Error('Booking not found.');
-    if (booking.status !== 'CONFIRMED') throw new Error('Booking is not waiting for room assignment.');
-    const roomResult = await transaction.request()
-      .input('roomId', sql.Int, roomId)
-      .input('roomTypeId', sql.Int, booking.room_type_id)
-      .input('bookingId', sql.BigInt, bookingId)
+      .input('roomTypeId', sql.Int, slot.room_type_id)
       .input('checkIn', sql.Date, booking.check_in_date)
       .input('checkOut', sql.Date, booking.check_out_date)
       .query(`
-        SELECT r.id FROM rooms r WITH (UPDLOCK, HOLDLOCK)
-        WHERE r.id = @roomId AND r.room_type_id = @roomTypeId
+        SELECT r.id, r.room_number, r.floor, r.status, rt.name AS room_type_name
+        FROM rooms r JOIN room_types rt ON rt.id = r.room_type_id
+        WHERE r.room_type_id = @roomTypeId
           AND r.status NOT IN ('MAINTENANCE', 'CLEANING')
           AND NOT EXISTS (
             SELECT 1 FROM booking_rooms br
@@ -609,16 +725,63 @@ async function assignRoomToBooking({ bookingId, roomId }) {
             WHERE br.room_id = r.id AND br.booking_id <> @bookingId
               AND b.status <> 'CANCELLED'
               AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn
-          );
+          )
+        ORDER BY CASE WHEN r.status = 'AVAILABLE' THEN 0 ELSE 1 END, r.room_number;
       `);
-    if (!roomResult.recordset.length) throw new Error('Selected room is unavailable.');
+    return { booking_room_id: slot.booking_room_id, room_type_id: slot.room_type_id, room_type_name: slot.room_type_name, assigned_room_id: slot.assigned_room_id, rooms: roomsResult.recordset };
+  }));
+  return { booking_id: bookingId, room_slots: roomSlots };
+}
 
-    await transaction.request()
+async function assignRoomToBooking({ bookingId, roomAssignments }) {
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+  await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+  try {
+    const bookingResult = await transaction.request()
       .input('bookingId', sql.BigInt, bookingId)
-      .input('roomId', sql.Int, roomId)
-      .query('UPDATE booking_rooms SET room_id = @roomId WHERE booking_id = @bookingId;');
+      .query(`
+        SELECT b.id, b.status, b.check_in_date, b.check_out_date, br.id AS booking_room_id, br.room_type_id
+        FROM bookings b WITH (UPDLOCK, HOLDLOCK)
+        JOIN booking_rooms br WITH (UPDLOCK, HOLDLOCK) ON br.booking_id = b.id
+        WHERE b.id = @bookingId;
+      `);
+    const booking = bookingResult.recordset[0];
+    if (!booking) throw new Error('Booking not found.');
+    if (booking.status !== 'CONFIRMED') throw new Error('Booking is not waiting for room assignment.');
+    if (!Array.isArray(roomAssignments) || roomAssignments.length !== bookingResult.recordset.length) throw new Error('Every booking room must be assigned.');
+    if (new Set(roomAssignments.map((item) => Number(item.booking_room_id))).size !== roomAssignments.length || new Set(roomAssignments.map((item) => Number(item.room_id))).size !== roomAssignments.length) throw new Error('Duplicate room assignment.');
+    const slotsById = new Map(bookingResult.recordset.map((slot) => [Number(slot.booking_room_id), slot]));
+    for (const assignment of roomAssignments) {
+      const slot = slotsById.get(Number(assignment.booking_room_id));
+      if (!slot) throw new Error('Invalid booking room.');
+      const roomResult = await transaction.request()
+        .input('roomId', sql.Int, Number(assignment.room_id))
+        .input('roomTypeId', sql.Int, slot.room_type_id)
+        .input('bookingId', sql.BigInt, bookingId)
+        .input('checkIn', sql.Date, booking.check_in_date)
+        .input('checkOut', sql.Date, booking.check_out_date)
+        .query(`
+          SELECT r.id FROM rooms r WITH (UPDLOCK, HOLDLOCK)
+          WHERE r.id = @roomId AND r.room_type_id = @roomTypeId
+            AND r.status NOT IN ('MAINTENANCE', 'CLEANING')
+            AND NOT EXISTS (
+              SELECT 1 FROM booking_rooms br
+              JOIN bookings b ON b.id = br.booking_id
+              WHERE br.room_id = r.id AND br.booking_id <> @bookingId
+                AND b.status <> 'CANCELLED'
+                AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn
+            );
+        `);
+      if (!roomResult.recordset.length) throw new Error('Selected room is unavailable.');
+      await transaction.request()
+        .input('bookingRoomId', sql.BigInt, Number(assignment.booking_room_id))
+        .input('bookingId', sql.BigInt, bookingId)
+        .input('roomId', sql.Int, Number(assignment.room_id))
+        .query('UPDATE booking_rooms SET room_id = @roomId WHERE id = @bookingRoomId AND booking_id = @bookingId;');
+    }
     await transaction.commit();
-    return { booking_id: bookingId, room_id: roomId };
+    return { booking_id: bookingId, assignments: roomAssignments };
   } catch (error) {
     await transaction.rollback();
     throw error;
@@ -703,6 +866,9 @@ module.exports = {
   createCustomerBooking,
   checkInBooking,
   getRecentBookings,
+  updateBooking,
+  cancelBooking,
+  cancelExpiredBookings,
   getActiveBookings,
   checkOutBooking,
   updateRoomStatus,

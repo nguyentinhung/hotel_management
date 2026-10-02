@@ -447,14 +447,10 @@ export default function HomePage() {
                 Xem tất cả loại phòng
               </button>
             )}
+            <a className="btn btn-primary" href={`/booking?${new URLSearchParams({ check_in_date: search.check_in_date, check_out_date: search.check_out_date, adults: String(search.adults), children: String(search.children) }).toString()}`}>
+              Booking Now
+            </a>
           </div>
-
-          {isFiltered && (
-            <p className="filter-status">
-              {filteredRoomTypes.length} loại phòng phù hợp với {search.adults} người lớn và{' '}
-              {search.children} trẻ em.
-            </p>
-          )}
 
           {filteredRoomTypes.length === 0 ? (
             <div className="empty-state">
@@ -467,11 +463,16 @@ export default function HomePage() {
                 const roomImage = getRoomImage(room);
                 return (
                   <article key={room.id} className="room-card">
-                    {roomImage ? (
-                      <img src={roomImage} alt={room.name} className="room-image" />
-                    ) : (
-                      <div className="room-image placeholder">Chưa có ảnh</div>
-                    )}
+                    <div className="room-image-wrap">
+                      {roomImage ? (
+                        <img src={roomImage} alt={room.name} className="room-image" />
+                      ) : (
+                        <div className="room-image placeholder">Chưa có ảnh</div>
+                      )}
+                      <small className={`availability-badge${room.available_rooms > 0 ? '' : ' sold-out'}`}>
+                        {room.available_rooms > 0 ? `Còn ${room.available_rooms} phòng` : 'Hết phòng'}
+                      </small>
+                    </div>
 
                     <div className="room-body">
                       <div className="room-header-row">
@@ -485,12 +486,6 @@ export default function HomePage() {
                       <p className="room-guest-limit">
                         Tối đa {room.max_adults} người lớn, {room.max_children} trẻ em
                       </p>
-                      {room.is_available && room.available_rooms > 0 ? (
-                        <small className="availability-note">Còn {room.available_rooms} phòng</small>
-                      ) : (
-                        <small className="availability-note">Hết phòng</small>
-                      )}
-
                       <ul className="amenities-list">
                         {room.amenities.map((amenity) => (
                           <li key={amenity}>{amenity}</li>
@@ -504,18 +499,6 @@ export default function HomePage() {
                             {nightCount} đêm: {formatCurrency(total)}
                           </div>
                         </div>
-                        {room.is_available ? (
-                          <a
-                            className="btn btn-primary"
-                            href={`/booking?room_type_id=${room.id}&check_in_date=${search.check_in_date}&check_out_date=${search.check_out_date}&adults=${search.adults}&children=${search.children}`}
-                          >
-                            Đặt phòng
-                          </a>
-                        ) : (
-                          <button type="button" className="btn btn-secondary" disabled>
-                            Hết phòng
-                          </button>
-                        )}
                       </div>
                     </div>
                   </article>

@@ -5,11 +5,12 @@ const fs = require('fs');
 const path = require('path');
 const sql = require('mssql');
 const { getPool, ensureAuthTables } = require('./config/db');
+const { cancelExpiredBookings } = require('./dao/bookingDao');
 // Seed data đã được tắt để dùng dữ liệu mẫu bạn insert trực tiếp trong SQL Server.
 const { getHomeData, getRoomTypes, getPromotions, getServices, getReviews } = require('./controllers/homeController');
 const { register, login, logout, verifyEmail } = require('./controllers/authController');
 const { checkAvailability, getAvailableRooms } = require('./controllers/roomController');
-const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, getActiveBookingsHandler, checkOutBookingHandler, finishRoomCleaningHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
+const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, updateBookingHandler, cancelBookingHandler, getActiveBookingsHandler, checkOutBookingHandler, finishRoomCleaningHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
 
 const app = express();
 const PORT = 5000;
@@ -83,6 +84,8 @@ app.post('/api/bookings/walk-in', createWalkInBookingHandler);
 
 // Khách hàng đã đăng nhập tạo booking online
 app.post('/api/bookings/customer', createCustomerBookingHandler);
+app.patch('/api/bookings/:bookingId', updateBookingHandler);
+app.post('/api/bookings/:bookingId/cancel', cancelBookingHandler);
 app.post('/api/bookings/:bookingId/check-in', checkInBookingHandler);
 app.post('/api/bookings/:bookingId/check-out', checkOutBookingHandler);
 app.get('/api/bookings/:bookingId/assignable-rooms', getAssignableRoomsHandler);
@@ -137,6 +140,22 @@ app.post('/api/room-types/:roomTypeId/image', upload.single('image'), async (req
 
 async function bootstrap() {
   await ensureAuthTables();
+  let isExpirySweepRunning = false;
+  const sweepExpiredBookings = async () => {
+    if (isExpirySweepRunning) return;
+    isExpirySweepRunning = true;
+    try {
+      const cancelledCount = await cancelExpiredBookings();
+      if (cancelledCount > 0) console.log(`Auto-cancelled ${cancelledCount} booking(s) past the 18:00 check-in deadline.`);
+    } catch (error) {
+      console.error('Expired booking sweep failed:', error);
+    } finally {
+      isExpirySweepRunning = false;
+    }
+  };
+  await sweepExpiredBookings();
+  const expirySweepTimer = setInterval(() => void sweepExpiredBookings(), 30_000);
+  expirySweepTimer.unref();
   app.listen(PORT, () => {
     console.log(`Hotel backend is running on http://localhost:${PORT}`);
   });
