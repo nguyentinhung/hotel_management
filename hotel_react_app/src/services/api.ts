@@ -29,6 +29,53 @@ export const api = {
 
     return response.json();
   },
+
+  postWithAuth: async <T>(url: string, body: unknown, token?: string): Promise<T> => {
+    const response = await fetch(`${API_BASE_URL}${url}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.message || `Request failed: ${response.status}`);
+    }
+    return payload as T;
+  },
+
+  putWithAuth: async <T>(url: string, body: unknown, token?: string): Promise<T> => {
+    const response = await fetch(`${API_BASE_URL}${url}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.message || `Request failed: ${response.status}`);
+    }
+    return payload as T;
+  },
+
+  deleteWithAuth: async <T>(url: string, token?: string): Promise<T> => {
+    const response = await fetch(`${API_BASE_URL}${url}`, {
+      method: 'DELETE',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.message || `Request failed: ${response.status}`);
+    }
+    return payload as T;
+  },
 };
 
 export default api;

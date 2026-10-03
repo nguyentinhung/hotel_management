@@ -1,4 +1,5 @@
 const { fetchHomeData } = require('../services/homeService');
+const { getRoomTypeById: fetchRoomTypeById } = require('../dao/homeDao');
 
 // Lấy dữ liệu tổng hợp cho trang chủ: room type, promotion, service, review
 async function getHomeData(req, res) {
@@ -34,6 +35,24 @@ async function getRoomTypes(req, res) {
   } catch (error) {
     console.error('getRoomTypes error:', error);
     res.status(500).json({ message: 'Không thể tải loại phòng.', error: error.message });
+  }
+}
+
+async function getRoomTypeDetails(req, res) {
+  const roomTypeId = Number(req.params.roomTypeId);
+  if (!Number.isInteger(roomTypeId) || roomTypeId < 1) {
+    return res.status(400).json({ message: 'Mã loại phòng không hợp lệ.' });
+  }
+
+  try {
+    const roomType = await fetchRoomTypeById(roomTypeId);
+    if (!roomType) {
+      return res.status(404).json({ message: 'Không tìm thấy loại phòng.' });
+    }
+    return res.json(roomType);
+  } catch (error) {
+    console.error('getRoomTypeDetails error:', error);
+    return res.status(500).json({ message: 'Không thể tải chi tiết loại phòng.' });
   }
 }
 
@@ -103,6 +122,7 @@ async function getReviews(req, res) {
 module.exports = {
   getHomeData,
   getRoomTypes,
+  getRoomTypeDetails,
   getPromotions,
   getServices,
   getReviews,

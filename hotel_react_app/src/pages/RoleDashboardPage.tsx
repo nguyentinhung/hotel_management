@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Role } from '../types';
+import RoomTypesPage from './RoomTypesPage';
 
 const dashboardConfig: Record<
   Role,
@@ -165,11 +166,17 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
           </div>
 
           <div className="module-content">
-            <p>{activeItem.description}</p>
-            <div className="empty-state-box">
-              <strong>Chưa có dữ liệu</strong>
-              <span>Module này sẽ được triển khai sau khi team bắt đầu code phần dữ liệu thực tế.</span>
-            </div>
+            {currentRole === 'ADMIN' && activeItem.label === 'Loại phòng' ? (
+              <RoomTypesPage />
+            ) : (
+              <>
+                <p>{activeItem.description}</p>
+                <div className="empty-state-box">
+                  <strong>Chưa có dữ liệu</strong>
+                  <span>Module này sẽ được triển khai sau khi team bắt đầu code phần dữ liệu thực tế.</span>
+                </div>
+              </>
+            )}
           </div>
         </section>
       </main>
