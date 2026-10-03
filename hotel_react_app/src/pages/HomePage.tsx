@@ -414,7 +414,21 @@ export default function HomePage() {
                 const total = room.base_price * nightCount;
                 const roomImage = getRoomImage(room);
                 return (
-                  <article key={room.id} className="room-card">
+                  <article
+                    key={room.id}
+                    className="room-card room-card-clickable"
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Xem chi tiết loại phòng ${room.name}`}
+                    onClick={() => void openRoomDetails(room.id)}
+                    onKeyDown={(event) => {
+                      if (event.target !== event.currentTarget) return;
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        void openRoomDetails(room.id);
+                      }
+                    }}
+                  >
                     {roomImage ? (
                       <img src={roomImage} alt={room.name} className="room-image" />
                     ) : (
@@ -450,9 +464,9 @@ export default function HomePage() {
                           </div>
                         </div>
                         <div className="room-card-actions">
-                          <button className="btn btn-outline customer-room-details-button" type="button" aria-label={`Xem chi tiết ${room.name}`} onClick={() => void openRoomDetails(room.id)}>Xem chi tiết</button>
                           <a
                             className="btn btn-primary"
+                            onClick={(event) => event.stopPropagation()}
                             href={`/booking?room_type_id=${room.id}&check_in_date=${search.check_in_date}&check_out_date=${search.check_out_date}&adults=${search.adults}&children=${search.children}`}
                           >
                             Đặt phòng

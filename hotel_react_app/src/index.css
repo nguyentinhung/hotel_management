@@ -1353,14 +1353,13 @@ a:focus-visible {
   color: #fff;
 }
 
-.customer-room-details-button {
-  width: auto;
-  height: auto;
-  padding: 8px 14px;
-  border-radius: 8px;
-  font-family: inherit;
-  font-size: 0.875rem;
-  white-space: nowrap;
+.room-card-clickable {
+  cursor: pointer;
+}
+
+.room-card-clickable:focus-visible {
+  outline: 3px solid var(--secondary-dark);
+  outline-offset: 3px;
 }
 
 .room-type-details-modal {
