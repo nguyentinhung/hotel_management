@@ -400,6 +400,18 @@ a:focus-visible {
   color: var(--primary);
 }
 
+.room-card-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.room-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .rating-badge {
   background: #fff7e8;
   color: var(--secondary-dark);
@@ -1339,6 +1351,16 @@ a:focus-visible {
   border-color: var(--primary);
   background: var(--primary);
   color: #fff;
+}
+
+.customer-room-details-button {
+  width: auto;
+  height: auto;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 0.875rem;
+  white-space: nowrap;
 }
 
 .room-type-details-modal {

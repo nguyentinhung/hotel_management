@@ -32,6 +32,7 @@ const dashboardConfig: Record<
     nav: [
       { label: 'Tổng quan', description: 'Xem các hoạt động của ngày hôm nay.' },
       { label: 'Đặt phòng', description: 'Quản lý booking đã xác nhận và đang chờ xử lý.' },
+      { label: 'Loại phòng', description: 'Tra cứu giá, sức chứa và tiện nghi của từng loại phòng.' },
       { label: 'Check-in', description: 'Xác nhận khách đến và lập hồ sơ nhận phòng.' },
       { label: 'Check-out', description: 'Tính tiền và thanh toán khi khách rời đi.' },
       { label: 'Khách hàng', description: 'Xem thông tin khách hàng và lịch sử lưu trú.' },
@@ -166,8 +167,8 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
           </div>
 
           <div className="module-content">
-            {currentRole === 'ADMIN' && activeItem.label === 'Loại phòng' ? (
-              <RoomTypesPage />
+            {(currentRole === 'ADMIN' || currentRole === 'RECEPTIONIST') && activeItem.label === 'Loại phòng' ? (
+              <RoomTypesPage readOnly={currentRole === 'RECEPTIONIST'} />
             ) : (
               <>
                 <p>{activeItem.description}</p>

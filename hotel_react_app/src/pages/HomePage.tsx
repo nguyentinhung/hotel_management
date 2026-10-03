@@ -6,6 +6,7 @@ import presidentialVilla from '../assets/presidential-villa.jpg';
 import skyLounge from '../assets/sky-lounge.jpg';
 import { getActivePromotions, getCurrentRoleFromQuery, getReviews, getRoomTypes, getServices } from '../services/homeService';
 import { logout } from '../services/authService';
+import api from '../services/api';
 import type { AppUser, Promotion, Review, RoomType, SearchFormState, ServiceItem } from '../types';
 
 const daysBetween = (from: string, to: string) => {
@@ -41,6 +42,11 @@ const roomImageMap: Record<number, string> = {
 
 const getRoomImage = (room: RoomType) => roomImageMap[room.id] ?? room.image_url ?? '';
 
+type RoomTypeDetails = RoomType & {
+  images?: { image_url: string; is_primary: boolean }[];
+  reviews?: { customer_name: string; rating: number; comment: string | null }[];
+};
+
 export default function HomePage() {
   const today = useMemo(() => formatDateInput(new Date()), []);
   const tomorrow = useMemo(() => addDays(today, 1), [today]);
@@ -62,6 +68,24 @@ export default function HomePage() {
   const [isFiltered, setIsFiltered] = useState(false);
   const [filteredRoomTypes, setFilteredRoomTypes] = useState<RoomType[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [selectedRoomDetails, setSelectedRoomDetails] = useState<RoomTypeDetails | null>(null);
+  const [isRoomDetailsOpen, setIsRoomDetailsOpen] = useState(false);
+  const [isRoomDetailsLoading, setIsRoomDetailsLoading] = useState(false);
+  const [roomDetailsError, setRoomDetailsError] = useState('');
+
+  const openRoomDetails = async (roomTypeId: number) => {
+    setIsRoomDetailsOpen(true);
+    setIsRoomDetailsLoading(true);
+    setSelectedRoomDetails(null);
+    setRoomDetailsError('');
+    try {
+      setSelectedRoomDetails(await api.get<RoomTypeDetails>(`/api/room-types/${roomTypeId}`));
+    } catch (detailsError) {
+      setRoomDetailsError(detailsError instanceof Error ? detailsError.message : 'Không thể tải chi tiết loại phòng.');
+    } finally {
+      setIsRoomDetailsLoading(false);
+    }
+  };
 
   useEffect(() => {
     const storedUser = localStorage.getItem('user');
@@ -400,8 +424,10 @@ export default function HomePage() {
                     <div className="room-body">
                       <div className="room-header-row">
                         <h3>{room.name}</h3>
-                        <div className="rating-badge">
-                          {room.average_rating.toFixed(1)} ★ ({room.review_count})
+                        <div className="room-card-header-actions">
+                          <div className="rating-badge">
+                            {room.average_rating.toFixed(1)} ★ ({room.review_count})
+                          </div>
                         </div>
                       </div>
 
@@ -423,12 +449,15 @@ export default function HomePage() {
                             {nightCount} đêm: {formatCurrency(total)}
                           </div>
                         </div>
-                        <a
-                          className="btn btn-primary"
-                          href={`/booking?room_type_id=${room.id}&check_in_date=${search.check_in_date}&check_out_date=${search.check_out_date}&adults=${search.adults}&children=${search.children}`}
-                        >
-                          Đặt phòng
-                        </a>
+                        <div className="room-card-actions">
+                          <button className="btn btn-outline customer-room-details-button" type="button" aria-label={`Xem chi tiết ${room.name}`} onClick={() => void openRoomDetails(room.id)}>Xem chi tiết</button>
+                          <a
+                            className="btn btn-primary"
+                            href={`/booking?room_type_id=${room.id}&check_in_date=${search.check_in_date}&check_out_date=${search.check_out_date}&adults=${search.adults}&children=${search.children}`}
+                          >
+                            Đặt phòng
+                          </a>
+                        </div>
                       </div>
                     </div>
                   </article>
@@ -437,6 +466,35 @@ export default function HomePage() {
             </div>
           )}
         </section>
+
+        {isRoomDetailsOpen && (
+          <div className="room-type-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setIsRoomDetailsOpen(false); }}>
+            <div className="room-type-modal room-type-details-modal" role="dialog" aria-modal="true" aria-labelledby="customer-room-details-title">
+              <div className="room-type-modal-heading">
+                <div>
+                  <h3 id="customer-room-details-title">Chi tiết loại phòng</h3>
+                  <p>Thông tin giá, sức chứa, tiện nghi và phản hồi của khách.</p>
+                </div>
+                <button className="room-type-close" type="button" aria-label="Đóng" onClick={() => setIsRoomDetailsOpen(false)}>×</button>
+              </div>
+              {isRoomDetailsLoading ? <p role="status">Đang tải chi tiết...</p> : roomDetailsError ? <div className="error-text" role="alert">{roomDetailsError}</div> : selectedRoomDetails ? (
+                <div className="room-type-details-content">
+                  {selectedRoomDetails.images?.length ? <div className="room-type-details-images">{selectedRoomDetails.images.map((image: { image_url: string }, index: number) => <img key={`${image.image_url}-${index}`} src={image.image_url} alt={`${selectedRoomDetails.name} ${index + 1}`} />)}</div> : null}
+                  <div className="room-type-details-summary"><div><span className="muted-label">Loại phòng</span><h4>{selectedRoomDetails.name}</h4></div><strong>{formatCurrency(selectedRoomDetails.base_price)} <small>/ đêm</small></strong></div>
+                  <p className="room-type-details-description">{selectedRoomDetails.description || 'Chưa có mô tả cho loại phòng này.'}</p>
+                  <div className="room-type-details-facts">
+                    <div><span>Sức chứa người lớn</span><strong>{selectedRoomDetails.max_adults}</strong></div>
+                    <div><span>Sức chứa trẻ em</span><strong>{selectedRoomDetails.max_children}</strong></div>
+                    <div><span>Đánh giá trung bình</span><strong>{selectedRoomDetails.average_rating == null ? 'Chưa có' : `${selectedRoomDetails.average_rating.toFixed(1)} / 5`}</strong></div>
+                    <div><span>Số lượt đánh giá</span><strong>{selectedRoomDetails.review_count ?? 0}</strong></div>
+                  </div>
+                  <div className="room-type-details-section"><h4>Tiện nghi</h4>{selectedRoomDetails.amenities?.length ? <div className="room-type-amenities">{selectedRoomDetails.amenities.map((amenity: string) => <span key={amenity}>{amenity}</span>)}</div> : <p>Chưa cập nhật tiện nghi.</p>}</div>
+                  <div className="room-type-details-section"><h4>Đánh giá gần đây</h4>{selectedRoomDetails.reviews?.length ? <div className="room-type-review-list">{selectedRoomDetails.reviews.map((review: { customer_name: string; rating: number; comment: string | null }, index: number) => <article key={`${review.customer_name}-${index}`}><div><strong>{review.customer_name}</strong><span>{'★'.repeat(review.rating)}{'☆'.repeat(5 - review.rating)}</span></div><p>{review.comment || 'Khách không để lại nhận xét.'}</p></article>)}</div> : <p>Chưa có đánh giá cho loại phòng này.</p>}</div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        )}
 
         <section id="promotions" className="container section-block">
           <div className="section-heading narrow">

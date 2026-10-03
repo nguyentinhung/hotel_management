@@ -37,7 +37,7 @@ const formatPrice = (price: number) => new Intl.NumberFormat('vi-VN', {
   maximumFractionDigits: 0,
 }).format(price);
 
-export default function RoomTypesPage() {
+export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean }) {
   const [roomTypes, setRoomTypes] = useState<RoomType[]>([]);
   const [form, setForm] = useState<RoomTypeForm>(emptyForm);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -165,9 +165,11 @@ export default function RoomTypesPage() {
           <h2 id="room-types-title">Danh sách loại phòng</h2>
           <p>Quản lý giá và sức chứa cho từng loại phòng.</p>
         </div>
-        <button className="btn btn-primary" type="button" onClick={openCreateForm}>
-          + Thêm loại phòng
-        </button>
+        {!readOnly && (
+          <button className="btn btn-primary" type="button" onClick={openCreateForm}>
+            + Thêm loại phòng
+          </button>
+        )}
       </div>
 
       {success && <div className="success-text" role="status">{success}</div>}
@@ -181,7 +183,7 @@ export default function RoomTypesPage() {
         <div className="room-types-table-wrap">
           <table className="room-types-table">
             <thead>
-              <tr><th>Tên loại phòng</th><th>Mô tả</th><th>Giá cơ bản / đêm</th><th>Sức chứa</th><th>Thao tác</th></tr>
+              <tr><th>Tên loại phòng</th><th>Mô tả</th><th>Giá cơ bản / đêm</th><th>Sức chứa</th><th>{readOnly ? 'Chi tiết' : 'Thao tác'}</th></tr>
             </thead>
             <tbody>
               {roomTypes.map((roomType) => (
@@ -192,8 +194,10 @@ export default function RoomTypesPage() {
                   <td>{roomType.max_adults} người lớn · {roomType.max_children} trẻ em</td>
                   <td>
                     <div className="room-type-action-buttons">
-                      <button className="room-type-delete-button" type="button" aria-label={`Xóa ${roomType.name}`} title="Xóa loại phòng" onClick={() => { setDeleteError(''); setPendingDeleteRoomType(roomType); }}>×</button>
-                      <button className="room-type-edit-button" type="button" aria-label={`Cập nhật ${roomType.name}`} title="Cập nhật" onClick={() => openEditForm(roomType)}>✎</button>
+                      {!readOnly && <>
+                        <button className="room-type-delete-button" type="button" aria-label={`Xóa ${roomType.name}`} title="Xóa loại phòng" onClick={() => { setDeleteError(''); setPendingDeleteRoomType(roomType); }}>×</button>
+                        <button className="room-type-edit-button" type="button" aria-label={`Cập nhật ${roomType.name}`} title="Cập nhật" onClick={() => openEditForm(roomType)}>✎</button>
+                      </>}
                       <button className="room-type-details-button" type="button" aria-label={`Xem chi tiết ${roomType.name}`} title="Xem chi tiết" onClick={() => void openDetails(roomType.id)}>i</button>
                     </div>
                   </td>
