@@ -3,6 +3,7 @@ import HomePage from './pages/HomePage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import RoleDashboardPage from './pages/RoleDashboardPage';
+import PaymentPage from './pages/PaymentPage';
 
 export default function App() {
   return (
@@ -16,6 +17,7 @@ export default function App() {
         <Route path="/reception" element={<RoleDashboardPage role="RECEPTIONIST" />} />
         <Route path="/housekeeping" element={<RoleDashboardPage role="HOUSEKEEPER" />} />
         <Route path="/my-bookings" element={<RoleDashboardPage role="CUSTOMER" />} />
+        <Route path="/make-payment" element={<PaymentPage />} />
       </Routes>
     </BrowserRouter>
   );

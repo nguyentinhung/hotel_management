@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import type { Role } from '../types';
 
 const dashboardConfig: Record<
@@ -58,6 +59,7 @@ const dashboardConfig: Record<
       { label: 'Đặt phòng', description: 'Quản lý các booking hiện tại và mới.' },
       { label: 'Lịch sử', description: 'Xem các chuyến đi trước đây.' },
       { label: 'Ưu đãi', description: 'Xem mã khuyến mãi và chương trình giảm giá.' },
+      { label: 'Thanh toán', description: 'Thanh toán khoản còn lại của booking tại quầy.' },
       { label: 'Hồ sơ', description: 'Cập nhật thông tin cá nhân và tài khoản.' },
       { label: 'Đánh giá', description: 'Gửi đánh giá sau khi lưu trú.' },
     ],
@@ -166,10 +168,18 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
 
           <div className="module-content">
             <p>{activeItem.description}</p>
-            <div className="empty-state-box">
-              <strong>Chưa có dữ liệu</strong>
-              <span>Module này sẽ được triển khai sau khi team bắt đầu code phần dữ liệu thực tế.</span>
-            </div>
+            {currentRole === 'CUSTOMER' && activeItem.label === 'Thanh toán' ? (
+              <div className="empty-state-box">
+                <strong>Thanh toán booking</strong>
+                <span>Gửi yêu cầu thanh toán phần còn lại của hóa đơn bằng tiền mặt tại quầy lễ tân.</span>
+                <Link className="btn btn-primary payment-entry-link" to="/make-payment">Tiếp tục thanh toán</Link>
+              </div>
+            ) : (
+              <div className="empty-state-box">
+                <strong>Chưa có dữ liệu</strong>
+                <span>Module này sẽ được triển khai sau khi team bắt đầu code phần dữ liệu thực tế.</span>
+              </div>
+            )}
           </div>
         </section>
       </main>
