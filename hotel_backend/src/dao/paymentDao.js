@@ -100,4 +100,27 @@ async function createFinalCashPayment({ customerId, bookingCode, paymentCode }) 
   }
 }
 
-module.exports = { createFinalCashPayment };
+async function getPaymentList() {
+  const pool = await getPool();
+  const result = await pool.request().query(`
+    SELECT
+      p.payment_code,
+      b.booking_code,
+      b.guest_full_name,
+      i.invoice_number,
+      p.payment_type,
+      p.method,
+      p.amount,
+      p.status,
+      p.paid_at,
+      p.vnpay_transaction_no
+    FROM dbo.payments p
+    JOIN dbo.bookings b ON b.id = p.booking_id
+    LEFT JOIN dbo.invoices i ON i.id = p.invoice_id
+    ORDER BY p.id DESC;
+  `);
+
+  return result.recordset;
+}
+
+module.exports = { createFinalCashPayment, getPaymentList };

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Role } from '../types';
+import PaymentList from '../components/PaymentList';
 
 const dashboardConfig: Record<
   Role,
@@ -22,6 +23,7 @@ const dashboardConfig: Record<
       { label: 'Khuyến mãi', description: 'Tạo và duyệt chương trình ưu đãi.' },
       { label: 'Người dùng', description: 'Quản lý tài khoản, vai trò và trạng thái người dùng.' },
       { label: 'Đặt phòng', description: 'Theo dõi booking, xác nhận và cập nhật lịch đặt.' },
+      { label: 'Thanh toán', description: 'Xem danh sách giao dịch thanh toán.' },
       { label: 'Báo cáo', description: 'Xem báo cáo hoạt động và thống kê hệ thống.' },
     ],
   },
@@ -168,7 +170,9 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
 
           <div className="module-content">
             <p>{activeItem.description}</p>
-            {currentRole === 'CUSTOMER' && activeItem.label === 'Thanh toán' ? (
+            {activeItem.label === 'Thanh toán' && currentRole !== 'CUSTOMER' && currentRole !== 'HOUSEKEEPER' ? (
+              <PaymentList />
+            ) : currentRole === 'CUSTOMER' && activeItem.label === 'Thanh toán' ? (
               <div className="empty-state-box">
                 <strong>Thanh toán booking</strong>
                 <span>Gửi yêu cầu thanh toán phần còn lại của hóa đơn bằng tiền mặt tại quầy lễ tân.</span>
