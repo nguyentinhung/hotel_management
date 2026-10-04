@@ -1,9 +1,10 @@
 import { FormEvent, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { login } from '../services/authService';
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -23,7 +24,9 @@ export default function LoginPage() {
       localStorage.setItem('refreshToken', authResponse.refreshToken);
 
       if (role === 'CUSTOMER') {
-        navigate('/');
+        const requestedPath = new URLSearchParams(location.search).get('redirect');
+        const safePath = requestedPath?.startsWith('/') && !requestedPath.startsWith('//') ? requestedPath : '/';
+        navigate(safePath);
         return;
       }
 

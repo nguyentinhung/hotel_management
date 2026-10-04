@@ -1,12 +1,27 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import deluxeCityView from '../assets/deluxe-city-view.jpg';
 import executiveGarden from '../assets/executive-garden.webp';
 import familySuite from '../assets/family-suite.jpg';
 import presidentialVilla from '../assets/presidential-villa.jpg';
 import skyLounge from '../assets/sky-lounge.jpg';
-import { getActivePromotions, getCurrentRoleFromQuery, getReviews, getRoomTypes, getServices } from '../services/homeService';
+import {
+  getActivePromotions,
+  getCurrentRoleFromQuery,
+  getReviews,
+  getRoomTypes,
+  getServices,
+} from '../services/homeService';
 import { logout } from '../services/authService';
-import type { AppUser, Promotion, Review, RoomType, SearchFormState, ServiceItem } from '../types';
+import { checkRoomAvailability } from '../services/roomService';
+import type {
+  AppUser,
+  Promotion,
+  Review,
+  RoomAvailabilityItem,
+  RoomType,
+  SearchFormState,
+  ServiceItem,
+} from '../types';
 
 const daysBetween = (from: string, to: string) => {
   const start = new Date(from);
@@ -46,11 +61,12 @@ export default function HomePage() {
   const tomorrow = useMemo(() => addDays(today, 1), [today]);
 
   const [user, setUser] = useState<AppUser | null>(null);
-  const [roomTypes, setRoomTypes] = useState<RoomType[]>([]);
+  const [roomTypes, setRoomTypes] = useState<RoomAvailabilityItem[]>([]);
   const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [services, setServices] = useState<ServiceItem[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isCheckingAvailability, setIsCheckingAvailability] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState<SearchFormState>({
     check_in_date: today,
@@ -59,8 +75,9 @@ export default function HomePage() {
     children: 0,
   });
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [onlyAvailableFilter, setOnlyAvailableFilter] = useState(false);
+  const [filteredRoomTypes, setFilteredRoomTypes] = useState<RoomAvailabilityItem[]>([]);
   const [isFiltered, setIsFiltered] = useState(false);
-  const [filteredRoomTypes, setFilteredRoomTypes] = useState<RoomType[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
@@ -68,10 +85,17 @@ export default function HomePage() {
     if (storedUser) {
       try {
         const parsedUser = JSON.parse(storedUser);
-        const roleId = parsedUser.role_id ?? null;
-        const mappedRole = roleId === 4 ? 'ADMIN' : roleId === 2 ? 'RECEPTIONIST' : roleId === 3 ? 'HOUSEKEEPER' : 'CUSTOMER';
+        const validRoles: AppUser['role'][] = ['CUSTOMER', 'RECEPTIONIST', 'HOUSEKEEPER', 'ADMIN'];
+        const roleById: Record<number, AppUser['role']> = {
+          1: 'CUSTOMER',
+          2: 'RECEPTIONIST',
+          3: 'HOUSEKEEPER',
+          4: 'ADMIN',
+        };
+        const storedRole = validRoles.find((role) => role === parsedUser.role);
+        const mappedRole = storedRole ?? roleById[Number(parsedUser.role_id)] ?? 'CUSTOMER';
         setUser({
-          full_name: parsedUser.full_name || parsedUser.email,
+          full_name: parsedUser.full_name || parsedUser.email || 'Khách hàng',
           role: mappedRole,
         });
       } catch {
@@ -81,7 +105,14 @@ export default function HomePage() {
 
     const role = getCurrentRoleFromQuery();
     if (role) {
-      const displayName = role === 'CUSTOMER' ? 'Khách hàng' : role === 'RECEPTIONIST' ? 'Lễ tân' : role === 'HOUSEKEEPER' ? 'Nhân viên dọn phòng' : 'Quản trị viên';
+      const displayName =
+        role === 'CUSTOMER'
+          ? 'Khách hàng'
+          : role === 'RECEPTIONIST'
+            ? 'Lễ tân'
+            : role === 'HOUSEKEEPER'
+              ? 'Nhân viên dọn phòng'
+              : 'Quản trị viên';
       setUser({ full_name: displayName, role });
     }
 
@@ -89,17 +120,26 @@ export default function HomePage() {
       try {
         setIsLoading(true);
         setError(null);
-        const [roomData, promotionData, serviceData, reviewData] = await Promise.all([
-          getRoomTypes(),
+        const [availabilityRes, promotionData, serviceData, reviewData] = await Promise.all([
+          checkRoomAvailability({
+            check_in_date: today,
+            check_out_date: tomorrow,
+            adults: 2,
+            children: 0,
+          }),
           getActivePromotions(),
           getServices(),
           getReviews(),
         ]);
+
+        const roomData = availabilityRes.data || [];
         setRoomTypes(roomData);
         setPromotions(promotionData);
         setServices(serviceData);
         setReviews(reviewData);
-        setFilteredRoomTypes(roomData);
+        setFilteredRoomTypes(
+          roomData.filter((item) => item.capacity_matched && (!onlyAvailableFilter || item.is_available)),
+        );
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Có lỗi xảy ra khi tải dữ liệu.');
       } finally {
@@ -108,9 +148,95 @@ export default function HomePage() {
     };
 
     void loadData();
-  }, [today]);
+  }, [today, tomorrow]);
 
   const nightCount = useMemo(() => daysBetween(search.check_in_date, search.check_out_date), [search]);
+
+  useEffect(() => {
+    const baseList = roomTypes.filter(
+      (item) => item.capacity_matched && item.max_adults >= search.adults && item.max_children >= search.children,
+    );
+
+    setFilteredRoomTypes(onlyAvailableFilter ? baseList.filter((item) => item.is_available) : baseList);
+  }, [roomTypes, onlyAvailableFilter, search.adults, search.children]);
+
+  const handleSearch = async () => {
+    const todayDate = new Date(today);
+    const checkIn = new Date(search.check_in_date);
+    const checkOut = new Date(search.check_out_date);
+    const nextErrors: string[] = [];
+
+    if (checkIn < todayDate) {
+      nextErrors.push('Ngày nhận không thể ở quá khứ.');
+    }
+    if (checkOut <= checkIn) {
+      nextErrors.push('Ngày trả phòng phải sau ngày nhận phòng.');
+    }
+    if (search.adults < 1) {
+      nextErrors.push('Số người lớn phải lớn hơn hoặc bằng 1.');
+    }
+
+    if (nextErrors.length > 0) {
+      setSearchError(nextErrors.join(' '));
+      setIsFiltered(false);
+      return;
+    }
+
+    try {
+      setIsCheckingAvailability(true);
+      setSearchError(null);
+
+      const result = await checkRoomAvailability({
+        check_in_date: search.check_in_date,
+        check_out_date: search.check_out_date,
+        adults: search.adults,
+        children: search.children,
+      });
+
+      const updatedRooms = result.data || [];
+      setRoomTypes(updatedRooms);
+
+      const matched = updatedRooms.filter(
+        (item) => item.capacity_matched && item.max_adults >= search.adults && item.max_children >= search.children,
+      );
+      setFilteredRoomTypes(onlyAvailableFilter ? matched.filter((item) => item.is_available) : matched);
+      setIsFiltered(true);
+      document.getElementById('rooms')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (err) {
+      setSearchError(err instanceof Error ? err.message : 'Lỗi khi kiểm tra phòng trống.');
+    } finally {
+      setIsCheckingAvailability(false);
+    }
+  };
+
+  const toggleOnlyAvailable = () => {
+    const nextValue = !onlyAvailableFilter;
+    setOnlyAvailableFilter(nextValue);
+    setFilteredRoomTypes(
+      roomTypes
+        .filter(
+          (item) => item.capacity_matched && item.max_adults >= search.adults && item.max_children >= search.children,
+        )
+        .filter((item) => (nextValue ? item.is_available : true)),
+    );
+  };
+
+  const resetFilter = () => {
+    const baseList = roomTypes.filter(
+      (item) => item.capacity_matched && item.max_adults >= search.adults && item.max_children >= search.children,
+    );
+    setIsFiltered(false);
+    setFilteredRoomTypes(onlyAvailableFilter ? baseList.filter((item) => item.is_available) : baseList);
+    setSearchError(null);
+  };
+
+  const copyCode = async (code: string) => {
+    await navigator.clipboard.writeText(code);
+  };
+
+  const averageReview = reviews.length
+    ? reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length
+    : 0;
 
   const getRolePath = (role: AppUser['role']) => {
     switch (role) {
@@ -127,58 +253,6 @@ export default function HomePage() {
     }
   };
 
-  const handleSearch = () => {
-    const todayDate = new Date(today);
-    const checkIn = new Date(search.check_in_date);
-    const checkOut = new Date(search.check_out_date);
-
-    const nextErrors: string[] = [];
-
-    if (checkIn < todayDate) {
-      nextErrors.push('Ngày nhận không ở quá khứ.');
-    }
-    if (checkOut <= checkIn) {
-      nextErrors.push('Ngày trả phải SAU ngày nhận.');
-    }
-    if (search.adults < 1) {
-      nextErrors.push('Số người lớn phải lớn hơn hoặc bằng 1.');
-    }
-
-    if (nextErrors.length > 0) {
-      setSearchError(nextErrors.join(' '));
-      setIsFiltered(false);
-      return;
-    }
-
-    if (checkOut <= checkIn) {
-      const adjustedDate = addDays(search.check_in_date, 1);
-      setSearch({ ...search, check_out_date: adjustedDate });
-    }
-
-    const matched = roomTypes.filter(
-      (item) => item.max_adults >= search.adults && item.max_children >= search.children,
-    );
-
-    setFilteredRoomTypes(matched);
-    setIsFiltered(true);
-    setSearchError(null);
-    document.getElementById('rooms')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  };
-
-  const resetFilter = () => {
-    setIsFiltered(false);
-    setFilteredRoomTypes(roomTypes);
-    setSearchError(null);
-  };
-
-  const copyCode = async (code: string) => {
-    await navigator.clipboard.writeText(code);
-  };
-
-  const averageReview = reviews.length
-    ? reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length
-    : 0;
-
   const dashboardLabel: Record<AppUser['role'], string> = {
     CUSTOMER: 'My bookings',
     RECEPTIONIST: 'Dashboard Lễ tân',
@@ -192,6 +266,8 @@ export default function HomePage() {
       if (refreshToken) {
         await logout(refreshToken);
       }
+    } catch (err) {
+      console.error('Logout request failed:', err);
     } finally {
       localStorage.removeItem('user');
       localStorage.removeItem('accessToken');
@@ -275,9 +351,9 @@ export default function HomePage() {
                 và gia đình với dịch vụ tận tâm ngay trong trung tâm thành phố.
               </p>
               <div className="benefits">
-                <div>Đặt cọc an toàn qua VNPay</div>
-                <div>Email xác nhận gửi ngay sau khi đặt</div>
-                <div>Thanh toán phần còn lại tại quầy lễ tân</div>
+                <div>Đặt phòng trực tuyến nhanh chóng</div>
+                <div>Nhận mã xác nhận ngay sau khi đặt</div>
+                <div>Thanh toán tại quầy lễ tân khi nhận phòng</div>
               </div>
             </div>
 
@@ -348,7 +424,7 @@ export default function HomePage() {
 
               {searchError && <p className="inline-error">{searchError}</p>}
 
-              <button className="btn btn-primary full-width" onClick={handleSearch}>
+              <button className="btn btn-primary full-width" onClick={() => void handleSearch()}>
                 Tìm phòng
               </button>
 
@@ -409,6 +485,11 @@ export default function HomePage() {
                       <p className="room-guest-limit">
                         Tối đa {room.max_adults} người lớn, {room.max_children} trẻ em
                       </p>
+                      {room.is_available && room.available_rooms > 0 ? (
+                        <small className="availability-note">Còn {room.available_rooms} phòng</small>
+                      ) : (
+                        <small className="availability-note">Hết phòng</small>
+                      )}
 
                       <ul className="amenities-list">
                         {room.amenities.map((amenity) => (
@@ -423,12 +504,18 @@ export default function HomePage() {
                             {nightCount} đêm: {formatCurrency(total)}
                           </div>
                         </div>
-                        <a
-                          className="btn btn-primary"
-                          href={`/booking?room_type_id=${room.id}&check_in_date=${search.check_in_date}&check_out_date=${search.check_out_date}&adults=${search.adults}&children=${search.children}`}
-                        >
-                          Đặt phòng
-                        </a>
+                        {room.is_available ? (
+                          <a
+                            className="btn btn-primary"
+                            href={`/booking?room_type_id=${room.id}&check_in_date=${search.check_in_date}&check_out_date=${search.check_out_date}&adults=${search.adults}&children=${search.children}`}
+                          >
+                            Đặt phòng
+                          </a>
+                        ) : (
+                          <button type="button" className="btn btn-secondary" disabled>
+                            Hết phòng
+                          </button>
+                        )}
                       </div>
                     </div>
                   </article>
