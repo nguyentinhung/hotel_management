@@ -90,6 +90,19 @@ export const api = {
     return payload as T;
   },
 
+  postFormWithAuth: async <T>(url: string, body: FormData, token?: string): Promise<T> => {
+    const response = await fetch(`${API_BASE_URL}${url}`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      body,
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.message || `Request failed: ${response.status}`);
+    }
+    return payload as T;
+  },
+
   patch: async <T>(url: string, body: unknown, token?: string): Promise<T> => {
     const response = await fetch(`${API_BASE_URL}${url}`, {
       method: 'PATCH',

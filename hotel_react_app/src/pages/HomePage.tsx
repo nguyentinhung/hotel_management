@@ -55,7 +55,7 @@ const roomImageMap: Record<number, string> = {
   5: skyLounge,
 };
 
-const getRoomImage = (room: RoomType) => roomImageMap[room.id] ?? room.image_url ?? '';
+const getRoomImage = (room: RoomType) => room.image_url ?? roomImageMap[room.id] ?? '';
 
 type RoomTypeDetails = RoomType & {
   images?: { image_url: string; is_primary: boolean }[];

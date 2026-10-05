@@ -127,7 +127,7 @@ async function getServices(activeOnly = true) {
   `;
 
   if (activeOnly) {
-    query += ` WHERE is_active = 1 `;
+    query += ` WHERE is_active = 1 AND is_deleted = 0 `;
   }
 
   query += ` ORDER BY id;`;

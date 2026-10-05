@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import ReceptionRoomBooking from '../components/ReceptionRoomBooking';
 import RoomTypesPage from './RoomTypesPage';
+import ServiceListPage from './ServiceListPage';
 import type { Role } from '../types';
 import { assignRoomToBooking, cancelBooking, finishRoomCleaning, getActiveBookings, getAssignableRooms, getBookingHistory, getRoomStatuses, updateBooking, type RoomStatusRecord } from '../services/roomService';
 import type { RecentBooking } from '../types';
@@ -30,6 +31,7 @@ const dashboardConfig: Record<
       { label: 'Tổng quan', description: 'Xem tình hình hoạt động tổng thể của khách sạn.' },
       { label: 'Quản lý phòng', description: 'Theo dõi phòng, trạng thái và thông tin phòng.' },
       { label: 'Loại phòng', description: 'Quản lý loại phòng, giá và tiện nghi.' },
+      { label: 'Dịch vụ', description: 'Quản lý dịch vụ khách sạn.' },
       { label: 'Khuyến mãi', description: 'Tạo và duyệt chương trình ưu đãi.' },
       { label: 'Người dùng', description: 'Quản lý tài khoản, vai trò và trạng thái người dùng.' },
       { label: 'Đặt phòng', description: 'Theo dõi booking, xác nhận và cập nhật lịch đặt.' },
@@ -460,6 +462,8 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
             <RoomStatusPanel role={currentRole} />
           ) : currentRole === 'ADMIN' && activeItem.label === 'Quản lý phòng' ? (
             <RoomStatusPanel role={currentRole} />
+          ) : currentRole === 'ADMIN' && activeItem.label === 'Dịch vụ' ? (
+            <ServiceListPage role={currentRole} />
           ) : currentRole === 'CUSTOMER' && ['Đặt phòng'].includes(activeItem.label) ? (
             <div className="module-content">
               <div className="customer-booking-prompt">

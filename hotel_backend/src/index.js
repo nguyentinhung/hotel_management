@@ -19,23 +19,12 @@ const { getHomeData, getRoomTypes, getRoomTypeDetails, getPromotions, getService
 const { register, login, logout, verifyEmail, forgotPassword, resetPassword } = require('./controllers/authController');
 const { checkAvailability, getAvailableRooms } = require('./controllers/roomController');
 const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, updateBookingHandler, cancelBookingHandler, getActiveBookingsHandler, checkOutBookingHandler, finishRoomCleaningHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
+const serviceController = require('./controllers/serviceController');
 const app = express();
 const PORT = 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
-const uploadsDir = path.join(__dirname, '../uploads');
-fs.mkdirSync(uploadsDir, { recursive: true });
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadsDir),
-  filename: (_req, file, cb) => {
-    const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '-');
-    const timestamp = Date.now();
-    cb(null, `${timestamp}-${safeName}`);
-  },
-});
-
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
     const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/jpg'];
@@ -47,9 +36,27 @@ const upload = multer({
   },
 });
 
+function requireAdmin(req, res, next) {
+  const authorization = req.headers.authorization || '';
+  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+
+  if (!token) {
+    return res.status(401).json({ message: 'Vui lòng đăng nhập để tiếp tục.' });
+  }
+
+  try {
+    const user = jwt.verify(token, JWT_SECRET);
+    if (user.role_code !== 'ADMIN') {
+      return res.status(403).json({ message: 'Chỉ quản trị viên được tải ảnh loại phòng.' });
+    }
+    return next();
+  } catch {
+    return res.status(401).json({ message: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.' });
+  }
+}
+
 app.use(cors());
 app.use(express.json());
-app.use('/uploads', express.static(uploadsDir));
 
 // Kiểm tra trạng thái backend đang chạy
 app.get('/api/health', (req, res) => {
@@ -292,6 +299,11 @@ app.delete('/api/room-types/:roomTypeId', async (req, res) => {
 app.get('/api/promotions/active', getPromotions);
 // Lấy danh sách dịch vụ khách sạn
 app.get('/api/services', getServices);
+app.get('/api/admin/services', serviceController.requireAdmin, serviceController.getServices);
+app.get('/api/admin/services/:id', serviceController.requireAdmin, serviceController.getServiceById);
+app.post('/api/admin/services', serviceController.requireAdmin, serviceController.createService);
+app.put('/api/admin/services/:id', serviceController.requireAdmin, serviceController.updateService);
+app.delete('/api/admin/services/:id', serviceController.requireAdmin, serviceController.deleteService);
 // Lấy đánh giá từ khách hàng
 app.get('/api/reviews', getReviews);
 
@@ -325,33 +337,81 @@ app.get('/api/bookings/active', getActiveBookingsHandler);
 
 
 // Upload ảnh chính cho loại phòng
-app.post('/api/room-types/:roomTypeId/image', upload.single('image'), async (req, res) => {
+app.get('/api/room-types/:roomTypeId/image', async (req, res) => {
+  const roomTypeId = Number(req.params.roomTypeId);
+  if (!Number.isInteger(roomTypeId) || roomTypeId < 1) {
+    return res.status(400).json({ message: 'Mã loại phòng không hợp lệ.' });
+  }
+
+  try {
+    const pool = await getPool();
+    const result = await pool.request()
+      .input('roomTypeId', sql.Int, roomTypeId)
+      .query(`
+        SELECT TOP (1) image_url, image_data, mime_type
+        FROM room_type_images
+        WHERE room_type_id = @roomTypeId AND is_primary = 1
+        ORDER BY id DESC;
+      `);
+    const image = result.recordset[0];
+    if (!image) return res.status(404).json({ message: 'Loại phòng chưa có ảnh.' });
+
+    if (image.image_data) {
+      res.set('Content-Type', image.mime_type || 'application/octet-stream');
+      res.set('Cache-Control', 'public, max-age=3600');
+      return res.send(image.image_data);
+    }
+
+    if (image.image_url && !image.image_url.includes('/api/room-types/')) {
+      return res.redirect(image.image_url);
+    }
+    return res.status(404).json({ message: 'Không tìm thấy dữ liệu ảnh.' });
+  } catch (error) {
+    console.error('Read room image error:', error);
+    return res.status(500).json({ message: 'Không thể tải ảnh loại phòng.' });
+  }
+});
+
+app.post('/api/room-types/:roomTypeId/image', requireAdmin, upload.single('image'), async (req, res) => {
   try {
     const { roomTypeId } = req.params;
     const imageFile = req.file;
+    const parsedRoomTypeId = Number(roomTypeId);
 
     if (!imageFile) {
       return res.status(400).json({ message: 'Thiếu file ảnh.' });
     }
+    if (!Number.isInteger(parsedRoomTypeId) || parsedRoomTypeId < 1) {
+      return res.status(400).json({ message: 'Mã loại phòng không hợp lệ.' });
+    }
 
     const pool = await getPool();
-    const imageUrl = `http://localhost:${PORT}/uploads/${imageFile.filename}`;
+    const roomType = await pool.request()
+      .input('roomTypeId', sql.Int, parsedRoomTypeId)
+      .query('SELECT id FROM room_types WHERE id = @roomTypeId;');
+    if (!roomType.recordset.length) {
+      return res.status(404).json({ message: 'Không tìm thấy loại phòng.' });
+    }
+
+    const imageUrl = `${req.protocol}://${req.get('host')}/api/room-types/${parsedRoomTypeId}/image`;
 
     await pool.request()
-      .input('roomTypeId', sql.Int, Number(roomTypeId))
+      .input('roomTypeId', sql.Int, parsedRoomTypeId)
       .input('imageUrl', sql.VarChar(500), imageUrl)
+      .input('imageData', sql.VarBinary(sql.MAX), imageFile.buffer)
+      .input('mimeType', sql.VarChar(100), imageFile.mimetype)
       .query(`
         UPDATE room_type_images
         SET is_primary = 0
         WHERE room_type_id = @roomTypeId;
 
-        INSERT INTO room_type_images (room_type_id, image_url, is_primary)
-        VALUES (@roomTypeId, @imageUrl, 1);
+        INSERT INTO room_type_images (room_type_id, image_url, image_data, mime_type, is_primary)
+        VALUES (@roomTypeId, @imageUrl, @imageData, @mimeType, 1);
       `);
 
     return res.status(201).json({
       message: 'Upload ảnh phòng thành công.',
-      roomTypeId: Number(roomTypeId),
+      roomTypeId: parsedRoomTypeId,
       image_url: imageUrl,
     });
   } catch (error) {
@@ -365,6 +425,20 @@ app.post('/api/room-types/:roomTypeId/image', upload.single('image'), async (req
 
 async function bootstrap() {
   await ensureAuthTables();
+  const pool = await getPool();
+  await pool.request().query(`
+    IF OBJECT_ID(N'dbo.services', N'U') IS NOT NULL
+       AND COL_LENGTH('dbo.services', 'is_deleted') IS NULL
+    BEGIN
+      ALTER TABLE dbo.services
+        ADD is_deleted BIT NOT NULL
+          CONSTRAINT DF_services_is_deleted DEFAULT (0) WITH VALUES;
+    END;
+    IF COL_LENGTH('dbo.room_type_images', 'image_data') IS NULL
+      ALTER TABLE dbo.room_type_images ADD image_data VARBINARY(MAX) NULL;
+    IF COL_LENGTH('dbo.room_type_images', 'mime_type') IS NULL
+      ALTER TABLE dbo.room_type_images ADD mime_type VARCHAR(100) NULL;
+  `);
   let isExpirySweepRunning = false;
   const sweepExpiredBookings = async () => {
     if (isExpirySweepRunning) return;

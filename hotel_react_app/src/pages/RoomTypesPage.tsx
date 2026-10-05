@@ -5,6 +5,7 @@ type RoomType = {
   id: number;
   name: string;
   description: string | null;
+  image_url?: string | null;
   base_price: number;
   max_adults: number;
   max_children: number;
@@ -53,6 +54,19 @@ export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean
   const [pendingDeleteRoomType, setPendingDeleteRoomType] = useState<RoomType | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState('');
+  const [selectedImage, setSelectedImage] = useState<File | null>(null);
+  const [selectedImagePreview, setSelectedImagePreview] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!selectedImage) {
+      setSelectedImagePreview(null);
+      return;
+    }
+
+    const previewUrl = URL.createObjectURL(selectedImage);
+    setSelectedImagePreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [selectedImage]);
 
   const openDetails = async (roomTypeId: number) => {
     setSelectedRoomType(null);
@@ -85,6 +99,7 @@ export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean
   const openCreateForm = () => {
     setEditingRoomTypeId(null);
     setForm(emptyForm);
+    setSelectedImage(null);
     setError('');
     setSuccess('');
     setIsModalOpen(true);
@@ -92,6 +107,7 @@ export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean
 
   const openEditForm = (roomType: RoomType) => {
     setEditingRoomTypeId(roomType.id);
+    setSelectedImage(null);
     setForm({
       name: roomType.name,
       description: roomType.description || '',
@@ -130,7 +146,14 @@ export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean
     event.preventDefault();
     setError('');
     setSuccess('');
+
+    if (editingRoomTypeId == null && !selectedImage) {
+      setError('Hãy chọn ảnh đại diện cho loại phòng mới.');
+      return;
+    }
+
     setIsSaving(true);
+    let savedRoomType: RoomType | null = null;
 
     try {
       const token = localStorage.getItem('accessToken') || undefined;
@@ -144,15 +167,35 @@ export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean
       const result = editingRoomTypeId == null
         ? await api.postWithAuth<{ message: string; roomType: RoomType }>('/api/room-types', payload, token)
         : await api.putWithAuth<{ message: string; roomType: RoomType }>(`/api/room-types/${editingRoomTypeId}`, payload, token);
-      setRoomTypes((current) => editingRoomTypeId == null
-        ? [...current, result.roomType]
-        : current.map((roomType) => roomType.id === editingRoomTypeId ? result.roomType : roomType));
+
+      savedRoomType = result.roomType;
+      setEditingRoomTypeId(savedRoomType.id);
+      setRoomTypes((current) => current.some((roomType) => roomType.id === savedRoomType!.id)
+        ? current.map((roomType) => roomType.id === savedRoomType!.id ? savedRoomType! : roomType)
+        : [...current, savedRoomType!]);
+
+      if (selectedImage) {
+        const formData = new FormData();
+        formData.append('image', selectedImage);
+        const imageResult = await api.postFormWithAuth<{ image_url: string }>(
+          `/api/room-types/${savedRoomType.id}/image`,
+          formData,
+          token,
+        );
+        savedRoomType = { ...savedRoomType, image_url: imageResult.image_url };
+      }
+
+      setRoomTypes((current) => current.map((roomType) => roomType.id === savedRoomType!.id ? savedRoomType! : roomType));
       setSuccess(result.message);
       setForm(emptyForm);
+      setSelectedImage(null);
       setEditingRoomTypeId(null);
       setIsModalOpen(false);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Không thể thêm loại phòng.');
+      if (savedRoomType) {
+        setSuccess('Thông tin loại phòng đã được lưu. Ảnh chưa tải lên thành công; hãy thử tải ảnh lại.');
+      }
     } finally {
       setIsSaving(false);
     }
@@ -230,6 +273,38 @@ export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean
                   <span>Mô tả</span>
                   <textarea rows={3} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="Thông tin nổi bật của loại phòng" />
                 </label>
+                <label className="room-type-field room-type-field-wide">
+                  <span>Ảnh đại diện {editingRoomTypeId == null && <b>*</b>}</span>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    required={editingRoomTypeId == null}
+                    onChange={(event) => {
+                      const file = event.currentTarget.files?.[0] || null;
+                      if (file && !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+                        setError('Chỉ nhận ảnh JPG, PNG hoặc WEBP.');
+                        event.currentTarget.value = '';
+                        return;
+                      }
+                      if (file && file.size > 5 * 1024 * 1024) {
+                        setError('Ảnh không được lớn hơn 5 MB.');
+                        event.currentTarget.value = '';
+                        return;
+                      }
+                      setError('');
+                      setSelectedImage(file);
+                    }}
+                  />
+                  <small>JPG, PNG hoặc WEBP; tối đa 5 MB. Khi sửa, bỏ trống để giữ ảnh hiện tại.</small>
+                </label>
+                {(selectedImagePreview || (editingRoomTypeId != null && roomTypes.find((item) => item.id === editingRoomTypeId)?.image_url)) && (
+                  <div className="room-type-image-preview room-type-field-wide">
+                    <img
+                      src={selectedImagePreview || roomTypes.find((item) => item.id === editingRoomTypeId)?.image_url || ''}
+                      alt="Ảnh đại diện loại phòng"
+                    />
+                  </div>
+                )}
                 <label className="room-type-field">
                   <span>Giá cơ bản / đêm (VND) <b>*</b></span>
                   <input required type="number" min="0" step="1000" value={form.base_price} onChange={(event) => setForm({ ...form, base_price: event.target.value })} />
