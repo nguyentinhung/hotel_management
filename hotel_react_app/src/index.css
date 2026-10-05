@@ -1864,6 +1864,73 @@ a:focus-visible {
   border-collapse: collapse;
 }
 
+.service-detail-card {
+  display: grid;
+  gap: 22px;
+  padding: clamp(20px, 4vw, 32px);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(15, 61, 62, 0.07);
+}
+
+.service-detail-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.service-detail-heading h4 {
+  margin: 6px 0 0;
+  color: var(--primary);
+  font-size: clamp(1.35rem, 3vw, 1.8rem);
+}
+
+.service-detail-description {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.service-detail-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.service-detail-facts > div {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #f8faf9;
+}
+
+.service-detail-facts span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.service-detail-facts strong {
+  color: var(--primary);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .service-detail-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .service-detail-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 .room-type-image-preview {
   overflow: hidden;
   border: 1px solid var(--line);

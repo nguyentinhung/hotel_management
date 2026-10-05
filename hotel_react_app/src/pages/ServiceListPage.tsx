@@ -181,42 +181,35 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
         return (
             <div className="service-page">
                 <div className="service-header">
-                    <h1>Service Details</h1>
+                    <h3>Chi tiết dịch vụ</h3>
                     <button
                         type="button"
                         className="btn btn-outline btn-sm"
                         onClick={() => setView('list')}
                     >
-                        Back
+                        Quay lại
                     </button>
                 </div>
 
-                <div className="service-details">
-                    <div>
-                        <strong>ID</strong>
-                        <span>{selectedService.id}</span>
+                <article className="service-detail-card">
+                    <div className="service-detail-heading">
+                        <div>
+                            <span className="muted-label">Dịch vụ #{selectedService.id}</span>
+                            <h4>{selectedService.name}</h4>
+                        </div>
+                        <span className={`status-badge ${selectedService.is_active ? 'active' : 'inactive'}`}>
+                            {selectedService.is_active ? 'Đang hoạt động' : 'Đang tắt'}
+                        </span>
                     </div>
-                    <div>
-                        <strong>Service Name</strong>
-                        <span>{selectedService.name}</span>
+                    <p className="service-detail-description">
+                        {selectedService.description || 'Dịch vụ chưa có mô tả.'}
+                    </p>
+                    <div className="service-detail-facts">
+                        <div><span>Giá dịch vụ</span><strong>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(selectedService.price)}</strong></div>
+                        <div><span>Đơn vị tính</span><strong>{selectedService.unit}</strong></div>
+                        <div><span>Mã dịch vụ</span><strong>#{selectedService.id}</strong></div>
                     </div>
-                    <div>
-                        <strong>Description</strong>
-                        <span>{selectedService.description || '—'}</span>
-                    </div>
-                    <div>
-                        <strong>Price</strong>
-                        <span>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(selectedService.price)}</span>
-                    </div>
-                    <div>
-                        <strong>Unit</strong>
-                        <span>{selectedService.unit}</span>
-                    </div>
-                    <div>
-                        <strong>Status</strong>
-                        <span>{selectedService.is_active ? 'Active' : 'Inactive'}</span>
-                    </div>
-                </div>
+                </article>
             </div>
         );
     }
@@ -255,12 +248,12 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
                         <thead>
                             <tr>
                                 <th style={thStyle}>ID</th>
-                                <th style={thStyle}>Service</th>
-                                <th style={thStyle}>Description</th>
-                                <th style={thStyle}>Price</th>
-                                <th style={thStyle}>Unit</th>
-                                <th style={thStyle}>Status</th>
-                                <th style={thStyle}>Actions</th>
+                                <th style={thStyle}>Dịch vụ</th>
+                                <th style={thStyle}>Mô tả</th>
+                                <th style={thStyle}>Giá</th>
+                                <th style={thStyle}>Đơn vị</th>
+                                <th style={thStyle}>Trạng thái</th>
+                                <th style={thStyle}>Thao tác</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -287,35 +280,14 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
                                             {service.is_active ? 'Active' : 'Inactive'}
                                         </span>
                                     </td>
-                                    <td style={{ ...tdStyle, whiteSpace: 'nowrap' }} className="service-actions">
-                                        <button
-                                            type="button"
-                                            className="btn btn-outline btn-sm"
-                                            onClick={() => void handleOpenDetails(service.id)}
-                                            style={{ marginRight: '6px' }}
-                                        >
-                                            View
-                                        </button>
-
-                                        {isAdmin && (
-                                            <>
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-secondary btn-sm"
-                                                    onClick={() => void handleOpenEdit(service.id)}
-                                                    style={{ marginRight: '6px' }}
-                                                >
-                                                    Edit
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-danger btn-sm"
-                                                    onClick={() => void handleDelete(service.id)}
-                                                >
-                                                    Delete
-                                                </button>
-                                            </>
-                                        )}
+                                    <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
+                                        <div className="room-type-action-buttons">
+                                            {isAdmin && <>
+                                                <button className="room-type-delete-button" type="button" aria-label={`Xóa ${service.name}`} title="Xóa dịch vụ" onClick={() => void handleDelete(service.id)}>×</button>
+                                                <button className="room-type-edit-button" type="button" aria-label={`Sửa ${service.name}`} title="Sửa dịch vụ" onClick={() => void handleOpenEdit(service.id)}>✎</button>
+                                            </>}
+                                            <button className="room-type-details-button" type="button" aria-label={`Xem chi tiết ${service.name}`} title="Xem chi tiết" onClick={() => void handleOpenDetails(service.id)}>i</button>
+                                        </div>
                                     </td>
                                 </tr>
                             ))}
