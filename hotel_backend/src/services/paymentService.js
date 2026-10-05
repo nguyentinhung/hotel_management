@@ -3,6 +3,7 @@ const {
   createFinalCashPayment,
   getPaymentList,
   getCustomerPaymentList,
+  confirmPaymentByCode,
 } = require('../dao/paymentDao');
 
 async function makePayment({ customerId, bookingCode, paymentType, method }) {
@@ -31,4 +32,8 @@ async function getCustomerPayments(customerId) {
   return getCustomerPaymentList(customerId);
 }
 
-module.exports = { makePayment, getPayments, getCustomerPayments };
+async function confirmPayment(paymentCode) {
+  return confirmPaymentByCode(paymentCode);
+}
+
+module.exports = { makePayment, getPayments, getCustomerPayments, confirmPayment };

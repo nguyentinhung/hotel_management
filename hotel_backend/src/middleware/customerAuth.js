@@ -45,8 +45,8 @@ const requireCustomer = requireRoles(
 );
 
 const requirePaymentStaff = requireRoles(
-  ['ADMIN', 'RECEPTIONIST'],
-  'Chỉ Admin hoặc Lễ tân mới có thể xem danh sách thanh toán.',
+  ['RECEPTIONIST'],
+  'Chỉ Lễ tân mới có thể xem danh sách thanh toán và xác nhận thanh toán.',
 );
 
 module.exports = { requireCustomer, requirePaymentStaff };

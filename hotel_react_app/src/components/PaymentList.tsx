@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getCustomerPaymentList, getPaymentList } from '../services/paymentService';
+import { confirmPayment, getCustomerPaymentList, getPaymentList } from '../services/paymentService';
 import type { PaymentListItem } from '../services/paymentService';
 
 const PAGE_SIZE = 5;
@@ -47,6 +47,8 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
   const [error, setError] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedPayment, setSelectedPayment] = useState<PaymentListItem | null>(null);
+  const [confirmingCode, setConfirmingCode] = useState<string | null>(null);
+  const [canConfirmPayment, setCanConfirmPayment] = useState(false);
 
   const loadPayments = useCallback(async () => {
     setIsLoading(true);
@@ -65,6 +67,22 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
   useEffect(() => {
     void loadPayments();
   }, [loadPayments]);
+
+  useEffect(() => {
+    const storedUser = localStorage.getItem('user');
+    if (!storedUser) {
+      setCanConfirmPayment(false);
+      return;
+    }
+
+    try {
+      const parsedUser = JSON.parse(storedUser) as { role_id?: number; role?: string };
+      const isReceptionist = Number(parsedUser.role_id) === 2 || String(parsedUser.role || '').toUpperCase() === 'RECEPTIONIST';
+      setCanConfirmPayment(isReceptionist);
+    } catch {
+      setCanConfirmPayment(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (!selectedPayment) return;
@@ -230,14 +248,41 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
                 <h3 id="payment-detail-title">Chi tiết thanh toán</h3>
                 <span>{selectedPayment.payment_code}</span>
               </div>
-              <button
-                className="payment-detail-close"
-                type="button"
-                aria-label="Đóng chi tiết thanh toán"
-                onClick={() => setSelectedPayment(null)}
-              >
-                ×
-              </button>
+              <div className="payment-detail-header-actions">
+                {!customerOnly && canConfirmPayment && selectedPayment.status === 'PENDING' && (
+                  <button
+                    className="btn btn-primary"
+                    type="button"
+                    disabled={confirmingCode === selectedPayment.payment_code}
+                    onClick={async () => {
+                      try {
+                        setConfirmingCode(selectedPayment.payment_code);
+                        await confirmPayment(selectedPayment.payment_code);
+                        setPayments((previous) => previous.map((payment) => (
+                          payment.payment_code === selectedPayment.payment_code
+                            ? { ...payment, status: 'SUCCESS', paid_at: new Date().toISOString() }
+                            : payment
+                        )));
+                        setSelectedPayment({ ...selectedPayment, status: 'SUCCESS', paid_at: new Date().toISOString() });
+                      } catch (requestError) {
+                        setError(requestError instanceof Error ? requestError.message : 'Không thể xác nhận thanh toán.');
+                      } finally {
+                        setConfirmingCode(null);
+                      }
+                    }}
+                  >
+                    {confirmingCode === selectedPayment.payment_code ? 'Đang xác nhận...' : 'Xác nhận thanh toán'}
+                  </button>
+                )}
+                <button
+                  className="payment-detail-close"
+                  type="button"
+                  aria-label="Đóng chi tiết thanh toán"
+                  onClick={() => setSelectedPayment(null)}
+                >
+                  ×
+                </button>
+              </div>
             </header>
             <div className="payment-detail-columns">
               <div className="payment-detail-column">

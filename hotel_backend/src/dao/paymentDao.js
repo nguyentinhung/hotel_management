@@ -203,4 +203,88 @@ async function getCustomerPaymentList(customerId) {
   return getPaymentList(customerId);
 }
 
-module.exports = { createFinalCashPayment, getPaymentList, getCustomerPaymentList };
+async function confirmPaymentByCode(paymentCode) {
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+  let transactionStarted = false;
+
+  try {
+    await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+    transactionStarted = true;
+
+    const paymentResult = await transaction.request()
+      .input('paymentCode', sql.VarChar(30), paymentCode)
+      .query(`
+        SELECT TOP (1)
+          p.id,
+          p.booking_id,
+          p.invoice_id,
+          p.amount,
+          p.payment_type,
+          p.status,
+          i.amount_due,
+          i.total_amount,
+          i.deposit_paid
+        FROM dbo.payments p WITH (UPDLOCK, HOLDLOCK)
+        LEFT JOIN dbo.invoices i WITH (UPDLOCK, HOLDLOCK) ON i.id = p.invoice_id
+        WHERE p.payment_code = @paymentCode;
+      `);
+
+    const payment = paymentResult.recordset[0];
+    if (!payment) {
+      const error = new Error('Không tìm thấy giao dịch thanh toán.');
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (String(payment.status).toUpperCase() !== 'PENDING') {
+      const error = new Error('Giao dịch này không còn ở trạng thái chờ xác nhận.');
+      error.statusCode = 409;
+      throw error;
+    }
+
+    await transaction.request()
+      .input('paymentCode', sql.VarChar(30), paymentCode)
+      .input('paidAt', sql.DateTime2, new Date())
+      .query(`
+        UPDATE dbo.payments
+        SET status = 'SUCCESS', paid_at = @paidAt
+        WHERE payment_code = @paymentCode;
+      `);
+
+    if (payment.invoice_id) {
+      const nextInvoiceStatus = String(payment.payment_type).toUpperCase() === 'FINAL' ? 'PAID' : 'ISSUED';
+      if (String(payment.payment_type).toUpperCase() === 'FINAL') {
+        await transaction.request()
+          .input('invoiceId', sql.BigInt, payment.invoice_id)
+          .query(`
+            UPDATE dbo.invoices
+            SET status = 'PAID', amount_due = 0
+            WHERE id = @invoiceId;
+          `);
+      } else {
+        await transaction.request()
+          .input('invoiceId', sql.BigInt, payment.invoice_id)
+          .input('amount', sql.Decimal(14, 2), payment.amount)
+          .query(`
+            UPDATE dbo.invoices
+            SET deposit_paid = deposit_paid + @amount,
+                amount_due = CASE WHEN total_amount - (deposit_paid + @amount) > 0 THEN total_amount - (deposit_paid + @amount) ELSE 0 END,
+                status = CASE WHEN total_amount - (deposit_paid + @amount) > 0 THEN 'ISSUED' ELSE 'PAID' END
+            WHERE id = @invoiceId;
+          `);
+      }
+    }
+
+    await transaction.commit();
+    transactionStarted = false;
+    return { payment_code: paymentCode, status: 'SUCCESS' };
+  } catch (error) {
+    if (transactionStarted) {
+      try { await transaction.rollback(); } catch (rollbackError) { console.error('Confirm payment rollback error:', rollbackError); }
+    }
+    throw error;
+  }
+}
+
+module.exports = { createFinalCashPayment, getPaymentList, getCustomerPaymentList, confirmPaymentByCode };

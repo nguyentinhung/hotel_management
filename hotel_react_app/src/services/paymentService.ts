@@ -84,3 +84,11 @@ export function getPaymentList(): Promise<PaymentListItem[]> {
 export function getCustomerPaymentList(): Promise<PaymentListItem[]> {
   return api.get<PaymentListItem[]>('/api/payments/my', localStorage.getItem('accessToken') || undefined);
 }
+
+export function confirmPayment(paymentCode: string): Promise<{ message: string; payment_code: string; status: string }> {
+  return api.patch<{ message: string; payment_code: string; status: string }>(
+    `/api/payments/${encodeURIComponent(paymentCode)}/confirm`,
+    {},
+    localStorage.getItem('accessToken') || undefined,
+  );
+}

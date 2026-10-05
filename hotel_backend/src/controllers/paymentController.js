@@ -1,4 +1,4 @@
-const { makePayment, getPayments, getCustomerPayments } = require('../services/paymentService');
+const { makePayment, getPayments, getCustomerPayments, confirmPayment } = require('../services/paymentService');
 
 async function createPayment(req, res) {
   try {
@@ -88,4 +88,27 @@ async function getCustomerPaymentList(req, res) {
   }
 }
 
-module.exports = { createPayment, getPaymentList, getCustomerPaymentList };
+async function confirmPaymentRequest(req, res) {
+  try {
+    const paymentCode = String(req.params?.paymentCode || '').trim();
+    if (!paymentCode) {
+      return res.status(400).json({ message: 'Thiếu mã thanh toán cần xác nhận.' });
+    }
+
+    const result = await confirmPayment(paymentCode);
+    return res.json({
+      message: 'Xác nhận thanh toán thành công.',
+      payment_code: result.payment_code,
+      status: result.status,
+    });
+  } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({ message: error.message });
+    }
+
+    console.error('Confirm payment error:', error);
+    return res.status(500).json({ message: 'Không thể xác nhận thanh toán.' });
+  }
+}
+
+module.exports = { createPayment, getPaymentList, getCustomerPaymentList, confirmPaymentRequest };

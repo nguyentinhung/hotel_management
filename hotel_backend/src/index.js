@@ -13,6 +13,7 @@ const {
   createPayment,
   getPaymentList,
   getCustomerPaymentList,
+  confirmPaymentRequest,
 } = require('./controllers/paymentController');
 
 const app = express();
@@ -77,6 +78,7 @@ app.get('/api/reviews', getReviews);
 app.post('/api/payments', requireCustomer, createPayment);
 app.get('/api/payments', requirePaymentStaff, getPaymentList);
 app.get('/api/payments/my', requireCustomer, getCustomerPaymentList);
+app.patch('/api/payments/:paymentCode/confirm', requirePaymentStaff, confirmPaymentRequest);
 
 // Upload ảnh chính cho loại phòng
 app.post('/api/room-types/:roomTypeId/image', upload.single('image'), async (req, res) => {

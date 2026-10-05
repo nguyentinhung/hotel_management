@@ -1422,6 +1422,12 @@ a:focus-visible {
   border-bottom: 1px solid rgba(15, 61, 62, 0.1);
 }
 
+.payment-detail-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .payment-detail-header .eyebrow {
   margin: 0 0 6px;
 }
