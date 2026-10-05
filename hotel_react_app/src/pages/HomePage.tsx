@@ -89,6 +89,7 @@ export default function HomePage() {
   const [isRoomDetailsOpen, setIsRoomDetailsOpen] = useState(false);
   const [isRoomDetailsLoading, setIsRoomDetailsLoading] = useState(false);
   const [roomDetailsError, setRoomDetailsError] = useState('');
+  const [selectedService, setSelectedService] = useState<ServiceItem | null>(null);
 
   const openRoomDetails = async (roomTypeId: number) => {
     setIsRoomDetailsOpen(true);
@@ -627,15 +628,45 @@ export default function HomePage() {
           <div className="service-list">
             {services.map((service) => (
               <div key={service.id} className="service-item">
-                <div>
-                  <h3>{service.name}</h3>
-                  <p>{service.description}</p>
-                </div>
+                <button
+                  className="service-item-details-button"
+                  type="button"
+                  onClick={() => setSelectedService(service)}
+                  aria-label={`Xem chi tiết dịch vụ ${service.name}`}
+                >
+                  <div>
+                    <h3>{service.name}</h3>
+                    <p>{service.description}</p>
+                  </div>
+                  <span className="service-item-details-hint">Xem chi tiết <span aria-hidden="true">→</span></span>
+                </button>
                 <div className="service-price">{formatCurrency(service.price)} / {service.unit}</div>
               </div>
             ))}
           </div>
         </section>
+
+        {selectedService && (
+          <div className="room-type-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedService(null); }}>
+            <section className="room-type-modal room-type-details-modal service-public-details" role="dialog" aria-modal="true" aria-labelledby="public-service-details-title">
+              <div className="room-type-modal-heading">
+                <div>
+                  <span className="eyebrow">Dịch vụ khách sạn</span>
+                  <h3 id="public-service-details-title">{selectedService.name}</h3>
+                  <p>Thông tin dịch vụ dành cho khách lưu trú.</p>
+                </div>
+                <button className="room-type-close" type="button" aria-label="Đóng chi tiết dịch vụ" onClick={() => setSelectedService(null)}>×</button>
+              </div>
+              <div className="service-public-details-content">
+                <p>{selectedService.description || 'Dịch vụ chưa có mô tả.'}</p>
+                <div className="service-detail-facts">
+                  <div><span>Giá dịch vụ</span><strong>{formatCurrency(selectedService.price)}</strong></div>
+                  <div><span>Đơn vị tính</span><strong>{selectedService.unit}</strong></div>
+                </div>
+              </div>
+            </section>
+          </div>
+        )}
 
         <section id="reviews" className="container section-block">
           <div className="section-heading review-layout">
