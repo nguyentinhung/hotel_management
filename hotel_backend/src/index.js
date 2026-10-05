@@ -9,8 +9,14 @@ const sql = require('mssql');
 const { getPool, ensureAuthTables } = require('./config/db');
 // Seed data đã được tắt để dùng dữ liệu mẫu bạn insert trực tiếp trong SQL Server.
 const { getHomeData, getRoomTypes, getPromotions, getServices, getReviews } = require('./controllers/homeController');
-const { register, login, logout, verifyEmail } = require('./controllers/authController');
-
+const {
+  register,
+  login,
+  logout,
+  verifyEmail,
+  forgotPassword,
+  resetPassword
+} = require('./controllers/authController');
 const app = express();
 const PORT = 5000;
 const uploadsDir = path.join(__dirname, '../uploads');
@@ -57,6 +63,11 @@ app.post('/api/auth/logout', logout);
 // Xác thực email sau khi tài khoản mới được tạo
 app.get('/api/auth/verify-email', verifyEmail);
 
+// Quên mật khẩu
+app.post('/api/auth/forgot-password', forgotPassword);
+
+// Đặt lại mật khẩu bằng OTP
+app.post('/api/auth/reset-password', resetPassword);
 // --- Frontend home data APIs ---
 // Lấy dữ liệu tổng hợp cho trang chủ
 app.get('/api/home', getHomeData);

@@ -322,4 +322,243 @@ module.exports = {
   login,
   logout,
   verifyEmail,
+  forgotPassword,
+  resetPassword,
 };
+async function forgotPassword(req, res) {
+  try {
+    const email = normalizeEmail(req.body?.email);
+
+    if (!isValidEmail(email)) {
+      return res.status(400).json({
+        message: 'Email không hợp lệ.',
+      });
+    }
+
+    const pool = await getPool();
+
+    // Chỉ cho phép tài khoản ACTIVE
+    const userResult = await pool.request()
+      .input('email', sql.VarChar(150), email)
+      .query(`
+        SELECT TOP 1
+          id,
+          email,
+          full_name,
+          status
+        FROM users
+        WHERE email = @email
+          AND status = 'ACTIVE';
+      `);
+
+    // Không tiết lộ email có tồn tại hay không
+    if (!userResult.recordset.length) {
+      return res.json({
+        message: 'Nếu email tồn tại, mã OTP đã được gửi.',
+      });
+    }
+
+    const user = userResult.recordset[0];
+
+    // Vô hiệu hóa OTP cũ
+    await pool.request()
+      .input('userId', sql.BigInt, user.id)
+      .query(`
+        UPDATE password_resets
+        SET is_used = 1
+        WHERE user_id = @userId
+          AND is_used = 0;
+      `);
+
+    // Tạo OTP 6 số
+    const otpCode = String(
+      crypto.randomInt(100000, 1000000)
+    );
+
+    // Tạo password reset record
+    await pool.request()
+      .input('userId', sql.BigInt, user.id)
+      .input('otpCode', sql.VarChar(10), otpCode)
+      .query(`
+        INSERT INTO password_resets
+        (
+          user_id,
+          otp_code,
+          token,
+          expires_at,
+          is_used,
+          created_at
+        )
+        VALUES
+        (
+          @userId,
+          @otpCode,
+          NULL,
+          DATEADD(MINUTE, 10, SYSDATETIME()),
+          0,
+          SYSDATETIME()
+        );
+      `);
+
+    // Gửi OTP
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST || 'smtp.gmail.com',
+      port: Number(process.env.SMTP_PORT || 587),
+      secure: false,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    });
+
+    await transporter.sendMail({
+      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      to: user.email,
+      subject: 'Mã OTP đặt lại mật khẩu',
+      html: `
+        <h2>Đặt lại mật khẩu</h2>
+
+        <p>Xin chào ${user.full_name},</p>
+
+        <p>Mã OTP để đặt lại mật khẩu của bạn là:</p>
+
+        <h1 style="letter-spacing: 5px;">
+          ${otpCode}
+        </h1>
+
+        <p>Mã OTP có hiệu lực trong <b>10 phút</b>.</p>
+
+        <p>Nếu bạn không yêu cầu đặt lại mật khẩu,
+        vui lòng bỏ qua email này.</p>
+      `,
+    });
+
+    console.log(`Password reset OTP sent to: ${user.email}`);
+
+    return res.json({
+      message: 'Nếu email tồn tại, mã OTP đã được gửi.',
+    });
+
+  } catch (error) {
+    console.error('Forgot password error:', error);
+
+    return res.status(500).json({
+      message: 'Không thể gửi mã OTP.',
+      error: error.message,
+    });
+  }
+}
+async function resetPassword(req, res) {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    const otp = String(req.body?.otp || '').trim();
+    const newPassword = String(req.body?.newPassword || '');
+
+    if (!isValidEmail(email)) {
+      return res.status(400).json({
+        message: 'Email không hợp lệ.',
+      });
+    }
+
+    if (!/^\d{6}$/.test(otp)) {
+      return res.status(400).json({
+        message: 'OTP phải gồm 6 chữ số.',
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        message: 'Mật khẩu phải có ít nhất 6 ký tự.',
+      });
+    }
+
+    const pool = await getPool();
+
+    // Tìm user
+    const userResult = await pool.request()
+      .input('email', sql.VarChar(150), email)
+      .query(`
+        SELECT TOP 1 id
+        FROM users
+        WHERE email = @email
+          AND status = 'ACTIVE';
+      `);
+
+    if (!userResult.recordset.length) {
+      return res.status(400).json({
+        message: 'OTP hoặc email không hợp lệ.',
+      });
+    }
+
+    const userId = userResult.recordset[0].id;
+
+    // Kiểm tra OTP
+    const otpResult = await pool.request()
+      .input('userId', sql.BigInt, userId)
+      .input('otp', sql.VarChar(10), otp)
+      .query(`
+        SELECT TOP 1
+          id,
+          expires_at,
+          is_used
+        FROM password_resets
+        WHERE user_id = @userId
+          AND otp_code = @otp
+          AND is_used = 0
+          AND expires_at > SYSDATETIME()
+        ORDER BY created_at DESC;
+      `);
+
+    if (!otpResult.recordset.length) {
+      return res.status(400).json({
+        message: 'OTP không hợp lệ hoặc đã hết hạn.',
+      });
+    }
+
+    const resetRecord = otpResult.recordset[0];
+
+    // Hash password mới
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+
+    // Đổi password
+    await pool.request()
+      .input('userId', sql.BigInt, userId)
+      .input('passwordHash', sql.VarChar(255), passwordHash)
+      .query(`
+        UPDATE users
+        SET password_hash = @passwordHash
+        WHERE id = @userId;
+      `);
+
+    // Đánh dấu OTP đã sử dụng
+    await pool.request()
+      .input('resetId', sql.BigInt, resetRecord.id)
+      .query(`
+        UPDATE password_resets
+        SET is_used = 1
+        WHERE id = @resetId;
+      `);
+
+    // Vô hiệu hóa các OTP cũ còn lại
+    await pool.request()
+      .input('userId', sql.BigInt, userId)
+      .query(`
+        UPDATE password_resets
+        SET is_used = 1
+        WHERE user_id = @userId
+          AND is_used = 0;
+      `);
+
+    return res.json({
+      message: 'Đặt lại mật khẩu thành công.',
+    });
+
+  } catch (error) {
+    console.error('Reset password error:', error);
+
+    return res.status(500).json({
+      message: 'Đặt lại mật khẩu thất bại.',
+      error: error.message,
+    });
+  }
+}
