@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { getPaymentList } from '../services/paymentService';
+import { getCustomerPaymentList, getPaymentList } from '../services/paymentService';
 import type { PaymentListItem } from '../services/paymentService';
 
 const PAGE_SIZE = 5;
@@ -41,7 +41,7 @@ const statusLabels: Record<PaymentListItem['status'], string> = {
   CANCELLED: 'Cancelled',
 };
 
-export default function PaymentList() {
+export default function PaymentList({ customerOnly = false }: { customerOnly?: boolean }) {
   const [payments, setPayments] = useState<PaymentListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -53,14 +53,14 @@ export default function PaymentList() {
     setError('');
 
     try {
-      setPayments(await getPaymentList());
+      setPayments(await (customerOnly ? getCustomerPaymentList() : getPaymentList()));
       setCurrentPage(1);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Không thể tải danh sách thanh toán.');
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [customerOnly]);
 
   useEffect(() => {
     void loadPayments();
@@ -116,7 +116,7 @@ export default function PaymentList() {
           <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.8" />
           <path d="M3 9h18M7 15h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
         </svg>
-        <h3>Danh sách thanh toán</h3>
+        <h3>{customerOnly ? 'Lịch sử thanh toán' : 'Danh sách thanh toán'}</h3>
         <span>({payments.length} giao dịch)</span>
       </div>
       <div className="table-wrap">

@@ -9,7 +9,11 @@ const { requireCustomer, requirePaymentStaff } = require('./middleware/customerA
 // Seed data đã được tắt để dùng dữ liệu mẫu bạn insert trực tiếp trong SQL Server.
 const { getHomeData, getRoomTypes, getPromotions, getServices, getReviews } = require('./controllers/homeController');
 const { register, login, logout, verifyEmail } = require('./controllers/authController');
-const { createPayment, getPaymentList } = require('./controllers/paymentController');
+const {
+  createPayment,
+  getPaymentList,
+  getCustomerPaymentList,
+} = require('./controllers/paymentController');
 
 const app = express();
 const PORT = 5000;
@@ -72,6 +76,7 @@ app.get('/api/reviews', getReviews);
 // Tạo yêu cầu thanh toán FINAL bằng tiền mặt; xác nhận do luồng khác đảm nhiệm.
 app.post('/api/payments', requireCustomer, createPayment);
 app.get('/api/payments', requirePaymentStaff, getPaymentList);
+app.get('/api/payments/my', requireCustomer, getCustomerPaymentList);
 
 // Upload ảnh chính cho loại phòng
 app.post('/api/room-types/:roomTypeId/image', upload.single('image'), async (req, res) => {

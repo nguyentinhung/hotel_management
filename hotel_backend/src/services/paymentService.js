@@ -1,5 +1,9 @@
 const crypto = require('crypto');
-const { createFinalCashPayment, getPaymentList } = require('../dao/paymentDao');
+const {
+  createFinalCashPayment,
+  getPaymentList,
+  getCustomerPaymentList,
+} = require('../dao/paymentDao');
 
 async function makePayment({ customerId, bookingCode, paymentType, method }) {
   const normalizedCode = String(bookingCode || '').trim().toUpperCase();
@@ -23,4 +27,8 @@ async function getPayments() {
   return getPaymentList();
 }
 
-module.exports = { makePayment, getPayments };
+async function getCustomerPayments(customerId) {
+  return getCustomerPaymentList(customerId);
+}
+
+module.exports = { makePayment, getPayments, getCustomerPayments };

@@ -80,3 +80,7 @@ export function createFinalCashPayment(bookingCode: string): Promise<CreatePayme
 export function getPaymentList(): Promise<PaymentListItem[]> {
   return api.get<PaymentListItem[]>('/api/payments', localStorage.getItem('accessToken') || undefined);
 }
+
+export function getCustomerPaymentList(): Promise<PaymentListItem[]> {
+  return api.get<PaymentListItem[]>('/api/payments/my', localStorage.getItem('accessToken') || undefined);
+}

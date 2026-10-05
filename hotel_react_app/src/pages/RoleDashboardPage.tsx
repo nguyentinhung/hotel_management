@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
 import type { Role } from '../types';
 import PaymentList from '../components/PaymentList';
 
@@ -170,14 +169,12 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
 
           <div className="module-content">
             <p>{activeItem.description}</p>
-            {activeItem.label === 'Thanh toán' && currentRole !== 'CUSTOMER' && currentRole !== 'HOUSEKEEPER' ? (
-              <PaymentList />
-            ) : currentRole === 'CUSTOMER' && activeItem.label === 'Thanh toán' ? (
-              <div className="empty-state-box">
-                <strong>Thanh toán booking</strong>
-                <span>Gửi yêu cầu thanh toán phần còn lại của hóa đơn bằng tiền mặt tại quầy lễ tân.</span>
-                <Link className="btn btn-primary payment-entry-link" to="/make-payment">Tiếp tục thanh toán</Link>
-              </div>
+            {activeItem.label === 'Thanh toán' && currentRole !== 'HOUSEKEEPER' ? (
+              currentRole === 'CUSTOMER' ? (
+                <PaymentList customerOnly />
+              ) : (
+                <PaymentList />
+              )
             ) : (
               <div className="empty-state-box">
                 <strong>Chưa có dữ liệu</strong>
