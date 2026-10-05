@@ -1,9 +1,10 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import HomePage from './pages/HomePage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import CustomerBookingPage from './pages/CustomerBookingPage';
 import RoleDashboardPage from './pages/RoleDashboardPage';
+import VerifyEmailPage from './pages/VerifyEmailPage';
 
 export default function App() {
   return (
@@ -13,7 +14,7 @@ export default function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/booking" element={<CustomerBookingPage />} />
-        <Route path="/verify-email" element={<Navigate to="/login" replace />} />
+        <Route path="/verify-email" element={<VerifyEmailPage />} />
         <Route path="/admin" element={<RoleDashboardPage role="ADMIN" />} />
         <Route path="/reception" element={<RoleDashboardPage role="RECEPTIONIST" />} />
         <Route path="/housekeeping" element={<RoleDashboardPage role="HOUSEKEEPER" />} />
