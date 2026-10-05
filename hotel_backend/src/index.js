@@ -1,10 +1,15 @@
-require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
+const envPath = path.resolve(__dirname, '../.env');
+const exampleEnvPath = path.resolve(__dirname, '../.env.example');
+require('dotenv').config({
+  path: fs.existsSync(envPath) ? envPath : exampleEnvPath,
+  override: true,
+});
 
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
-const fs = require('fs');
-const path = require('path');
 const sql = require('mssql');
 const jwt = require('jsonwebtoken');
 const { getPool, ensureAuthTables } = require('./config/db');
