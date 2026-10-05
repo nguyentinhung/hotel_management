@@ -40,6 +40,7 @@ const tdStyle: React.CSSProperties = {
 export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps) {
     const [services, setServices] = useState<Service[]>([]);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState('');
     const [view, setView] = useState<'list' | 'create' | 'details' | 'edit'>('list');
     const [selectedService, setSelectedService] = useState<Service | null>(null);
 
@@ -48,12 +49,14 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
 
     const loadServices = async () => {
         setLoading(true);
+        setLoadError('');
         try {
             const data = await getServices();
             setServices(data);
         } catch (error) {
             console.error(error);
-            alert('Không thể tải danh sách dịch vụ.');
+            setServices([]);
+            setLoadError(error instanceof Error ? error.message : 'Không thể tải danh sách dịch vụ.');
         } finally {
             setLoading(false);
         }
@@ -234,7 +237,14 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
                 )}
             </div>
 
-            {services.length === 0 ? (
+            {loadError ? (
+                <div className="error-text" role="alert">
+                    <p>{loadError}</p>
+                    <button className="btn btn-outline btn-sm" type="button" onClick={() => void loadServices()}>
+                        Tải lại danh sách
+                    </button>
+                </div>
+            ) : services.length === 0 ? (
                 <p>Không có dịch vụ nào.</p>
             ) : (
                 <div style={cardStyle}>

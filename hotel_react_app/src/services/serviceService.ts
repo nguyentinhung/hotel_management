@@ -13,7 +13,11 @@ function getAuthHeaders(includeJson = false): HeadersInit {
 export async function getServices(): Promise<Service[]> {
     const response = await fetch(API_BASE_URL, { headers: getAuthHeaders() });
     if (!response.ok) {
-        throw new Error('Cannot load services.');
+        const errorData = await response.json().catch(() => ({}));
+        if (response.status === 401 || response.status === 403) {
+            throw new Error('Phiên đăng nhập đã hết hạn hoặc không có quyền Admin. Hãy đăng xuất rồi đăng nhập lại.');
+        }
+        throw new Error(errorData.message || `Không tải được dịch vụ (HTTP ${response.status}).`);
     }
     return response.json();
 }
