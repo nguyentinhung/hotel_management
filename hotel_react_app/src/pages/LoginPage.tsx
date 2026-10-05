@@ -90,6 +90,9 @@ export default function LoginPage() {
             <p className="auth-link">
               Chưa có tài khoản? <Link to="/register">Đăng ký</Link>
             </p>
+            <p className="auth-link">
+              <Link to="/forgot-password">Quên mật khẩu?</Link>
+            </p>
           </div>
         </div>
       </div>

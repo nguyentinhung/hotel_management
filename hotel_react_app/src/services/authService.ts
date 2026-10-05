@@ -6,8 +6,17 @@ export interface LoginPayload {
   password: string;
 }
 
-export const login = async (email: string, password: string): Promise<AuthResponse> => {
-  return api.post<AuthResponse>('/api/auth/login', { email, password });
+export const login = async (
+  email: string,
+  password: string
+): Promise<AuthResponse> => {
+  return api.post<AuthResponse>(
+    '/api/auth/login',
+    {
+      email,
+      password,
+    }
+  );
 };
 
 export const register = async (
@@ -16,18 +25,65 @@ export const register = async (
   phoneNumber: string,
   password: string,
 ): Promise<{ user: User; message: string }> => {
-  return api.post<{ user: User; message: string }>('/api/auth/register', {
-    full_name: fullName,
-    email,
-    phone_number: phoneNumber,
-    password,
-  });
+  return api.post<{ user: User; message: string }>(
+    '/api/auth/register',
+    {
+      full_name: fullName,
+      email,
+      phone_number: phoneNumber,
+      password,
+    }
+  );
 };
 
-export const logout = async (refreshToken?: string): Promise<{ message: string }> => {
-  return api.post<{ message: string }>('/api/auth/logout', { refreshToken }, localStorage.getItem('accessToken') || undefined);
+export const logout = async (
+  refreshToken?: string
+): Promise<{ message: string }> => {
+  return api.post<{ message: string }>(
+    '/api/auth/logout',
+    { refreshToken },
+    localStorage.getItem('accessToken') || undefined
+  );
 };
 
-export const verifyEmail = async (token: string): Promise<{ message: string }> => {
-  return api.get<{ message: string }>(`/api/auth/verify-email?token=${encodeURIComponent(token)}`);
+export const verifyEmail = async (
+  token: string
+): Promise<{ message: string }> => {
+  return api.get<{ message: string }>(
+    `/api/auth/verify-email?token=${encodeURIComponent(token)}`
+  );
+};
+
+// ================================
+// QUÊN MẬT KHẨU
+// ================================
+
+export const forgotPassword = async (
+  email: string
+): Promise<{ message: string }> => {
+  return api.post<{ message: string }>(
+    '/api/auth/forgot-password',
+    {
+      email,
+    }
+  );
+};
+
+// ================================
+// ĐẶT LẠI MẬT KHẨU
+// ================================
+
+export const resetPassword = async (
+  email: string,
+  otp: string,
+  newPassword: string
+): Promise<{ message: string }> => {
+  return api.post<{ message: string }>(
+    '/api/auth/reset-password',
+    {
+      email,
+      otp,
+      newPassword,
+    }
+  );
 };
