@@ -23,6 +23,7 @@ const serviceController = require('./controllers/serviceController');
 const app = express();
 const PORT = 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
+const uploadsDir = path.join(__dirname, '../uploads');
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -57,6 +58,8 @@ function requireAdmin(req, res, next) {
 
 app.use(cors());
 app.use(express.json());
+// Giữ phục vụ các ảnh cũ trong lúc chuyển chúng từ ổ đĩa vào SQL Server.
+app.use('/uploads', express.static(uploadsDir));
 
 // Kiểm tra trạng thái backend đang chạy
 app.get('/api/health', (req, res) => {
@@ -363,6 +366,13 @@ app.get('/api/room-types/:roomTypeId/image', async (req, res) => {
     }
 
     if (image.image_url && !image.image_url.includes('/api/room-types/')) {
+      if (image.image_url.includes('/uploads/')) {
+        const legacyFileName = path.basename(new URL(image.image_url).pathname);
+        const legacyFilePath = path.resolve(uploadsDir, legacyFileName);
+        if (legacyFilePath.startsWith(`${path.resolve(uploadsDir)}${path.sep}`) && fs.existsSync(legacyFilePath)) {
+          return res.redirect(`/uploads/${encodeURIComponent(legacyFileName)}`);
+        }
+      }
       return res.redirect(image.image_url);
     }
     return res.status(404).json({ message: 'Không tìm thấy dữ liệu ảnh.' });
@@ -439,6 +449,37 @@ async function bootstrap() {
     IF COL_LENGTH('dbo.room_type_images', 'mime_type') IS NULL
       ALTER TABLE dbo.room_type_images ADD mime_type VARCHAR(100) NULL;
   `);
+  const legacyImages = await pool.request().query(`
+    SELECT id, room_type_id, image_url
+    FROM dbo.room_type_images
+    WHERE image_data IS NULL AND image_url LIKE '%/uploads/%';
+  `);
+  for (const image of legacyImages.recordset) {
+    try {
+      const fileName = path.basename(new URL(image.image_url).pathname);
+      const filePath = path.resolve(uploadsDir, fileName);
+      if (!filePath.startsWith(`${path.resolve(uploadsDir)}${path.sep}`) || !fs.existsSync(filePath)) continue;
+
+      const extension = path.extname(fileName).toLowerCase();
+      const mimeType = extension === '.png' ? 'image/png' : extension === '.webp' ? 'image/webp' : 'image/jpeg';
+      await pool.request()
+        .input('imageId', sql.Int, image.id)
+        .input('imageUrl', sql.VarChar(500), `http://localhost:${PORT}/api/room-types/${image.room_type_id}/image`)
+        .input('imageData', sql.VarBinary(sql.MAX), fs.readFileSync(filePath))
+        .input('mimeType', sql.VarChar(100), mimeType)
+        .query(`
+          UPDATE dbo.room_type_images
+          SET image_url = @imageUrl, image_data = @imageData, mime_type = @mimeType
+          WHERE id = @imageId AND image_data IS NULL;
+        `);
+    } catch (error) {
+      console.error(`Could not migrate legacy room image row ${image.id}:`, error.message);
+    }
+  }
+  if (legacyImages.recordset.length) {
+    console.log(`Migrated ${legacyImages.recordset.length} legacy room image row(s) to SQL Server where source files were available.`);
+  }
+
   let isExpirySweepRunning = false;
   const sweepExpiredBookings = async () => {
     if (isExpirySweepRunning) return;
