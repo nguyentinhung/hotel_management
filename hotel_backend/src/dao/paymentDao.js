@@ -107,7 +107,73 @@ async function getPaymentList() {
       p.payment_code,
       b.booking_code,
       b.guest_full_name,
+      b.guest_phone,
+      b.guest_email,
+      b.check_in_date,
+      b.check_out_date,
+      b.adults,
+      b.children,
+      b.status AS booking_status,
+      b.total_amount AS booking_total_amount,
+      b.deposit_amount AS booking_deposit_amount,
+      u.full_name AS customer_full_name,
+      u.email AS customer_email,
+      u.phone AS customer_phone,
+      JSON_QUERY((
+        SELECT
+          rt.name AS room_type_name,
+          r.room_number,
+          r.floor,
+          r.status AS room_status,
+          br.price_per_night,
+          rt.max_adults,
+          rt.max_children,
+          (
+            SELECT TOP (1) rti.image_url
+            FROM dbo.room_type_images rti
+            WHERE rti.room_type_id = rt.id AND rti.is_primary = 1
+            ORDER BY rti.id
+          ) AS image_url
+        FROM dbo.booking_rooms br
+        JOIN dbo.room_types rt ON rt.id = br.room_type_id
+        LEFT JOIN dbo.rooms r ON r.id = br.room_id
+        WHERE br.booking_id = b.id
+        ORDER BY br.id
+        FOR JSON PATH
+      )) AS booking_rooms,
+      JSON_QUERY((
+        SELECT
+          bg.full_name,
+          bg.phone,
+          bg.id_card_number,
+          bg.id_card_verified
+        FROM dbo.booking_guests bg
+        WHERE bg.booking_id = b.id
+        ORDER BY bg.id
+        FOR JSON PATH
+      )) AS booking_guests,
       i.invoice_number,
+      i.room_amount AS invoice_room_amount,
+      i.service_amount AS invoice_service_amount,
+      i.discount_amount AS invoice_discount_amount,
+      i.tax_amount AS invoice_tax_amount,
+      i.total_amount AS invoice_total_amount,
+      i.deposit_paid AS invoice_deposit_paid,
+      i.amount_due AS invoice_amount_due,
+      i.status AS invoice_status,
+      i.issued_at AS invoice_issued_at,
+      JSON_QUERY((
+        SELECT
+          ii.item_type,
+          ii.description,
+          ii.quantity,
+          ii.unit_price,
+          ii.amount
+        FROM dbo.invoice_items ii
+        WHERE ii.invoice_id = i.id
+        ORDER BY ii.id
+        FOR JSON PATH
+      )) AS invoice_items,
       p.payment_type,
       p.method,
       p.amount,
@@ -116,6 +182,7 @@ async function getPaymentList() {
       p.vnpay_transaction_no
     FROM dbo.payments p
     JOIN dbo.bookings b ON b.id = p.booking_id
+    JOIN dbo.users u ON u.id = b.customer_id
     LEFT JOIN dbo.invoices i ON i.id = p.invoice_id
     ORDER BY p.id DESC;
   `);
