@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import ReceptionRoomBooking from '../components/ReceptionRoomBooking';
+import RoomTypesPage from './RoomTypesPage';
 import type { Role } from '../types';
 import { assignRoomToBooking, cancelBooking, finishRoomCleaning, getActiveBookings, getAssignableRooms, getBookingHistory, getRoomStatuses, updateBooking, type RoomStatusRecord } from '../services/roomService';
 import type { RecentBooking } from '../types';
@@ -43,6 +44,7 @@ const dashboardConfig: Record<
       { label: 'Booking Management', description: 'Kiểm tra phòng trống (Check Room Availability) và tạo booking trực tiếp tại quầy.' },
       { label: 'Assign Room to Booking', description: 'Theo dõi trạng thái phòng và gán phòng cụ thể cho booking đã xác nhận.' },
       { label: 'Booking', description: 'Xem toàn bộ booking, kể cả booking đang hoạt động, đã checkout hoặc đã hủy.' },
+      { label: 'Loại phòng', description: 'Tra cứu giá, sức chứa và tiện nghi của từng loại phòng.' },
     ],
   },
   HOUSEKEEPER: {
@@ -442,7 +444,11 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
               Khi tài khoản Lễ tân chọn tab "Đặt phòng tại quầy", "Đặt phòng" hoặc "Tổng quan",
               hệ thống sẽ hiển thị giao diện tra cứu phòng trống và đặt phòng trực tiếp.
               ========================================================================= */}
-          {currentRole === 'RECEPTIONIST' && activeItem.label === 'Booking Management' ? (
+          {(currentRole === 'ADMIN' || currentRole === 'RECEPTIONIST') && activeItem.label === 'Loại phòng' ? (
+            <div className="module-content">
+              <RoomTypesPage readOnly={currentRole === 'RECEPTIONIST'} />
+            </div>
+          ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Booking Management' ? (
             <ReceptionRoomBooking />
           ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Assign Room to Booking' ? (
             <ReceptionRoomManagement />

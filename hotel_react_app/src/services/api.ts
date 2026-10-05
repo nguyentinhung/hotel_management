@@ -34,7 +34,7 @@ export const api = {
 
       if (!message && /<!doctype html|<html/i.test(errorText)) {
         message = response.status === 404
-          ? 'Backend chưa nhận endpoint đặt phòng mới. Hãy khởi động lại hotel_backend rồi thử lại.'
+          ? 'Backend không tìm thấy API này. Hãy kiểm tra hotel_backend đã chạy phiên bản mới nhất chưa.'
           : `Backend trả về trang HTML thay vì JSON (HTTP ${response.status}).`;
       }
 
@@ -42,6 +42,52 @@ export const api = {
     }
 
     return response.json();
+  },
+
+  postWithAuth: async <T>(url: string, body: unknown, token?: string): Promise<T> => {
+    const response = await fetch(`${API_BASE_URL}${url}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.message || `Request failed: ${response.status}`);
+    }
+    return payload as T;
+  },
+
+  putWithAuth: async <T>(url: string, body: unknown, token?: string): Promise<T> => {
+    const response = await fetch(`${API_BASE_URL}${url}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+    });
+
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.message || `Request failed: ${response.status}`);
+    }
+    return payload as T;
+  },
+
+  deleteWithAuth: async <T>(url: string, token?: string): Promise<T> => {
+    const response = await fetch(`${API_BASE_URL}${url}`, {
+      method: 'DELETE',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(payload?.message || `Request failed: ${response.status}`);
+    }
+    return payload as T;
   },
 
   patch: async <T>(url: string, body: unknown, token?: string): Promise<T> => {

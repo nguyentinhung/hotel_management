@@ -6,15 +6,17 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const sql = require('mssql');
+const jwt = require('jsonwebtoken');
 const { getPool, ensureAuthTables } = require('./config/db');
 const { cancelExpiredBookings } = require('./dao/bookingDao');
 // Seed data đã được tắt để dùng dữ liệu mẫu bạn insert trực tiếp trong SQL Server.
-const { getHomeData, getRoomTypes, getPromotions, getServices, getReviews } = require('./controllers/homeController');
+const { getHomeData, getRoomTypes, getRoomTypeDetails, getPromotions, getServices, getReviews } = require('./controllers/homeController');
 const { register, login, logout, verifyEmail, forgotPassword, resetPassword } = require('./controllers/authController');
 const { checkAvailability, getAvailableRooms } = require('./controllers/roomController');
 const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, updateBookingHandler, cancelBookingHandler, getActiveBookingsHandler, checkOutBookingHandler, finishRoomCleaningHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
 const app = express();
 const PORT = 5000;
+const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
 const uploadsDir = path.join(__dirname, '../uploads');
 fs.mkdirSync(uploadsDir, { recursive: true });
 
@@ -69,6 +71,218 @@ app.post('/api/auth/reset-password', resetPassword);
 app.get('/api/home', getHomeData);
 // Lấy danh sách loại phòng để render UI
 app.get('/api/room-types', getRoomTypes);
+app.get('/api/room-types/:roomTypeId', getRoomTypeDetails);
+// Chỉ admin được tạo loại phòng (UC-04.1).
+app.post('/api/room-types', async (req, res) => {
+  const authorization = req.headers.authorization || '';
+  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+
+  if (!token) {
+    return res.status(401).json({ message: 'Vui lòng đăng nhập để tiếp tục.' });
+  }
+
+  try {
+    const user = jwt.verify(token, JWT_SECRET);
+    if (user.role_code !== 'ADMIN') {
+      return res.status(403).json({ message: 'Chỉ quản trị viên được thêm loại phòng.' });
+    }
+  } catch {
+    return res.status(401).json({ message: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.' });
+  }
+
+  const { name, description, base_price, max_adults, max_children } = req.body || {};
+  const normalizedName = typeof name === 'string' ? name.trim() : '';
+  const price = Number(base_price);
+  const adults = Number(max_adults);
+  const children = Number(max_children);
+
+  if (!normalizedName || normalizedName.length > 100) {
+    return res.status(400).json({ message: 'Tên loại phòng là bắt buộc và tối đa 100 ký tự.' });
+  }
+  if (!Number.isFinite(price) || price < 0 || !Number.isFinite(adults) || !Number.isInteger(adults) || adults < 1 || adults > 255 || !Number.isFinite(children) || !Number.isInteger(children) || children < 0 || children > 255) {
+    return res.status(400).json({ message: 'Giá phải từ 0 trở lên; sức chứa người lớn phải từ 1 và các sức chứa phải là số nguyên hợp lệ.' });
+  }
+  if (description != null && typeof description !== 'string') {
+    return res.status(400).json({ message: 'Mô tả không hợp lệ.' });
+  }
+
+  try {
+    const pool = await getPool();
+    const existingType = await pool.request()
+      .input('name', sql.NVarChar(100), normalizedName)
+      .query('SELECT TOP (1) id FROM room_types WHERE LOWER(LTRIM(RTRIM(name))) = LOWER(@name);');
+    if (existingType.recordset.length > 0) {
+      return res.status(409).json({ message: 'Tên loại phòng đã tồn tại.' });
+    }
+
+    const result = await pool.request()
+      .input('name', sql.NVarChar(100), normalizedName)
+      .input('description', sql.NVarChar(sql.MAX), description?.trim() || null)
+      .input('base_price', sql.Decimal(12, 2), price)
+      .input('max_adults', sql.TinyInt, adults)
+      .input('max_children', sql.TinyInt, children)
+      .query(`
+        INSERT INTO room_types (name, description, base_price, max_adults, max_children)
+        OUTPUT INSERTED.id, INSERTED.name, INSERTED.description, INSERTED.base_price,
+               INSERTED.max_adults, INSERTED.max_children
+        VALUES (@name, @description, @base_price, @max_adults, @max_children);
+      `);
+
+    return res.status(201).json({
+      message: 'Thêm loại phòng thành công.',
+      roomType: { ...result.recordset[0], base_price: Number(result.recordset[0].base_price) },
+    });
+  } catch (error) {
+    if (error.number === 2601 || error.number === 2627) {
+      return res.status(409).json({ message: 'Tên loại phòng đã tồn tại.' });
+    }
+    console.error('Create room type error:', error);
+    return res.status(500).json({ message: 'Không thể thêm loại phòng.' });
+  }
+});
+// Chỉ admin được cập nhật loại phòng (UC-04.4).
+app.put('/api/room-types/:roomTypeId', async (req, res) => {
+  const authorization = req.headers.authorization || '';
+  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+
+  if (!token) {
+    return res.status(401).json({ message: 'Vui lòng đăng nhập để tiếp tục.' });
+  }
+
+  try {
+    const user = jwt.verify(token, JWT_SECRET);
+    if (user.role_code !== 'ADMIN') {
+      return res.status(403).json({ message: 'Chỉ quản trị viên được cập nhật loại phòng.' });
+    }
+  } catch {
+    return res.status(401).json({ message: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.' });
+  }
+
+  const roomTypeId = Number(req.params.roomTypeId);
+  if (!Number.isInteger(roomTypeId) || roomTypeId < 1) {
+    return res.status(400).json({ message: 'Mã loại phòng không hợp lệ.' });
+  }
+
+  const { name, description, base_price, max_adults, max_children } = req.body || {};
+  const normalizedName = typeof name === 'string' ? name.trim() : '';
+  const price = Number(base_price);
+  const adults = Number(max_adults);
+  const children = Number(max_children);
+
+  if (!normalizedName || normalizedName.length > 100) {
+    return res.status(400).json({ message: 'Tên loại phòng là bắt buộc và tối đa 100 ký tự.' });
+  }
+  if (!Number.isFinite(price) || price < 0 || !Number.isInteger(adults) || adults < 1 || adults > 255 || !Number.isInteger(children) || children < 0 || children > 255) {
+    return res.status(400).json({ message: 'Giá và sức chứa không hợp lệ.' });
+  }
+  if (description != null && typeof description !== 'string') {
+    return res.status(400).json({ message: 'Mô tả không hợp lệ.' });
+  }
+
+  try {
+    const pool = await getPool();
+    const existingType = await pool.request()
+      .input('roomTypeId', sql.Int, roomTypeId)
+      .input('name', sql.NVarChar(100), normalizedName)
+      .query('SELECT TOP (1) id FROM room_types WHERE LOWER(LTRIM(RTRIM(name))) = LOWER(@name) AND id <> @roomTypeId;');
+    if (existingType.recordset.length > 0) {
+      return res.status(409).json({ message: 'Tên loại phòng đã được sử dụng.' });
+    }
+
+    const result = await pool.request()
+      .input('roomTypeId', sql.Int, roomTypeId)
+      .input('name', sql.NVarChar(100), normalizedName)
+      .input('description', sql.NVarChar(sql.MAX), description?.trim() || null)
+      .input('base_price', sql.Decimal(12, 2), price)
+      .input('max_adults', sql.TinyInt, adults)
+      .input('max_children', sql.TinyInt, children)
+      .query(`
+        UPDATE room_types
+        SET name = @name,
+            description = @description,
+            base_price = @base_price,
+            max_adults = @max_adults,
+            max_children = @max_children
+        OUTPUT INSERTED.id, INSERTED.name, INSERTED.description, INSERTED.base_price,
+               INSERTED.max_adults, INSERTED.max_children
+        WHERE id = @roomTypeId;
+      `);
+
+    if (!result.recordset.length) {
+      return res.status(404).json({ message: 'Không tìm thấy loại phòng.' });
+    }
+    return res.json({
+      message: 'Cập nhật loại phòng thành công.',
+      roomType: { ...result.recordset[0], base_price: Number(result.recordset[0].base_price) },
+    });
+  } catch (error) {
+    console.error('Update room type error:', error);
+    return res.status(500).json({ message: 'Không thể cập nhật loại phòng.' });
+  }
+});
+// Chỉ admin được xóa loại phòng; không xóa loại còn phòng hoặc đánh giá liên quan.
+app.delete('/api/room-types/:roomTypeId', async (req, res) => {
+  const authorization = req.headers.authorization || '';
+  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+
+  if (!token) {
+    return res.status(401).json({ message: 'Vui lòng đăng nhập để tiếp tục.' });
+  }
+
+  try {
+    const user = jwt.verify(token, JWT_SECRET);
+    if (user.role_code !== 'ADMIN') {
+      return res.status(403).json({ message: 'Chỉ quản trị viên được xóa loại phòng.' });
+    }
+  } catch {
+    return res.status(401).json({ message: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.' });
+  }
+
+  const roomTypeId = Number(req.params.roomTypeId);
+  if (!Number.isInteger(roomTypeId) || roomTypeId < 1) {
+    return res.status(400).json({ message: 'Mã loại phòng không hợp lệ.' });
+  }
+
+  try {
+    const pool = await getPool();
+    const usage = await pool.request()
+      .input('roomTypeId', sql.Int, roomTypeId)
+      .query(`
+        SELECT
+          (SELECT COUNT(*) FROM rooms WHERE room_type_id = @roomTypeId) AS room_count,
+          (SELECT COUNT(*) FROM reviews WHERE room_type_id = @roomTypeId) AS review_count,
+          (SELECT name FROM room_types WHERE id = @roomTypeId) AS room_type_name;
+      `);
+
+    const roomType = usage.recordset[0];
+    if (!roomType.room_type_name) {
+      return res.status(404).json({ message: 'Không tìm thấy loại phòng.' });
+    }
+    if (Number(roomType.room_count) > 0 || Number(roomType.review_count) > 0) {
+      const reasons = [];
+      if (Number(roomType.room_count) > 0) reasons.push(`${roomType.room_count} phòng vật lý`);
+      if (Number(roomType.review_count) > 0) reasons.push(`${roomType.review_count} đánh giá`);
+      return res.status(409).json({
+        message: `Không thể xóa “${roomType.room_type_name}” vì còn ${reasons.join(' và ')} liên quan.`,
+      });
+    }
+
+    const result = await pool.request()
+      .input('roomTypeId', sql.Int, roomTypeId)
+      .query('DELETE FROM room_types OUTPUT DELETED.id WHERE id = @roomTypeId;');
+
+    if (!result.recordset.length) {
+      return res.status(404).json({ message: 'Không tìm thấy loại phòng.' });
+    }
+    return res.json({ message: `Đã xóa loại phòng “${roomType.room_type_name}”.` });
+  } catch (error) {
+    if (error.number === 547) {
+      return res.status(409).json({ message: 'Không thể xóa loại phòng vì vẫn còn dữ liệu liên quan.' });
+    }
+    console.error('Delete room type error:', error);
+    return res.status(500).json({ message: 'Không thể xóa loại phòng.' });
+  }
+});
 // Lấy danh sách khuyến mãi đang active
 app.get('/api/promotions/active', getPromotions);
 // Lấy danh sách dịch vụ khách sạn
