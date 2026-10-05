@@ -361,7 +361,7 @@ app.get('/api/room-types/:roomTypeId/image', async (req, res) => {
 
     if (image.image_data) {
       res.set('Content-Type', image.mime_type || 'application/octet-stream');
-      res.set('Cache-Control', 'public, max-age=3600');
+      res.set('Cache-Control', 'no-store');
       return res.send(image.image_data);
     }
 
@@ -383,6 +383,7 @@ app.get('/api/room-types/:roomTypeId/image', async (req, res) => {
 });
 
 app.post('/api/room-types/:roomTypeId/image', requireAdmin, upload.single('image'), async (req, res) => {
+  let transaction;
   try {
     const { roomTypeId } = req.params;
     const imageFile = req.file;
@@ -396,16 +397,21 @@ app.post('/api/room-types/:roomTypeId/image', requireAdmin, upload.single('image
     }
 
     const pool = await getPool();
-    const roomType = await pool.request()
+    transaction = new sql.Transaction(pool);
+    await transaction.begin();
+
+    const roomType = await new sql.Request(transaction)
       .input('roomTypeId', sql.Int, parsedRoomTypeId)
-      .query('SELECT id FROM room_types WHERE id = @roomTypeId;');
+      .query('SELECT id FROM room_types WITH (UPDLOCK, HOLDLOCK) WHERE id = @roomTypeId;');
     if (!roomType.recordset.length) {
+      await transaction.rollback();
+      transaction = null;
       return res.status(404).json({ message: 'Không tìm thấy loại phòng.' });
     }
 
     const imageUrl = `${req.protocol}://${req.get('host')}/api/room-types/${parsedRoomTypeId}/image`;
 
-    await pool.request()
+    await new sql.Request(transaction)
       .input('roomTypeId', sql.Int, parsedRoomTypeId)
       .input('imageUrl', sql.VarChar(500), imageUrl)
       .input('imageData', sql.VarBinary(sql.MAX), imageFile.buffer)
@@ -418,6 +424,8 @@ app.post('/api/room-types/:roomTypeId/image', requireAdmin, upload.single('image
         INSERT INTO room_type_images (room_type_id, image_url, image_data, mime_type, is_primary)
         VALUES (@roomTypeId, @imageUrl, @imageData, @mimeType, 1);
       `);
+    await transaction.commit();
+    transaction = null;
 
     return res.status(201).json({
       message: 'Upload ảnh phòng thành công.',
@@ -425,6 +433,11 @@ app.post('/api/room-types/:roomTypeId/image', requireAdmin, upload.single('image
       image_url: imageUrl,
     });
   } catch (error) {
+    if (transaction) {
+      try { await transaction.rollback(); } catch (rollbackError) {
+        console.error('Rollback room image upload failed:', rollbackError);
+      }
+    }
     console.error('Upload room image error:', error);
     return res.status(500).json({
       message: 'Upload ảnh thất bại.',
