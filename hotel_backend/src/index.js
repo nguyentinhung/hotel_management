@@ -20,6 +20,8 @@ const { register, login, logout, verifyEmail, forgotPassword, resetPassword } = 
 const { checkAvailability, getAvailableRooms } = require('./controllers/roomController');
 const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, updateBookingHandler, cancelBookingHandler, getActiveBookingsHandler, checkOutBookingHandler, finishRoomCleaningHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
 const serviceController = require('./controllers/serviceController');
+const { requireCustomer, requirePaymentStaff } = require('./middleware/customerAuth');
+const { createPayment, getPaymentList, getCustomerPaymentList, confirmPaymentRequest } = require('./controllers/paymentController');
 const app = express();
 const PORT = 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
@@ -337,6 +339,10 @@ app.get('/api/rooms/statuses', getRoomStatusesHandler);
 app.get('/api/bookings/recent', getRecentBookingsHandler);
 app.get('/api/bookings/history', getBookingHistoryHandler);
 app.get('/api/bookings/active', getActiveBookingsHandler);
+app.post('/api/payments', requireCustomer, createPayment);
+app.get('/api/payments', requirePaymentStaff, getPaymentList);
+app.get('/api/payments/my', requireCustomer, getCustomerPaymentList);
+app.patch('/api/payments/:paymentCode/confirm', requirePaymentStaff, confirmPaymentRequest);
 
 
 // Upload ảnh chính cho loại phòng

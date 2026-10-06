@@ -9,6 +9,7 @@ import VerifyEmailPage from './pages/VerifyEmailPage';
 
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
+import PaymentPage from './pages/PaymentPage';
 
 export default function App() {
   return (
@@ -21,6 +22,7 @@ export default function App() {
         <Route path="/verify-email" element={<VerifyEmailPage />} />
         <Route path="/forgot-password" element={<ForgotPasswordPage />} />
         <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="/make-payment" element={<PaymentPage />} />
         <Route path="/admin" element={<RoleDashboardPage role="ADMIN" />} />
         <Route path="/reception" element={<RoleDashboardPage role="RECEPTIONIST" />} />
         <Route path="/housekeeping" element={<RoleDashboardPage role="HOUSEKEEPER" />} />

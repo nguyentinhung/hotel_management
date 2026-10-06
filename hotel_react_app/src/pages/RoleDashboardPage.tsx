@@ -5,6 +5,7 @@ import ServiceListPage from './ServiceListPage';
 import type { Role } from '../types';
 import { assignRoomToBooking, cancelBooking, finishRoomCleaning, getActiveBookings, getAssignableRooms, getBookingHistory, getRoomStatuses, updateBooking, type RoomStatusRecord } from '../services/roomService';
 import type { RecentBooking } from '../types';
+import PaymentList from '../components/PaymentList';
 
 /**
  * ============================================================================
@@ -35,6 +36,7 @@ const dashboardConfig: Record<
       { label: 'Khuyến mãi', description: 'Tạo và duyệt chương trình ưu đãi.' },
       { label: 'Người dùng', description: 'Quản lý tài khoản, vai trò và trạng thái người dùng.' },
       { label: 'Đặt phòng', description: 'Theo dõi booking, xác nhận và cập nhật lịch đặt.' },
+      { label: 'Thanh toán', description: 'Xem danh sách giao dịch thanh toán.' },
       { label: 'Báo cáo', description: 'Xem báo cáo hoạt động và thống kê hệ thống.' },
     ],
   },
@@ -46,6 +48,7 @@ const dashboardConfig: Record<
       { label: 'Booking Management', description: 'Kiểm tra phòng trống (Check Room Availability) và tạo booking trực tiếp tại quầy.' },
       { label: 'Assign Room to Booking', description: 'Theo dõi trạng thái phòng và gán phòng cụ thể cho booking đã xác nhận.' },
       { label: 'Booking', description: 'Xem toàn bộ booking, kể cả booking đang hoạt động, đã checkout hoặc đã hủy.' },
+      { label: 'Thanh toán', description: 'Theo dõi trạng thái thanh toán và xác nhận giao dịch tại quầy.' },
       { label: 'Loại phòng', description: 'Tra cứu giá, sức chứa và tiện nghi của từng loại phòng.' },
     ],
   },
@@ -67,6 +70,7 @@ const dashboardConfig: Record<
     accent: 'Customer',
     nav: [
       { label: 'Bookings', description: 'Xem, cập nhật hoặc hủy booking của tài khoản.' },
+      { label: 'Thanh toán', description: 'Thanh toán khoản còn lại của booking tại quầy.' },
     ],
   },
 };
@@ -458,6 +462,10 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
             <ReceptionBookingHistory />
           ) : currentRole === 'CUSTOMER' && activeItem.label === 'Bookings' ? (
             <ReceptionBookingHistory customerMode />
+          ) : activeItem.label === 'Thanh toán' && currentRole === 'CUSTOMER' ? (
+            <div className="module-content"><PaymentList customerOnly /></div>
+          ) : activeItem.label === 'Thanh toán' && currentRole !== 'HOUSEKEEPER' ? (
+            <div className="module-content"><PaymentList /></div>
           ) : currentRole === 'HOUSEKEEPER' && ['Phòng cần dọn', 'Phòng đang làm', 'Tổng quan'].includes(activeItem.label) ? (
             <RoomStatusPanel role={currentRole} />
           ) : currentRole === 'ADMIN' && activeItem.label === 'Quản lý phòng' ? (
