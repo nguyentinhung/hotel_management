@@ -1,6 +1,7 @@
 import type { Service, ServiceRequest } from '../types/Service';
 
 const API_BASE_URL = 'http://localhost:5000/api/admin/services';
+const PUBLIC_API_BASE_URL = 'http://localhost:5000/api/services';
 
 function getAuthHeaders(includeJson = false): HeadersInit {
     const token = localStorage.getItem('accessToken');
@@ -10,8 +11,8 @@ function getAuthHeaders(includeJson = false): HeadersInit {
     };
 }
 
-export async function getServices(): Promise<Service[]> {
-    const response = await fetch(API_BASE_URL, { headers: getAuthHeaders() });
+export async function getServices(role = 'ADMIN'): Promise<Service[]> {
+    const response = await fetch(role === 'ADMIN' ? API_BASE_URL : PUBLIC_API_BASE_URL, { headers: getAuthHeaders() });
     if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         if (response.status === 401 || response.status === 403) {
@@ -22,8 +23,8 @@ export async function getServices(): Promise<Service[]> {
     return response.json();
 }
 
-export async function getServiceById(id: number): Promise<Service> {
-    const response = await fetch(`${API_BASE_URL}/${id}`, { headers: getAuthHeaders() });
+export async function getServiceById(id: number, role = 'ADMIN'): Promise<Service> {
+    const response = await fetch(`${role === 'ADMIN' ? API_BASE_URL : PUBLIC_API_BASE_URL}/${id}`, { headers: getAuthHeaders() });
     if (!response.ok) {
         throw new Error('Cannot load service.');
     }

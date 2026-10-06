@@ -32,6 +32,12 @@ function generateBookingCode() {
   return `BK${timestamp}${randomSuffix}`;
 }
 
+function activeReservationPredicate(alias) {
+  return `(${alias}.status = 'CHECKED_IN' OR (${alias}.status = 'CONFIRMED' AND (
+    COALESCE(${alias}.deposit_amount, 0) >= CEILING(COALESCE((SELECT SUM(dbr.price_per_night) FROM dbo.booking_rooms dbr WHERE dbr.booking_id = ${alias}.id), 0) * DATEDIFF(day, ${alias}.check_in_date, ${alias}.check_out_date) * 0.30)
+  )))`;
+}
+
 /**
  * Tạo đơn đặt phòng trực tiếp tại quầy (Walk-in booking)
  * @param {Object} data - Dữ liệu đặt phòng từ quầy lễ tân
@@ -49,6 +55,7 @@ async function createWalkInBooking(data) {
     guestEmail,
     guestIdCard = '',
     depositAmount = 0,
+    serviceSelections = [],
     specialRequest = '',
     checkInNow = false,
   } = data;
@@ -85,7 +92,7 @@ async function createWalkInBooking(data) {
         AND r.status NOT IN ('MAINTENANCE', 'CLEANING')
         AND NOT EXISTS (
           SELECT 1 FROM booking_rooms br JOIN bookings b ON b.id = br.booking_id
-          WHERE br.room_id = r.id AND b.status <> 'CANCELLED'
+          WHERE br.room_id = r.id AND ${activeReservationPredicate('b')}
             AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn
         )
       ORDER BY r.room_number;
@@ -100,7 +107,25 @@ async function createWalkInBooking(data) {
     totalCapacityChildren += Number(roomType.max_children);
   }
   if (Number(adults) > totalCapacityAdults || Number(children) > totalCapacityChildren) throw new Error('Số khách vượt quá sức chứa của các phòng đã chọn.');
-  const totalAmount = totalPerNight * nights;
+  const validServices = [];
+  for (const serviceSelection of serviceSelections) {
+    const serviceId = Number(serviceSelection.serviceId);
+    const quantity = Number(serviceSelection.quantity);
+    if (!Number.isInteger(serviceId) || serviceId < 1 || !Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
+      throw new Error('Service selection is invalid.');
+    }
+    const serviceResult = await pool.request()
+      .input('serviceId', sql.Int, serviceId)
+      .query('SELECT TOP 1 id, price FROM services WHERE id = @serviceId AND is_active = 1 AND is_deleted = 0;');
+    if (!serviceResult.recordset.length) throw new Error('Selected service was not found.');
+    validServices.push({ serviceId, quantity, price: Number(serviceResult.recordset[0].price ?? 0) });
+  }
+  const serviceTotal = validServices.reduce((sum, service) => sum + service.price * service.quantity, 0) * selectedRooms.length;
+  const totalAmount = totalPerNight * nights + serviceTotal;
+  const requiredDepositAmount = Math.ceil(totalPerNight * nights * 0.3);
+  if (checkInNow && finalDeposit < requiredDepositAmount) {
+    throw new Error(`A deposit of at least ${requiredDepositAmount} is required before check-in.`);
+  }
 
   // 3. Tìm hoặc tạo khách hàng (customer) trong bảng users
   // Vì bảng bookings có FK customer_id NOT NULL -> bắt buộc cần user id
@@ -180,7 +205,7 @@ async function createWalkInBooking(data) {
 
   // Thêm một dòng booking_rooms cho mỗi phòng đã chọn.
   for (const selected of selectedRooms) {
-    await pool.request()
+    const roomInsert = await pool.request()
       .input('booking_id', sql.BigInt, newBookingId)
       .input('room_type_id', sql.Int, selected.roomType.id)
       .input('room_id', sql.Int, selected.room?.id ?? null)
@@ -188,8 +213,20 @@ async function createWalkInBooking(data) {
       .input('actual_check_in', sql.DateTime2, checkInNow ? new Date() : null)
       .query(`
         INSERT INTO booking_rooms (booking_id, room_type_id, room_id, price_per_night, actual_check_in)
+        OUTPUT INSERTED.id
         VALUES (@booking_id, @room_type_id, @room_id, @price_per_night, @actual_check_in);
       `);
+    for (const service of validServices) {
+      await pool.request()
+        .input('bookingRoomId', sql.BigInt, roomInsert.recordset[0].id)
+        .input('serviceId', sql.Int, service.serviceId)
+        .input('quantity', sql.Int, service.quantity)
+        .input('unitPrice', sql.Decimal(18, 2), service.price)
+        .query(`
+          INSERT INTO booking_services (booking_room_id, service_id, quantity, unit_price)
+          VALUES (@bookingRoomId, @serviceId, @quantity, @unitPrice);
+        `);
+    }
   }
 
   // 7. Thêm thông tin khách lưu trú vào booking_guests
@@ -246,6 +283,7 @@ async function createCustomerBooking(data) {
   const {
     customerId,
     roomSelections = [{ roomTypeId: data.roomTypeId, quantity: 1 }],
+    serviceSelections = [],
     checkInDate,
     checkOutDate,
     adults = 1,
@@ -289,7 +327,11 @@ async function createCustomerBooking(data) {
              WHERE r.room_type_id = @roomTypeId AND r.status <> 'MAINTENANCE') AS inventory_count,
             (SELECT COUNT(*) FROM booking_rooms br WITH (UPDLOCK, HOLDLOCK)
              JOIN bookings b WITH (UPDLOCK, HOLDLOCK) ON b.id = br.booking_id
-             WHERE br.room_type_id = @roomTypeId AND b.status <> 'CANCELLED'
+             WHERE br.room_type_id = @roomTypeId AND (
+               b.status = 'CHECKED_IN' OR (b.status = 'CONFIRMED' AND (
+                 COALESCE(b.deposit_amount, 0) >= CEILING(COALESCE((SELECT SUM(dbr.price_per_night) FROM dbo.booking_rooms dbr WHERE dbr.booking_id = b.id), 0) * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30)
+               ))
+             )
                AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn) AS reserved_count;
         `);
       const inventory = inventoryResult.recordset[0];
@@ -304,7 +346,29 @@ async function createCustomerBooking(data) {
     if (Number(adults) < 1 || Number(adults) > totalCapacityAdults || Number(children) > totalCapacityChildren) {
       throw new Error('Guest count exceeds selected rooms capacity.');
     }
-    const totalAmount = totalPerNight * nights;
+    const validServices = [];
+    for (const serviceSelection of serviceSelections) {
+      const serviceId = Number(serviceSelection.serviceId);
+      const quantity = Number(serviceSelection.quantity);
+      if (!Number.isInteger(serviceId) || serviceId < 1 || !Number.isInteger(quantity) || quantity < 1 || quantity > 20) {
+        throw new Error('Service selection is invalid.');
+      }
+      const serviceResult = await transaction.request()
+        .input('serviceId', sql.Int, serviceId)
+        .query(`
+          SELECT TOP 1 id, name, price
+          FROM services
+          WHERE id = @serviceId AND is_active = 1 AND is_deleted = 0;
+        `);
+      if (!serviceResult.recordset.length) throw new Error('Selected service was not found.');
+      const service = serviceResult.recordset[0];
+      validServices.push({ serviceId: Number(service.id), quantity, price: Number(service.price ?? 0), name: service.name });
+    }
+
+    const selectedRoomCount = selectedTypes.reduce((count, roomType) => count + roomType.quantity, 0);
+    const serviceTotal = validServices.reduce((sum, service) => sum + service.price * service.quantity, 0) * selectedRoomCount;
+    const totalAmount = totalPerNight * nights + serviceTotal;
+    const requiredDepositAmount = Math.ceil(totalPerNight * nights * 0.3);
     const bookingCode = generateBookingCode();
     const bookingResult = await transaction.request()
       .input('booking_code', sql.VarChar(20), bookingCode)
@@ -327,22 +391,41 @@ async function createCustomerBooking(data) {
         OUTPUT INSERTED.id, INSERTED.booking_code, INSERTED.created_at
         VALUES (
           @booking_code, @customer_id, @guest_full_name, @guest_phone, @guest_email,
-          @check_in_date, @check_out_date, @adults, @children, 'CONFIRMED',
+          @check_in_date, @check_out_date, @adults, @children, 'PENDING_PAYMENT',
           @total_amount, 0, SYSUTCDATETIME(), @special_request
         );
       `);
     const booking = bookingResult.recordset[0];
 
+    const bookingRoomIds = [];
     for (const roomType of selectedTypes) {
       for (let index = 0; index < roomType.quantity; index += 1) {
-        await transaction.request()
+        const roomInsertResult = await transaction.request()
           .input('booking_id', sql.BigInt, booking.id)
           .input('room_type_id', sql.Int, roomType.id)
           .input('price_per_night', sql.Decimal(12, 2), Number(roomType.base_price))
           .query(`
             INSERT INTO booking_rooms (booking_id, room_type_id, room_id, price_per_night)
+            OUTPUT INSERTED.id
             VALUES (@booking_id, @room_type_id, NULL, @price_per_night);
           `);
+        bookingRoomIds.push(Number(roomInsertResult.recordset[0].id));
+      }
+    }
+
+    if (validServices.length > 0) {
+      for (const service of validServices) {
+        for (const bookingRoomId of bookingRoomIds) {
+          await transaction.request()
+            .input('bookingRoomId', sql.BigInt, bookingRoomId)
+            .input('serviceId', sql.Int, service.serviceId)
+            .input('quantity', sql.Int, service.quantity)
+            .input('unitPrice', sql.Decimal(18, 2), service.price)
+            .query(`
+              INSERT INTO booking_services (booking_room_id, service_id, quantity, unit_price)
+              VALUES (@bookingRoomId, @serviceId, @quantity, @unitPrice);
+            `);
+        }
       }
     }
 
@@ -368,8 +451,9 @@ async function createCustomerBooking(data) {
       price_per_night: totalPerNight,
       total_amount: totalAmount,
       deposit_amount: 0,
+      required_deposit_amount: requiredDepositAmount,
       remaining_balance: totalAmount,
-      status: 'CONFIRMED',
+      status: 'PENDING_PAYMENT',
       created_at: booking.created_at,
     };
   } catch (error) {
@@ -388,16 +472,31 @@ async function checkInBooking({ bookingId, idCardNumber }) {
       .input('bookingId', sql.BigInt, Number(bookingId))
       .query(`
         SELECT TOP 1
-          b.id, b.booking_code, b.status, b.check_in_date, b.check_out_date,
+          b.id, b.booking_code, b.status, b.check_in_date, b.check_out_date, b.deposit_amount,
+          deposit_summary.required_deposit_amount, deposit_summary.requires_deposit_payment,
           CASE WHEN DATEADD(hour, 7, SYSUTCDATETIME()) < DATEADD(hour, 18, CONVERT(datetime2, b.check_in_date)) THEN 1 ELSE 0 END AS before_checkin_deadline,
           b.guest_full_name, b.guest_phone, br.room_id
         FROM bookings b WITH (UPDLOCK, HOLDLOCK)
         LEFT JOIN booking_rooms br ON br.booking_id = b.id
+        OUTER APPLY (
+          SELECT
+            CEILING(COALESCE(SUM(br_deposit.price_per_night), 0)
+              * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30) AS required_deposit_amount,
+            CASE WHEN EXISTS (
+              SELECT 1 FROM dbo.payments p
+              WHERE p.booking_id = b.id AND p.payment_type = 'DEPOSIT'
+            ) THEN 1 ELSE 0 END AS requires_deposit_payment
+          FROM dbo.booking_rooms br_deposit
+          WHERE br_deposit.booking_id = b.id
+        ) deposit_summary
         WHERE b.id = @bookingId;
       `);
     if (!bookingResult.recordset.length) throw new Error('Booking was not found.');
     const booking = bookingResult.recordset[0];
     if (booking.status !== 'CONFIRMED') throw new Error('Booking is not waiting for check-in.');
+    if (Number(booking.deposit_amount || 0) < Number(booking.required_deposit_amount || 0)) {
+      throw new Error('Deposit payment is required before check-in.');
+    }
 
     const today = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
     const checkInDate = new Date(booking.check_in_date).toISOString().slice(0, 10);
@@ -483,7 +582,11 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
   const limitClause = Number.isInteger(limit) && limit > 0 ? 'TOP (@limit)' : '';
   if (limitClause) request.input('limit', sql.Int, limit);
   const filters = [];
-  if (activeOnly) filters.push("b.status IN ('CONFIRMED', 'CHECKED_IN')");
+  if (activeOnly) filters.push(`(
+    b.status = 'CHECKED_IN'
+    OR (b.status = 'CONFIRMED' AND COALESCE(b.deposit_amount, 0) >= deposit_summary.required_deposit_amount)
+    OR (b.status = 'CHECKED_OUT' AND b.total_amount > b.deposit_amount + COALESCE(payment_summary.final_paid_amount, 0))
+  )`);
   if (customerId !== null) {
     request.input('customerId', sql.BigInt, Number(customerId));
     filters.push('b.customer_id = @customerId');
@@ -503,6 +606,10 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
         b.status,
         b.total_amount,
         b.deposit_amount,
+        deposit_summary.required_deposit_amount,
+        deposit_summary.requires_deposit_payment,
+        COALESCE(payment_summary.final_paid_amount, 0) AS final_paid_amount,
+        COALESCE(payment_summary.has_pending_final_payment, 0) AS has_pending_final_payment,
         b.created_at,
         b.special_request,
         type_summary.room_type_name,
@@ -523,6 +630,24 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
           GROUP BY rt2.id, rt2.name
         ) type_counts
       ) type_summary
+      OUTER APPLY (
+        SELECT
+          SUM(CASE WHEN p.payment_type = 'FINAL' AND p.status = 'SUCCESS' THEN p.amount ELSE 0 END) AS final_paid_amount,
+          MAX(CASE WHEN p.payment_type = 'FINAL' AND p.status = 'PENDING' THEN 1 ELSE 0 END) AS has_pending_final_payment
+        FROM dbo.payments p
+        WHERE p.booking_id = b.id
+      ) payment_summary
+      OUTER APPLY (
+        SELECT
+          CEILING(COALESCE(SUM(br_deposit.price_per_night), 0)
+            * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30) AS required_deposit_amount,
+          CASE WHEN EXISTS (
+            SELECT 1 FROM dbo.payments p
+            WHERE p.booking_id = b.id AND p.payment_type = 'DEPOSIT'
+          ) THEN 1 ELSE 0 END AS requires_deposit_payment
+        FROM dbo.booking_rooms br_deposit
+        WHERE br_deposit.booking_id = b.id
+      ) deposit_summary
       OUTER APPLY (
         SELECT MIN(r.id) AS assigned_room_id,
           STRING_AGG(CAST(r.room_number AS nvarchar(max)), ', ') AS room_number,
@@ -548,6 +673,11 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
     status: item.status,
     total_amount: Number(item.total_amount ?? 0),
     deposit_amount: Number(item.deposit_amount ?? 0),
+    required_deposit_amount: Number(item.required_deposit_amount ?? 0),
+    requires_deposit_payment: Boolean(item.requires_deposit_payment),
+    final_paid_amount: Number(item.final_paid_amount ?? 0),
+    balance_due: Math.max(0, Number(item.total_amount ?? 0) - Number(item.deposit_amount ?? 0) - Number(item.final_paid_amount ?? 0)),
+    has_pending_final_payment: Boolean(item.has_pending_final_payment),
     created_at: item.created_at,
     special_request: item.special_request,
     room_type_name: item.room_type_name,
@@ -611,7 +741,7 @@ async function updateBooking({ bookingId, customerId, ...changes }) {
           SELECT
             (SELECT COUNT(*) FROM rooms WHERE room_type_id = @roomTypeId AND status <> 'MAINTENANCE') AS inventory_count,
             (SELECT COUNT(*) FROM booking_rooms br JOIN bookings b ON b.id = br.booking_id
-             WHERE br.room_type_id = @roomTypeId AND b.id <> @bookingId AND b.status <> 'CANCELLED'
+             WHERE br.room_type_id = @roomTypeId AND b.id <> @bookingId AND ${activeReservationPredicate('b')}
                AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn) AS reserved_count,
             (SELECT COUNT(*) FROM booking_rooms own_br JOIN rooms own_room ON own_room.id = own_br.room_id
              WHERE own_br.booking_id = @bookingId AND own_br.room_type_id = @roomTypeId) AS assigned_count;
@@ -629,7 +759,7 @@ async function updateBooking({ bookingId, customerId, ...changes }) {
             JOIN booking_rooms other_br ON other_br.room_id = own_br.room_id AND other_br.booking_id <> own_br.booking_id
             JOIN bookings other_b ON other_b.id = other_br.booking_id
             WHERE own_br.booking_id = @bookingId AND own_br.room_type_id = @roomTypeId
-              AND other_b.status <> 'CANCELLED'
+              AND ${activeReservationPredicate('other_b')}
               AND other_b.check_in_date < @checkOut AND other_b.check_out_date > @checkIn;
           `);
         if (assignedRoomConflict.recordset.length) throw new Error('The assigned room is unavailable for those dates.');
@@ -637,7 +767,15 @@ async function updateBooking({ bookingId, customerId, ...changes }) {
     }
 
     const nights = calculateNights(changes.checkInDate, changes.checkOutDate);
-    const totalAmount = Number(current.price_per_night) * nights;
+    const chargesResult = await transaction.request()
+      .input('bookingId', sql.BigInt, Number(bookingId))
+      .query(`
+        SELECT COALESCE(SUM(bs.quantity * bs.unit_price), 0) AS service_total
+        FROM booking_services bs
+        JOIN booking_rooms br ON br.id = bs.booking_room_id
+        WHERE br.booking_id = @bookingId;
+      `);
+    const totalAmount = Number(current.price_per_night) * nights + Number(chargesResult.recordset[0].service_total ?? 0);
     await transaction.request()
       .input('bookingId', sql.BigInt, Number(bookingId))
       .input('checkInDate', sql.Date, changes.checkInDate)
@@ -723,7 +861,7 @@ async function getAssignableRooms(bookingId) {
             SELECT 1 FROM booking_rooms br
             JOIN bookings b ON b.id = br.booking_id
             WHERE br.room_id = r.id AND br.booking_id <> @bookingId
-              AND b.status <> 'CANCELLED'
+              AND ${activeReservationPredicate('b')}
               AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn
           )
         ORDER BY CASE WHEN r.status = 'AVAILABLE' THEN 0 ELSE 1 END, r.room_number;
@@ -769,7 +907,7 @@ async function assignRoomToBooking({ bookingId, roomAssignments }) {
               SELECT 1 FROM booking_rooms br
               JOIN bookings b ON b.id = br.booking_id
               WHERE br.room_id = r.id AND br.booking_id <> @bookingId
-                AND b.status <> 'CANCELLED'
+                AND ${activeReservationPredicate('b')}
                 AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn
             );
         `);

@@ -99,6 +99,20 @@ async function getServices(req, res) {
   }
 }
 
+async function getActiveServiceById(req, res) {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) return res.status(400).json({ message: 'Mã dịch vụ không hợp lệ.' });
+  try {
+    const { getActiveServiceById } = require('../dao/homeDao');
+    const item = await getActiveServiceById(id);
+    if (!item) return res.status(404).json({ message: 'Không tìm thấy dịch vụ đang hoạt động.' });
+    return res.json({ ...item, price: Number(item.price ?? 0), is_active: Boolean(item.is_active) });
+  } catch (error) {
+    console.error('getActiveServiceById error:', error);
+    return res.status(500).json({ message: 'Không thể tải chi tiết dịch vụ.' });
+  }
+}
+
 // Lấy review từ khách hàng để hiện lên homepage hoặc trang chi tiết phòng
 async function getReviews(req, res) {
   try {
@@ -125,5 +139,6 @@ module.exports = {
   getRoomTypeDetails,
   getPromotions,
   getServices,
+  getActiveServiceById,
   getReviews,
 };

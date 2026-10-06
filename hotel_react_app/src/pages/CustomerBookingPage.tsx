@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { createCustomerBooking, checkRoomAvailability } from '../services/roomService';
-import type { CustomerBookingResponse, RoomAvailabilityItem } from '../types';
+import { createFinalPayment } from '../services/paymentService';
+import type { CustomerBookingResponse, RoomAvailabilityItem, ServiceItem } from '../types';
 
 const dateValue = (date: Date) => date.toISOString().slice(0, 10);
 const tomorrowValue = () => {
@@ -27,6 +28,8 @@ export default function CustomerBookingPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [specialRequest, setSpecialRequest] = useState('');
+  const [serviceOptions, setServiceOptions] = useState<ServiceItem[]>([]);
+  const [selectedServiceQuantities, setSelectedServiceQuantities] = useState<Record<number, number>>({});
   const [booking, setBooking] = useState<CustomerBookingResponse | null>(null);
 
   const roomTypeId = Number(params.get('room_type_id'));
@@ -57,6 +60,11 @@ export default function CustomerBookingPage() {
       setIsLoading(false);
       return;
     }
+    fetch('http://localhost:5000/api/services?active=true')
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error('Không tải được danh sách dịch vụ.')))
+      .then((data: ServiceItem[]) => setServiceOptions(Array.isArray(data) ? data : []))
+      .catch(() => setServiceOptions([]));
+
     if (params.has('room_type_id') && (!Number.isInteger(roomTypeId) || roomTypeId < 1)) {
       setError('Không tìm thấy loại phòng cần đặt. Vui lòng chọn phòng từ trang chủ.');
       setIsLoading(false);
@@ -125,10 +133,30 @@ export default function CustomerBookingPage() {
       setIsSubmitting(true);
       setError('');
       const result = await createCustomerBooking(
-        { room_selections: selectedRoomTypes.map(({ room: selectedRoom, quantity }) => ({ room_type_id: selectedRoom.id, quantity })), check_in_date: checkIn, check_out_date: checkOut, adults, children, special_request: specialRequest },
+        {
+          room_selections: selectedRoomTypes.map(({ room: selectedRoom, quantity }) => ({ room_type_id: selectedRoom.id, quantity })),
+          service_selections: Object.entries(selectedServiceQuantities)
+            .filter(([, quantity]) => Number(quantity) > 0)
+            .map(([serviceId, quantity]) => ({ service_id: Number(serviceId), quantity: Number(quantity) })),
+          check_in_date: checkIn,
+          check_out_date: checkOut,
+          adults,
+          children,
+          special_request: specialRequest,
+        },
         accessToken,
       );
-      setBooking(result.booking);
+      try {
+        const deposit = await createFinalPayment(result.booking.booking_code, 'VNPAY', 'DEPOSIT');
+        if (deposit.payment_url) {
+          window.location.assign(deposit.payment_url);
+          return;
+        }
+        throw new Error('VNPay chưa trả về đường dẫn thanh toán.');
+      } catch (paymentError) {
+        setBooking(result.booking);
+        throw new Error(`Đã tạo booking ${result.booking.booking_code}, nhưng chưa tạo được giao dịch cọc. Hãy bấm thanh toán cọc để thử lại. ${paymentError instanceof Error ? paymentError.message : ''}`);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Không thể tạo đặt phòng. Vui lòng thử lại.');
     } finally {
@@ -162,6 +190,8 @@ export default function CustomerBookingPage() {
   }
 
   if (booking) {
+    const requiredDepositAmount = booking.required_deposit_amount
+      ?? Math.ceil(Number(booking.price_per_night || 0) * Number(booking.nights || 0) * 0.3);
     return (
       <main className="container section-block">
         <div className="empty-state-box">
@@ -170,7 +200,18 @@ export default function CustomerBookingPage() {
           <p>{booking.room_type_name}{booking.room_number ? ` · Phòng ${booking.room_number}` : ' · Số phòng sẽ được lễ tân sắp xếp trước ngày nhận phòng'}</p>
           <p>{booking.check_in_date} đến {booking.check_out_date} · {booking.nights} đêm</p>
           <p>Tổng tiền: <strong>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(booking.total_amount)}</strong></p>
-          <p>Đặt phòng đã được xác nhận. Vui lòng thanh toán tại quầy lễ tân khi đến khách sạn.</p>
+          <p>Khoản cọc tối thiểu (30% tiền phòng): <strong>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(requiredDepositAmount)}</strong></p>
+          <p>Booking đã được tạo. Vui lòng hoàn tất cọc VNPay để xác nhận thanh toán.</p>
+          <button className="btn btn-primary" type="button" onClick={async () => {
+            try {
+              const deposit = await createFinalPayment(booking.booking_code, 'VNPAY', 'DEPOSIT');
+              if (!deposit.payment_url) throw new Error('VNPay chưa trả về đường dẫn thanh toán.');
+              window.location.assign(deposit.payment_url);
+            } catch (paymentError) {
+              setError(paymentError instanceof Error ? paymentError.message : 'Không thể tạo giao dịch cọc VNPay.');
+            }
+          }}>Thanh toán cọc bằng VNPay</button>
+          {error && <p className="inline-error" role="alert">{error}</p>}
           <Link className="btn btn-primary" to="/">Về trang chủ</Link>
         </div>
       </main>
@@ -206,6 +247,35 @@ export default function CustomerBookingPage() {
             <label><span>Ngày trả phòng</span><input type="date" value={checkOut} min={checkIn} onChange={(event) => setCheckOut(event.target.value)} /></label>
             <label><span>Người lớn</span><select value={adults} onChange={(event) => setAdults(Number(event.target.value))}>{[1, 2, 3, 4, 5, 6].map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
             <label><span>Trẻ em</span><select value={children} onChange={(event) => setChildren(Number(event.target.value))}>{[0, 1, 2, 3, 4].map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
+          </div>
+
+          <div className="booking-room-summary">
+            <h3>Dịch vụ đi kèm</h3>
+            {serviceOptions.length ? (
+              <div className="multi-room-selection">
+                {serviceOptions.map((service) => (
+                  <div className="multi-room-item" key={service.id}>
+                    <div>
+                      <strong>{service.name}</strong>
+                      <span>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(service.price)} / {service.unit}</span>
+                    </div>
+                    <label>
+                      Số lượng
+                      <input
+                        type="number"
+                        min={0}
+                        max={10}
+                        value={selectedServiceQuantities[service.id] || 0}
+                        onChange={(event) => setSelectedServiceQuantities({
+                          ...selectedServiceQuantities,
+                          [service.id]: Math.max(0, Math.min(10, Number(event.target.value) || 0)),
+                        })}
+                      />
+                    </label>
+                  </div>
+                ))}
+              </div>
+            ) : <p>Hiện chưa có dịch vụ nào đang hoạt động.</p>}
           </div>
 
           <div className="booking-room-summary">

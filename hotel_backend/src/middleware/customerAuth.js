@@ -49,4 +49,9 @@ const requirePaymentStaff = requireRoles(
   'Chỉ Lễ tân mới có thể xem danh sách thanh toán và xác nhận thanh toán.',
 );
 
-module.exports = { requireCustomer, requirePaymentStaff };
+const requirePaymentActor = requireRoles(
+  ['CUSTOMER', 'RECEPTIONIST', 'ADMIN'],
+  'Bạn không có quyền kiểm tra trạng thái giao dịch này.',
+);
+
+module.exports = { requireCustomer, requirePaymentStaff, requirePaymentActor };

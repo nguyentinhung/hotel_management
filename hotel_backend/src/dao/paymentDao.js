@@ -7,7 +7,7 @@ function paymentError(code, statusCode, message) {
   return error;
 }
 
-async function createFinalCashPayment({ customerId, bookingCode, paymentCode }) {
+async function createFinalPayment({ customerId, bookingCode, paymentCode, method = 'CASH' }) {
   const pool = await getPool();
   const transaction = new sql.Transaction(pool);
   let transactionStarted = false;
@@ -69,6 +69,7 @@ async function createFinalCashPayment({ customerId, bookingCode, paymentCode }) 
 
     const paymentResult = await transaction.request()
       .input('paymentCode', sql.VarChar(30), paymentCode)
+      .input('method', sql.VarChar(20), method)
       .input('bookingId', sql.BigInt, booking.booking_id)
       .input('invoiceId', sql.BigInt, booking.invoice_id)
       .input('amount', sql.Decimal(14, 2), amount)
@@ -81,7 +82,7 @@ async function createFinalCashPayment({ customerId, bookingCode, paymentCode }) 
           INSERTED.amount,
           INSERTED.status
         VALUES (
-          @paymentCode, @bookingId, @invoiceId, @amount, 'FINAL', 'CASH', 'PENDING'
+          @paymentCode, @bookingId, @invoiceId, @amount, 'FINAL', @method, 'PENDING'
         );
       `);
 
@@ -100,15 +101,245 @@ async function createFinalCashPayment({ customerId, bookingCode, paymentCode }) 
   }
 }
 
-async function getPaymentList(customerId = null) {
+async function createCustomerDepositPayment({ customerId, bookingCode, paymentCode }) {
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+  await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+  try {
+    const bookingResult = await transaction.request()
+      .input('customerId', sql.BigInt, customerId)
+      .input('bookingCode', sql.VarChar(20), bookingCode)
+      .query(`
+        SELECT TOP (1) b.id, b.status, b.deposit_amount,
+          CEILING(SUM(br.price_per_night) * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30) AS required_deposit
+        FROM dbo.bookings b WITH (UPDLOCK, HOLDLOCK)
+        JOIN dbo.booking_rooms br ON br.booking_id = b.id
+        WHERE b.customer_id = @customerId AND b.booking_code = @bookingCode
+        GROUP BY b.id, b.status, b.deposit_amount, b.check_in_date, b.check_out_date;
+      `);
+    const booking = bookingResult.recordset[0];
+    if (!booking) throw paymentError('BOOKING_NOT_FOUND', 404, 'Không tìm thấy booking của bạn.');
+    if (['CANCELLED', 'NO_SHOW'].includes(String(booking.status).toUpperCase())) throw paymentError('BOOKING_UNPAYABLE', 409, 'Booking này không thể thanh toán.');
+    const amount = Number(booking.required_deposit);
+    if (!Number.isFinite(amount) || amount < 1) throw paymentError('INVALID_DEPOSIT', 409, 'Không tính được khoản cọc cho booking.');
+    if (Number(booking.deposit_amount || 0) >= amount) throw paymentError('DEPOSIT_ALREADY_PAID', 409, 'Booking đã đủ tiền cọc.');
+    const pending = await transaction.request().input('bookingId', sql.BigInt, booking.id).query(`
+      SELECT TOP (1) id FROM dbo.payments WITH (UPDLOCK, HOLDLOCK)
+      WHERE booking_id = @bookingId AND payment_type = 'DEPOSIT' AND status = 'PENDING';
+    `);
+    if (pending.recordset.length) throw paymentError('PAYMENT_ALREADY_PENDING', 409, 'Booking đã có giao dịch cọc đang chờ xử lý.');
+    const result = await transaction.request()
+      .input('paymentCode', sql.VarChar(30), paymentCode)
+      .input('bookingId', sql.BigInt, booking.id)
+      .input('amount', sql.Decimal(14, 2), amount)
+      .query(`
+        INSERT INTO dbo.payments (payment_code, booking_id, invoice_id, amount, payment_type, method, status)
+        OUTPUT INSERTED.payment_code, INSERTED.amount, INSERTED.status
+        VALUES (@paymentCode, @bookingId, NULL, @amount, 'DEPOSIT', 'VNPAY', 'PENDING');
+      `);
+    await transaction.commit();
+    return result.recordset[0];
+  } catch (error) {
+    try { await transaction.rollback(); } catch (rollbackError) { console.error('Deposit payment rollback error:', rollbackError); }
+    throw error;
+  }
+}
+
+async function createReceptionCheckoutPayment({ bookingId, paymentCode, method }) {
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+  await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+  try {
+    const bookingResult = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
+      SELECT b.id, b.status, b.total_amount, b.deposit_amount,
+        COALESCE(final_payments.amount_paid, 0) AS final_paid_amount
+      FROM dbo.bookings b WITH (UPDLOCK, HOLDLOCK)
+      OUTER APPLY (
+        SELECT SUM(p.amount) AS amount_paid
+        FROM dbo.payments p
+        WHERE p.booking_id = b.id AND p.payment_type = 'FINAL' AND p.status = 'SUCCESS'
+      ) final_payments
+      WHERE b.id = @bookingId;
+    `);
+    const booking = bookingResult.recordset[0];
+    if (!booking) throw paymentError('BOOKING_NOT_FOUND', 404, 'Không tìm thấy booking.');
+    const bookingStatus = String(booking.status).toUpperCase();
+    if (!['CHECKED_IN', 'CHECKED_OUT'].includes(bookingStatus)) throw paymentError('BOOKING_NOT_CHECKED_IN', 409, 'Booking phải đang lưu trú hoặc đã checkout còn dư nợ.');
+    const amount = Math.max(0, Number(booking.total_amount) - Number(booking.deposit_amount || 0) - Number(booking.final_paid_amount || 0));
+    if (!Number.isFinite(amount)) throw paymentError('INVALID_AMOUNT', 409, 'Không tính được số tiền checkout.');
+    const pendingPayment = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
+      SELECT TOP (1) id FROM dbo.payments WITH (UPDLOCK, HOLDLOCK)
+      WHERE booking_id = @bookingId AND payment_type IN ('DEPOSIT', 'FINAL') AND status = 'PENDING';
+    `);
+    if (pendingPayment.recordset.length) throw paymentError('PAYMENT_ALREADY_PENDING', 409, 'Booking đang có giao dịch VNPay chưa hoàn tất.');
+    const rooms = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
+      SELECT room_id FROM dbo.booking_rooms WHERE booking_id = @bookingId AND room_id IS NOT NULL;
+    `);
+    if (amount > 0) {
+      await transaction.request()
+        .input('paymentCode', sql.VarChar(30), paymentCode)
+        .input('bookingId', sql.BigInt, bookingId)
+        .input('amount', sql.Decimal(14, 2), amount)
+        .input('method', sql.VarChar(20), method)
+        .input('status', sql.VarChar(20), method === 'CASH' ? 'SUCCESS' : 'PENDING')
+        .input('paidAt', sql.DateTime2, method === 'CASH' ? new Date() : null)
+        .query(`
+          INSERT INTO dbo.payments (payment_code, booking_id, invoice_id, amount, payment_type, method, status, paid_at)
+          VALUES (@paymentCode, @bookingId, NULL, @amount, 'FINAL', @method, @status, @paidAt);
+        `);
+    }
+    // For VNPay, keep the guest checked in and the room occupied until IPN
+    // confirms payment. That leaves the booking retryable if the payment fails.
+    if (bookingStatus === 'CHECKED_IN' && (method === 'CASH' || amount <= 0)) {
+      await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`UPDATE dbo.bookings SET status = 'CHECKED_OUT' WHERE id = @bookingId;`);
+      for (const room of rooms.recordset) {
+        if (room.room_id != null) await transaction.request().input('roomId', sql.Int, room.room_id).query(`UPDATE dbo.rooms SET status = 'CLEANING' WHERE id = @roomId AND status = 'OCCUPIED';`);
+      }
+    }
+    await transaction.commit();
+    return { payment_code: paymentCode, amount, status: amount === 0 || method === 'CASH' ? 'SUCCESS' : 'PENDING' };
+  } catch (error) {
+    try { await transaction.rollback(); } catch (rollbackError) { console.error('Checkout payment rollback error:', rollbackError); }
+    throw error;
+  }
+}
+
+async function completeVnpayPayment({ paymentCode, amountMinor, transactionNo, payDate, succeeded }) {
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+  let transactionStarted = false;
+
+  try {
+    await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+    transactionStarted = true;
+
+    const paymentResult = await transaction.request()
+      .input('paymentCode', sql.VarChar(30), paymentCode)
+      .query(`
+        SELECT TOP (1) p.id, p.booking_id, b.booking_code, b.status AS booking_status, p.invoice_id, p.amount, p.payment_type, p.method, p.status
+        FROM dbo.payments p WITH (UPDLOCK, HOLDLOCK)
+        JOIN dbo.bookings b ON b.id = p.booking_id
+        WHERE p.payment_code = @paymentCode;
+      `);
+    const payment = paymentResult.recordset[0];
+    if (!payment) throw paymentError('PAYMENT_NOT_FOUND', 404, 'Không tìm thấy giao dịch thanh toán.');
+    if (String(payment.method).toUpperCase() !== 'VNPAY') {
+      throw paymentError('PAYMENT_METHOD_MISMATCH', 409, 'Giao dịch này không được tạo bằng VNPay.');
+    }
+    if (Math.round(Number(payment.amount) * 100) !== Number(amountMinor)) {
+      throw paymentError('PAYMENT_AMOUNT_MISMATCH', 400, 'Số tiền VNPay trả về không khớp giao dịch.');
+    }
+    if (String(payment.status).toUpperCase() === 'SUCCESS') {
+      await transaction.commit();
+      transactionStarted = false;
+      return { alreadyCompleted: true, status: 'SUCCESS', paymentType: payment.payment_type, bookingCode: payment.booking_code };
+    }
+    if (String(payment.status).toUpperCase() !== 'PENDING') {
+      throw paymentError('PAYMENT_NOT_PENDING', 409, 'Giao dịch không còn ở trạng thái chờ thanh toán.');
+    }
+
+    const nextStatus = succeeded ? 'SUCCESS' : 'FAILED';
+    await transaction.request()
+      .input('paymentCode', sql.VarChar(30), paymentCode)
+      .input('transactionNo', sql.VarChar(100), transactionNo || null)
+      .input('paidAt', sql.DateTime2, parseVnpayDate(payDate))
+      .input('status', sql.VarChar(20), nextStatus)
+      .query(`
+        UPDATE dbo.payments
+        SET status = @status,
+            vnpay_transaction_no = @transactionNo,
+            paid_at = CASE WHEN @status = 'SUCCESS' THEN @paidAt ELSE NULL END
+        WHERE payment_code = @paymentCode;
+      `);
+
+    if (succeeded && payment.invoice_id) {
+      await transaction.request()
+        .input('invoiceId', sql.BigInt, payment.invoice_id)
+        .query(`
+          UPDATE dbo.invoices
+          SET status = 'PAID', amount_due = 0
+          WHERE id = @invoiceId AND status = 'ISSUED';
+        `);
+    }
+
+    if (succeeded && String(payment.payment_type).toUpperCase() === 'DEPOSIT') {
+      await transaction.request()
+        .input('bookingId', sql.BigInt, payment.booking_id)
+        .input('amount', sql.Decimal(14, 2), payment.amount)
+        .query(`
+          UPDATE dbo.bookings
+          SET deposit_amount = COALESCE(deposit_amount, 0) + @amount,
+              status = CASE WHEN status = 'PENDING_PAYMENT' THEN 'CONFIRMED' ELSE status END
+          WHERE id = @bookingId;
+        `);
+    }
+
+    // Reception checkout payments have no invoice_id. Complete checkout and
+    // release the room only after VNPay confirms this final payment by IPN.
+    if (succeeded && String(payment.payment_type).toUpperCase() === 'FINAL'
+      && payment.invoice_id == null && String(payment.booking_status).toUpperCase() === 'CHECKED_IN') {
+      await transaction.request()
+        .input('bookingId', sql.BigInt, payment.booking_id)
+        .query(`UPDATE dbo.bookings SET status = 'CHECKED_OUT' WHERE id = @bookingId;`);
+      await transaction.request()
+        .input('bookingId', sql.BigInt, payment.booking_id)
+        .query(`
+          UPDATE dbo.rooms
+          SET status = 'CLEANING'
+          WHERE status = 'OCCUPIED'
+            AND id IN (SELECT room_id FROM dbo.booking_rooms WHERE booking_id = @bookingId AND room_id IS NOT NULL);
+        `);
+    }
+
+    await transaction.commit();
+    transactionStarted = false;
+    return { alreadyCompleted: false, status: nextStatus, paymentType: payment.payment_type, bookingCode: payment.booking_code };
+  } catch (error) {
+    if (transactionStarted) {
+      try { await transaction.rollback(); } catch (rollbackError) {
+        console.error('VNPay callback rollback error:', rollbackError);
+      }
+    }
+    throw error;
+  }
+}
+
+async function getVnpayPaymentContext({ paymentCode, amountMinor }) {
+  const pool = await getPool();
+  const result = await pool.request()
+    .input('paymentCode', sql.VarChar(30), paymentCode)
+    .query(`
+      SELECT TOP (1) p.payment_type, p.amount, p.status, b.booking_code
+      FROM dbo.payments p JOIN dbo.bookings b ON b.id = p.booking_id
+      WHERE p.payment_code = @paymentCode AND p.method = 'VNPAY';
+    `);
+  const payment = result.recordset[0];
+  if (!payment) throw paymentError('PAYMENT_NOT_FOUND', 404, 'Không tìm thấy giao dịch VNPay.');
+  if (Math.round(Number(payment.amount) * 100) !== Number(amountMinor)) throw paymentError('PAYMENT_AMOUNT_MISMATCH', 400, 'Số tiền VNPay trả về không khớp giao dịch.');
+  return { paymentType: payment.payment_type, bookingCode: payment.booking_code, status: payment.status };
+}
+
+function parseVnpayDate(value) {
+  if (!/^\d{14}$/.test(String(value || ''))) return new Date();
+  const text = String(value);
+  // VNPay sends GMT+7 time without a timezone suffix.
+  return new Date(Date.UTC(
+    Number(text.slice(0, 4)), Number(text.slice(4, 6)) - 1, Number(text.slice(6, 8)),
+    Number(text.slice(8, 10)) - 7, Number(text.slice(10, 12)), Number(text.slice(12, 14)),
+  ));
+}
+
+async function getPaymentList(customerId = null, successOnly = false) {
   const pool = await getPool();
   const request = pool.request();
-  let customerFilter = '';
+  const filters = [];
 
   if (customerId !== null) {
     request.input('customerId', sql.BigInt, customerId);
-    customerFilter = 'WHERE b.customer_id = @customerId';
+    filters.push('b.customer_id = @customerId');
   }
+  if (successOnly) filters.push("p.status = 'SUCCESS'");
+  const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
 
   const result = await request.query(`
     SELECT
@@ -192,7 +423,7 @@ async function getPaymentList(customerId = null) {
     JOIN dbo.bookings b ON b.id = p.booking_id
     JOIN dbo.users u ON u.id = b.customer_id
     LEFT JOIN dbo.invoices i ON i.id = p.invoice_id
-    ${customerFilter}
+    ${whereClause}
     ORDER BY p.id DESC;
   `);
 
@@ -201,6 +432,25 @@ async function getPaymentList(customerId = null) {
 
 async function getCustomerPaymentList(customerId) {
   return getPaymentList(customerId);
+}
+
+async function getPaymentStatus({ paymentCode, customerId = null }) {
+  const pool = await getPool();
+  const request = pool.request().input('paymentCode', sql.VarChar(30), paymentCode);
+  const ownerFilter = customerId == null ? '' : 'AND b.customer_id = @customerId';
+  if (customerId != null) request.input('customerId', sql.BigInt, customerId);
+  const result = await request.query(`
+    SELECT TOP (1)
+      p.payment_code,
+      p.status,
+      p.payment_type,
+      p.amount,
+      b.booking_code
+    FROM dbo.payments p
+    JOIN dbo.bookings b ON b.id = p.booking_id
+    WHERE p.payment_code = @paymentCode ${ownerFilter};
+  `);
+  return result.recordset[0] || null;
 }
 
 async function confirmPaymentByCode(paymentCode) {
@@ -221,6 +471,7 @@ async function confirmPaymentByCode(paymentCode) {
           p.invoice_id,
           p.amount,
           p.payment_type,
+          p.method,
           p.status,
           i.amount_due,
           i.total_amount,
@@ -234,6 +485,12 @@ async function confirmPaymentByCode(paymentCode) {
     if (!payment) {
       const error = new Error('Không tìm thấy giao dịch thanh toán.');
       error.statusCode = 404;
+      throw error;
+    }
+
+    if (String(payment.method).toUpperCase() !== 'CASH') {
+      const error = new Error('VNPay transactions are confirmed by the verified callback.');
+      error.statusCode = 409;
       throw error;
     }
 
@@ -287,4 +544,4 @@ async function confirmPaymentByCode(paymentCode) {
   }
 }
 
-module.exports = { createFinalCashPayment, getPaymentList, getCustomerPaymentList, confirmPaymentByCode };
+module.exports = { createFinalPayment, createCustomerDepositPayment, createReceptionCheckoutPayment, completeVnpayPayment, getVnpayPaymentContext, getPaymentList, getCustomerPaymentList, getPaymentStatus, confirmPaymentByCode };

@@ -4,6 +4,7 @@ interface CreatePaymentResponse {
   payment_code: string;
   amount: number;
   status: 'PENDING';
+  payment_url?: string;
 }
 
 export interface PaymentRoomDetail {
@@ -69,10 +70,18 @@ export interface PaymentListItem {
   vnpay_transaction_no: string | null;
 }
 
-export function createFinalCashPayment(bookingCode: string): Promise<CreatePaymentResponse> {
+export function createFinalPayment(bookingCode: string, method: 'CASH' | 'VNPAY', paymentType: 'FINAL' | 'DEPOSIT' = 'FINAL'): Promise<CreatePaymentResponse> {
   return api.post<CreatePaymentResponse>(
     '/api/payments',
-    { booking_code: bookingCode, payment_type: 'FINAL', method: 'CASH' },
+    { booking_code: bookingCode, payment_type: paymentType, method },
+    localStorage.getItem('accessToken') || undefined,
+  );
+}
+
+export function createReceptionCheckout(bookingId: string | number, method: 'CASH' | 'VNPAY'): Promise<Omit<CreatePaymentResponse, 'status'> & { status: 'PENDING' | 'SUCCESS'; success: boolean; message: string }> {
+  return api.post<Omit<CreatePaymentResponse, 'status'> & { status: 'PENDING' | 'SUCCESS'; success: boolean; message: string }>(
+    `/api/bookings/${bookingId}/check-out`,
+    { payment_method: method },
     localStorage.getItem('accessToken') || undefined,
   );
 }
@@ -83,6 +92,21 @@ export function getPaymentList(): Promise<PaymentListItem[]> {
 
 export function getCustomerPaymentList(): Promise<PaymentListItem[]> {
   return api.get<PaymentListItem[]>('/api/payments/my', localStorage.getItem('accessToken') || undefined);
+}
+
+export interface PaymentStatusResponse {
+  payment_code: string;
+  booking_code: string;
+  payment_type: 'DEPOSIT' | 'FINAL';
+  amount: number;
+  status: 'PENDING' | 'SUCCESS' | 'FAILED' | 'CANCELLED';
+}
+
+export function getPaymentStatus(paymentCode: string): Promise<PaymentStatusResponse> {
+  return api.get<PaymentStatusResponse>(
+    `/api/payments/${encodeURIComponent(paymentCode)}/status`,
+    localStorage.getItem('accessToken') || undefined,
+  );
 }
 
 export function confirmPayment(paymentCode: string): Promise<{ message: string; payment_code: string; status: string }> {

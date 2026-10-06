@@ -86,6 +86,7 @@ export interface WalkInBookingPayload {
   room_type_id?: number;
   room_id?: number | null;
   room_selections?: { room_type_id: number; room_id?: number | null }[];
+  service_selections?: { service_id: number; quantity: number }[];
   check_in_date: string;
   check_out_date: string;
   adults: number;
@@ -121,6 +122,7 @@ export interface WalkInBookingResponse {
 export interface CustomerBookingPayload {
   room_type_id?: number;
   room_selections?: { room_type_id: number; quantity: number }[];
+  service_selections?: { service_id: number; quantity: number }[];
   check_in_date: string;
   check_out_date: string;
   adults: number;
@@ -130,6 +132,7 @@ export interface CustomerBookingPayload {
 
 export interface CustomerBookingResponse extends WalkInBookingResponse {
   room_number: string | null;
+  required_deposit_amount?: number;
 }
 
 // Thông tin đơn đặt phòng gần đây để hiển thị lên bảng Dashboard của Lễ tân
@@ -146,6 +149,11 @@ export interface RecentBooking {
   status: string;
   total_amount: number;
   deposit_amount: number;
+  required_deposit_amount?: number;
+  requires_deposit_payment?: boolean;
+  final_paid_amount?: number;
+  balance_due?: number;
+  has_pending_final_payment?: boolean;
   created_at: string;
   special_request?: string;
   room_type_name?: string;

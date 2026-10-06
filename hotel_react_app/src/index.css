@@ -1668,6 +1668,28 @@ a:focus-visible {
   line-height: 1.6;
 }
 
+.sidebar-logout {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid rgba(180, 55, 45, 0.2);
+  border-radius: 12px;
+  background: rgba(180, 55, 45, 0.06);
+  color: #a72e26;
+  text-align: left;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sidebar-logout:hover {
+  background: rgba(180, 55, 45, 0.12);
+}
+
+.sidebar-logout:focus-visible {
+  outline: 2px solid #a72e26;
+  outline-offset: 2px;
+}
+
 .dashboard-main {
   border-radius: 22px;
   padding: 24px;
@@ -2989,6 +3011,15 @@ a:focus-visible {
 .room-assignment-slot select { width: 100%; min-width: 0; }
 .room-action-hint { display: inline-block; max-width: 130px; white-space: normal; color: #9a6412; font-size: 0.78rem; font-weight: 600; line-height: 1.35; }
 .booking-history-card { display: grid; gap: 16px; }
+.booking-services-panel { display: grid; gap: 14px; margin: 18px 0; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: linear-gradient(145deg, #fff, #f8faf9); }
+.booking-services-heading h4 { margin: 0 0 4px; color: var(--primary); }
+.booking-services-heading p, .booking-services-message { margin: 0; color: var(--muted); }
+.booking-services-form { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(220px, 1.5fr) 110px auto; align-items: end; gap: 12px; }
+.booking-services-form label { display: grid; gap: 6px; color: var(--muted); font-size: .85rem; font-weight: 600; }
+.booking-services-form input, .booking-services-form select { width: 100%; min-height: 42px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--text); }
+.booking-services-form .btn { min-height: 42px; }
+.booking-services-panel .table-wrap { max-width: 100%; overflow-x: auto; }
+@media (max-width: 720px) { .booking-services-form { grid-template-columns: 1fr 1fr; } .booking-services-form label:nth-child(2) { grid-column: 1 / -1; } }
 .booking-history-search { display: grid; gap: 7px; max-width: 460px; color: var(--muted); font-size: 0.88rem; font-weight: 600; }
 .booking-history-search input { min-height: 42px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--text); }
 .booking-history-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr)); align-items: stretch; gap: 14px; margin: 16px 0; }
@@ -3244,6 +3275,17 @@ a:focus-visible {
   padding: 0 14px;
 }
 
+.payment-form select {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--text);
+  padding: 10px 12px;
+  font: inherit;
+}
+
 .payment-method-card {
   display: flex;
   align-items: flex-start;
@@ -3345,6 +3387,38 @@ a:focus-visible {
   margin: 16px 0 0;
 }
 
+.payment-success-dialog {
+  width: min(100%, 420px);
+  padding: 32px;
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.24);
+  text-align: center;
+}
+
+.payment-success-check {
+  display: grid;
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 16px;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(31, 157, 109, 0.12);
+  color: var(--success);
+  font-size: 2rem;
+  font-weight: 800;
+}
+
+.payment-success-dialog h2 {
+  margin: 0 0 8px;
+  color: var(--primary);
+}
+
+.payment-success-dialog p {
+  margin: 0 0 22px;
+  color: var(--muted);
+}
+
 .payment-list-wrap {
   min-width: 0;
 }
@@ -3373,6 +3447,20 @@ a:focus-visible {
   font-size: 0.82rem;
 }
 
+.payment-list-search {
+  margin: 0 0 12px;
+}
+
+.payment-list-search input {
+  width: min(100%, 420px);
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid rgba(15, 61, 62, 0.18);
+  border-radius: 8px;
+  color: var(--primary);
+  background: #fff;
+}
+
 .payment-list-wrap .table-wrap {
   overflow-x: auto;
   border: 1px solid rgba(15, 61, 62, 0.08);
@@ -3381,7 +3469,7 @@ a:focus-visible {
 
 .payment-table {
   width: 100%;
-  min-width: 1120px;
+  min-width: 1220px;
   border-collapse: collapse;
   white-space: nowrap;
   font-size: 0.68rem;

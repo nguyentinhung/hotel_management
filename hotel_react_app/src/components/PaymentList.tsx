@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { confirmPayment, getCustomerPaymentList, getPaymentList } from '../services/paymentService';
 import type { PaymentListItem } from '../services/paymentService';
 
@@ -46,6 +47,7 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const [searchTerm, setSearchTerm] = useState('');
   const [selectedPayment, setSelectedPayment] = useState<PaymentListItem | null>(null);
   const [confirmingCode, setConfirmingCode] = useState<string | null>(null);
   const [canConfirmPayment, setCanConfirmPayment] = useState(false);
@@ -95,9 +97,18 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [selectedPayment]);
 
-  const pageCount = Math.ceil(payments.length / PAGE_SIZE);
+  const normalizedSearch = searchTerm.trim().toLocaleLowerCase();
+  const searchDigits = searchTerm.replace(/\D/g, '');
+  const filteredPayments = customerOnly ? payments : payments.filter((payment) => {
+    if (!normalizedSearch) return true;
+    const textMatch = [payment.booking_code, payment.customer_full_name, payment.guest_full_name]
+      .some((value) => String(value || '').toLocaleLowerCase().includes(normalizedSearch));
+    const phone = String(payment.customer_phone || payment.guest_phone || '');
+    return textMatch || (searchDigits.length > 0 && phone.replace(/\D/g, '').includes(searchDigits));
+  });
+  const pageCount = Math.ceil(filteredPayments.length / PAGE_SIZE);
   const firstPayment = (currentPage - 1) * PAGE_SIZE;
-  const visiblePayments = payments.slice(firstPayment, firstPayment + PAGE_SIZE);
+  const visiblePayments = filteredPayments.slice(firstPayment, firstPayment + PAGE_SIZE);
   const bookingRooms = Array.isArray(selectedPayment?.booking_rooms) ? selectedPayment.booking_rooms : [];
   const bookingGuests = Array.isArray(selectedPayment?.booking_guests) ? selectedPayment.booking_guests : [];
   const invoiceItems = Array.isArray(selectedPayment?.invoice_items) ? selectedPayment.invoice_items : [];
@@ -123,6 +134,7 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
       <div className="payment-list-state">
         <strong>Chưa có giao dịch thanh toán</strong>
         <span>Các yêu cầu thanh toán sẽ xuất hiện ở đây.</span>
+        {customerOnly && <Link className="btn btn-primary" to="/make-payment">Thanh toán booking</Link>}
       </div>
     );
   }
@@ -135,8 +147,21 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
           <path d="M3 9h18M7 15h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
         </svg>
         <h3>{customerOnly ? 'Lịch sử thanh toán' : 'Danh sách thanh toán'}</h3>
-        <span>({payments.length} giao dịch)</span>
+        <span>({customerOnly ? payments.length : filteredPayments.length} giao dịch{customerOnly ? '' : ' thành công'})</span>
+        {customerOnly && <Link className="btn btn-primary" to="/make-payment">Thanh toán booking</Link>}
       </div>
+      {!customerOnly && (
+        <div className="payment-list-search">
+          <label className="sr-only" htmlFor="payment-list-search">Search payments by booking code, guest name, or phone</label>
+          <input
+            id="payment-list-search"
+            type="search"
+            value={searchTerm}
+            placeholder="Tìm mã đặt phòng, tên khách, số điện thoại"
+            onChange={(event) => { setSearchTerm(event.target.value); setCurrentPage(1); }}
+          />
+        </div>
+      )}
       <div className="table-wrap">
         <table className="payment-table">
           <thead>
@@ -145,6 +170,7 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
               <th>Mã thanh toán</th>
               <th>Mã đặt phòng</th>
               <th>Tên khách hàng</th>
+              {!customerOnly && <th>Số điện thoại</th>}
               <th>Số tiền</th>
               <th>Loại thanh toán</th>
               <th>Phương thức</th>
@@ -154,7 +180,9 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
             </tr>
           </thead>
           <tbody>
-            {visiblePayments.map((payment, index) => (
+            {visiblePayments.length === 0 ? (
+              <tr><td colSpan={customerOnly ? 10 : 11} className="text-center py-4 text-muted">Không tìm thấy giao dịch phù hợp.</td></tr>
+            ) : visiblePayments.map((payment, index) => (
               <tr
                 key={payment.payment_code}
                 className="payment-table-row"
@@ -172,6 +200,7 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
                 <td>{payment.payment_code}</td>
                 <td>{payment.booking_code}</td>
                 <td>{payment.guest_full_name}</td>
+                {!customerOnly && <td>{payment.customer_phone || payment.guest_phone || '—'}</td>}
                 <td className="payment-amount-cell">{formatAmount(payment.amount)}</td>
                 <td>
                   <span className={`payment-type payment-type-${payment.payment_type.toLowerCase()}`}>
@@ -197,7 +226,7 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
       </div>
       <div className="payment-list-footer">
         <span>
-          Hiển thị {firstPayment + 1} - {Math.min(firstPayment + PAGE_SIZE, payments.length)} của {payments.length} giao dịch
+          Hiển thị {filteredPayments.length === 0 ? 0 : firstPayment + 1} - {Math.min(firstPayment + PAGE_SIZE, filteredPayments.length)} của {filteredPayments.length} giao dịch
         </span>
         <nav className="payment-pagination" aria-label="Phân trang danh sách thanh toán">
           <button
@@ -249,7 +278,7 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
                 <span>{selectedPayment.payment_code}</span>
               </div>
               <div className="payment-detail-header-actions">
-                {!customerOnly && canConfirmPayment && selectedPayment.status === 'PENDING' && (
+                {!customerOnly && canConfirmPayment && selectedPayment.method === 'CASH' && selectedPayment.status === 'PENDING' && (
                   <button
                     className="btn btn-primary"
                     type="button"

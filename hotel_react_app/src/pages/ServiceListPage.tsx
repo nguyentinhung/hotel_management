@@ -51,7 +51,7 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
         setLoading(true);
         setLoadError('');
         try {
-            const data = await getServices();
+            const data = await getServices(role);
             setServices(data);
         } catch (error) {
             console.error(error);
@@ -64,7 +64,7 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
 
     useEffect(() => {
         void loadServices();
-    }, []);
+    }, [role]);
 
     const handleOpenCreate = () => {
         setSelectedService(null);
@@ -73,7 +73,7 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
 
     const handleOpenDetails = async (id: number) => {
         try {
-            const data = await getServiceById(id);
+            const data = await getServiceById(id, role);
             setSelectedService(data);
             setView('details');
         } catch (error) {
@@ -84,7 +84,7 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
 
     const handleOpenEdit = async (id: number) => {
         try {
-            const data = await getServiceById(id);
+            const data = await getServiceById(id, role);
             setSelectedService(data);
             setView('edit');
         } catch (error) {

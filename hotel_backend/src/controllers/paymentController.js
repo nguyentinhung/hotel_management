@@ -1,4 +1,4 @@
-const { makePayment, getPayments, getCustomerPayments, confirmPayment } = require('../services/paymentService');
+const { makePayment, getPayments, getCustomerPayments, getPaymentStatus, confirmPayment } = require('../services/paymentService');
 
 async function createPayment(req, res) {
   try {
@@ -7,12 +7,14 @@ async function createPayment(req, res) {
       bookingCode: req.body?.booking_code,
       paymentType: req.body?.payment_type,
       method: req.body?.method,
+      ipAddress: req.ip,
     });
 
     return res.status(201).json({
       payment_code: payment.payment_code,
       amount: Number(payment.amount),
       status: payment.status,
+      payment_url: payment.payment_url,
     });
   } catch (error) {
     if (error.statusCode) {
@@ -88,6 +90,26 @@ async function getCustomerPaymentList(req, res) {
   }
 }
 
+async function getPaymentStatusRequest(req, res) {
+  try {
+    const paymentCode = String(req.params?.paymentCode || '').trim();
+    if (!paymentCode) return res.status(400).json({ message: 'Thiếu mã giao dịch.' });
+    const customerId = req.auth.roleCode === 'CUSTOMER' ? req.auth.userId : null;
+    const payment = await getPaymentStatus(paymentCode, customerId);
+    if (!payment) return res.status(404).json({ message: 'Không tìm thấy giao dịch.' });
+    return res.json({
+      payment_code: payment.payment_code,
+      booking_code: payment.booking_code,
+      payment_type: payment.payment_type,
+      amount: Number(payment.amount),
+      status: payment.status,
+    });
+  } catch (error) {
+    console.error('Get payment status error:', error);
+    return res.status(500).json({ message: 'Không thể kiểm tra trạng thái giao dịch.' });
+  }
+}
+
 async function confirmPaymentRequest(req, res) {
   try {
     const paymentCode = String(req.params?.paymentCode || '').trim();
@@ -111,4 +133,4 @@ async function confirmPaymentRequest(req, res) {
   }
 }
 
-module.exports = { createPayment, getPaymentList, getCustomerPaymentList, confirmPaymentRequest };
+module.exports = { createPayment, getPaymentList, getCustomerPaymentList, getPaymentStatusRequest, confirmPaymentRequest };

@@ -15,13 +15,15 @@ const jwt = require('jsonwebtoken');
 const { getPool, ensureAuthTables } = require('./config/db');
 const { cancelExpiredBookings } = require('./dao/bookingDao');
 // Seed data đã được tắt để dùng dữ liệu mẫu bạn insert trực tiếp trong SQL Server.
-const { getHomeData, getRoomTypes, getRoomTypeDetails, getPromotions, getServices, getReviews } = require('./controllers/homeController');
+const { getHomeData, getRoomTypes, getRoomTypeDetails, getPromotions, getServices, getActiveServiceById, getReviews } = require('./controllers/homeController');
 const { register, login, logout, verifyEmail, forgotPassword, resetPassword } = require('./controllers/authController');
 const { checkAvailability, getAvailableRooms } = require('./controllers/roomController');
 const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, updateBookingHandler, cancelBookingHandler, getActiveBookingsHandler, checkOutBookingHandler, finishRoomCleaningHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
 const serviceController = require('./controllers/serviceController');
-const { requireCustomer, requirePaymentStaff } = require('./middleware/customerAuth');
-const { createPayment, getPaymentList, getCustomerPaymentList, confirmPaymentRequest } = require('./controllers/paymentController');
+const { requireCustomer, requirePaymentStaff, requirePaymentActor } = require('./middleware/customerAuth');
+const { createPayment, getPaymentList, getCustomerPaymentList, getPaymentStatusRequest, confirmPaymentRequest } = require('./controllers/paymentController');
+const { handleVnpayReturn, handleVnpayIpn } = require('./controllers/vnpayController');
+const bookingServiceController = require('./controllers/bookingServiceController');
 const app = express();
 const PORT = 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
@@ -304,6 +306,7 @@ app.delete('/api/room-types/:roomTypeId', async (req, res) => {
 app.get('/api/promotions/active', getPromotions);
 // Lấy danh sách dịch vụ khách sạn
 app.get('/api/services', getServices);
+app.get('/api/services/:id', getActiveServiceById);
 app.get('/api/admin/services', serviceController.requireAdmin, serviceController.getServices);
 app.get('/api/admin/services/:id', serviceController.requireAdmin, serviceController.getServiceById);
 app.post('/api/admin/services', serviceController.requireAdmin, serviceController.createService);
@@ -338,11 +341,16 @@ app.get('/api/rooms/statuses', getRoomStatusesHandler);
 // 4. Lấy danh sách đặt phòng gần đây cho màn hình Dashboard Lễ tân
 app.get('/api/bookings/recent', getRecentBookingsHandler);
 app.get('/api/bookings/history', getBookingHistoryHandler);
+app.get('/api/bookings/:bookingId/services', bookingServiceController.requireBookingServiceReadAccess, bookingServiceController.getBookingServiceData);
+app.post('/api/bookings/:bookingId/services', bookingServiceController.requireBookingServiceWriteAccess, bookingServiceController.addBookingService);
 app.get('/api/bookings/active', getActiveBookingsHandler);
 app.post('/api/payments', requireCustomer, createPayment);
 app.get('/api/payments', requirePaymentStaff, getPaymentList);
 app.get('/api/payments/my', requireCustomer, getCustomerPaymentList);
+app.get('/api/payments/:paymentCode/status', requirePaymentActor, getPaymentStatusRequest);
 app.patch('/api/payments/:paymentCode/confirm', requirePaymentStaff, confirmPaymentRequest);
+app.get('/api/payments/vnpay/return', handleVnpayReturn);
+app.get('/api/payments/vnpay/ipn', handleVnpayIpn);
 
 
 // Upload ảnh chính cho loại phòng

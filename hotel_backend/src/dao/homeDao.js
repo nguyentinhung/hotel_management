@@ -136,6 +136,14 @@ async function getServices(activeOnly = true) {
   return result.recordset;
 }
 
+async function getActiveServiceById(id) {
+  const pool = await getPool();
+  const result = await pool.request()
+    .input('id', sql.Int, id)
+    .query(`SELECT id, name, description, price, unit, is_active FROM services WHERE id = @id AND is_active = 1 AND is_deleted = 0;`);
+  return result.recordset[0] || null;
+}
+
 async function getReviews() {
   const pool = await getPool();
   const result = await pool.request().query(`
@@ -162,5 +170,6 @@ module.exports = {
   getRoomTypeById,
   getPromotions,
   getServices,
+  getActiveServiceById,
   getReviews,
 };

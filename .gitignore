@@ -5,9 +5,9 @@
 .env
 .env.local
 .env.*.local
+!hotel_backend/.env.example
 dist/
 build/
 .idea/
 hotel_backend/uploads/*
 *.tsbuildinfo
-hotel_backend/.env.example
