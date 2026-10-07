@@ -4,11 +4,13 @@ import ServiceForm from '../components/ServiceForm';
 import type { Service, ServiceRequest } from '../types/Service';
 import { getServiceById, updateService } from '../services/serviceService';
 import './service-management.css';
+import { useToast } from '../components/ToastProvider';
 
 export default function ServiceEditPage() {
     const { id } = useParams();
     const navigate = useNavigate();
     const [service, setService] = useState<Service | null>(null);
+    const { showToast } = useToast();
 
     useEffect(() => {
         const loadService = async () => {
@@ -18,7 +20,7 @@ export default function ServiceEditPage() {
                 setService(data);
             } catch (error) {
                 console.error(error);
-                alert('Cannot load service.');
+                showToast('Không thể tải dịch vụ.', 'error');
             }
         };
 
@@ -29,11 +31,11 @@ export default function ServiceEditPage() {
         try {
             if (!id) return;
             await updateService(Number(id), data);
-            alert('Service updated successfully.');
+            showToast('Cập nhật dịch vụ thành công.', 'success');
             navigate(`/services/${id}`);
         } catch (error) {
             console.error(error);
-            alert(error instanceof Error ? error.message : 'Cannot update service.');
+            showToast(error instanceof Error ? error.message : 'Không thể cập nhật dịch vụ.', 'error');
         }
     };
 

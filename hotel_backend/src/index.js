@@ -18,15 +18,16 @@ const { cancelExpiredBookings } = require('./dao/bookingDao');
 const { getHomeData, getRoomTypes, getRoomTypeDetails, getPromotions, getServices, getActiveServiceById, getReviews } = require('./controllers/homeController');
 const { register, login, logout, verifyEmail, forgotPassword, resetPassword } = require('./controllers/authController');
 const { checkAvailability, getAvailableRooms } = require('./controllers/roomController');
-const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, updateBookingHandler, cancelBookingHandler, getActiveBookingsHandler, checkOutBookingHandler, finishRoomCleaningHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
+const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, updateBookingHandler, cancelBookingHandler, getActiveBookingsHandler, checkOutBookingHandler, finishRoomCleaningHandler, reportRoomMaintenanceHandler, getRoomMaintenanceReportsHandler, resolveRoomMaintenanceReportHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
 const serviceController = require('./controllers/serviceController');
 const { requireCustomer, requirePaymentStaff, requirePaymentActor } = require('./middleware/customerAuth');
-const { createPayment, getPaymentList, getCustomerPaymentList, getPaymentStatusRequest, confirmPaymentRequest } = require('./controllers/paymentController');
+const { createPayment, getPaymentList, getCustomerPaymentList, getPaymentStatusRequest, confirmPaymentRequest, simulateDepositPaymentRequest } = require('./controllers/paymentController');
 const { handleVnpayReturn, handleVnpayIpn } = require('./controllers/vnpayController');
 const bookingServiceController = require('./controllers/bookingServiceController');
 const app = express();
 const PORT = 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
+const vnpayEnabled = String(process.env.VNPAY_ENABLED || '').toLowerCase() === 'true';
 const uploadsDir = path.join(__dirname, '../uploads');
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -336,6 +337,9 @@ app.post('/api/bookings/:bookingId/check-out', checkOutBookingHandler);
 app.get('/api/bookings/:bookingId/assignable-rooms', getAssignableRoomsHandler);
 app.post('/api/bookings/:bookingId/assign-room', assignRoomHandler);
 app.post('/api/rooms/:roomId/cleaning-complete', finishRoomCleaningHandler);
+app.post('/api/rooms/:roomId/maintenance-report', reportRoomMaintenanceHandler);
+app.get('/api/rooms/maintenance-reports', getRoomMaintenanceReportsHandler);
+app.post('/api/rooms/maintenance-reports/:reportId/resolve', resolveRoomMaintenanceReportHandler);
 app.get('/api/rooms/statuses', getRoomStatusesHandler);
 
 // 4. Lấy danh sách đặt phòng gần đây cho màn hình Dashboard Lễ tân
@@ -349,8 +353,11 @@ app.get('/api/payments', requirePaymentStaff, getPaymentList);
 app.get('/api/payments/my', requireCustomer, getCustomerPaymentList);
 app.get('/api/payments/:paymentCode/status', requirePaymentActor, getPaymentStatusRequest);
 app.patch('/api/payments/:paymentCode/confirm', requirePaymentStaff, confirmPaymentRequest);
-app.get('/api/payments/vnpay/return', handleVnpayReturn);
-app.get('/api/payments/vnpay/ipn', handleVnpayIpn);
+app.post('/api/payments/:paymentCode/simulate', requireCustomer, simulateDepositPaymentRequest);
+if (vnpayEnabled) {
+  app.get('/api/payments/vnpay/return', handleVnpayReturn);
+  app.get('/api/payments/vnpay/ipn', handleVnpayIpn);
+}
 
 
 // Upload ảnh chính cho loại phòng
@@ -476,6 +483,15 @@ async function bootstrap() {
     IF COL_LENGTH('dbo.room_type_images', 'mime_type') IS NULL
       ALTER TABLE dbo.room_type_images ADD mime_type VARCHAR(100) NULL;
   `);
+  const serviceSchema = await pool.request().query(`
+    SELECT DB_NAME() AS database_name,
+           CASE WHEN COL_LENGTH(N'dbo.services', N'is_deleted') IS NULL THEN 0 ELSE 1 END AS has_is_deleted;
+  `);
+  if (!serviceSchema.recordset[0]?.has_is_deleted) {
+    throw new Error(
+      `Database migration did not create dbo.services.is_deleted in "${serviceSchema.recordset[0]?.database_name ?? 'unknown'}". Run sql/add_services_is_deleted.sql against the database used by the backend.`,
+    );
+  }
   const legacyImages = await pool.request().query(`
     SELECT id, room_type_id, image_url
     FROM dbo.room_type_images

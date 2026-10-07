@@ -1,6 +1,8 @@
 const jwt = require('jsonwebtoken');
 const { getServiceableBookingRooms, getBookingServices, addServiceToCheckedInBooking } = require('../dao/bookingServiceDao');
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
+const roleCodeById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
+const getRoleCode = (claims) => roleCodeById[Number(claims.role_id)] || String(claims.role_code || '').toUpperCase();
 
 function requireReceptionOrAdmin(req, res, next) {
   const authorization = req.headers.authorization || '';
@@ -8,7 +10,7 @@ function requireReceptionOrAdmin(req, res, next) {
   if (!token) return res.status(401).json({ message: 'Vui lòng đăng nhập để tiếp tục.' });
   try {
     const claims = jwt.verify(token, JWT_SECRET);
-    if (![2, 4].includes(Number(claims.role_id)) && !['RECEPTIONIST', 'ADMIN'].includes(String(claims.role_code || '').toUpperCase())) {
+    if (!['RECEPTIONIST', 'ADMIN'].includes(getRoleCode(claims))) {
       return res.status(403).json({ message: 'Chỉ lễ tân hoặc quản trị viên được thao tác dịch vụ của booking.' });
     }
     req.staffClaims = claims;
@@ -24,12 +26,12 @@ function requireBookingServiceReadAccess(req, res, next) {
   if (!token) return res.status(401).json({ message: 'Vui lòng đăng nhập để tiếp tục.' });
   try {
     const claims = jwt.verify(token, JWT_SECRET);
-    const roleCode = String(claims.role_code || '').toUpperCase();
-    if ([2, 4].includes(Number(claims.role_id)) || ['RECEPTIONIST', 'ADMIN'].includes(roleCode)) {
+    const roleCode = getRoleCode(claims);
+    if (['RECEPTIONIST', 'ADMIN'].includes(roleCode)) {
       req.bookingServiceCustomerId = null;
       return next();
     }
-    if ((Number(claims.role_id) === 1 || roleCode === 'CUSTOMER') && claims.user_id) {
+    if (roleCode === 'CUSTOMER' && claims.user_id) {
       req.bookingServiceCustomerId = claims.user_id;
       return next();
     }
@@ -45,12 +47,12 @@ function requireBookingServiceWriteAccess(req, res, next) {
   if (!token) return res.status(401).json({ message: 'Vui lòng đăng nhập để tiếp tục.' });
   try {
     const claims = jwt.verify(token, JWT_SECRET);
-    const roleCode = String(claims.role_code || '').toUpperCase();
-    if ([2, 4].includes(Number(claims.role_id)) || ['RECEPTIONIST', 'ADMIN'].includes(roleCode)) {
+    const roleCode = getRoleCode(claims);
+    if (['RECEPTIONIST', 'ADMIN'].includes(roleCode)) {
       req.bookingServiceCustomerId = null;
       return next();
     }
-    if ((Number(claims.role_id) === 1 || roleCode === 'CUSTOMER') && claims.user_id) {
+    if (roleCode === 'CUSTOMER' && claims.user_id) {
       req.bookingServiceCustomerId = claims.user_id;
       return next();
     }

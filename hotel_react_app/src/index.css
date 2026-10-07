@@ -2975,6 +2975,20 @@ a:focus-visible {
 .room-status-cleaning { background: #fef3c7; color: #92400e; }
 .room-status-maintenance { background: #fee2e2; color: #991b1b; }
 
+.app-toast-region { position: fixed; z-index: 5000; top: 22px; right: 22px; width: min(420px, calc(100vw - 32px)); pointer-events: none; }
+.app-toast { display: flex; align-items: flex-start; gap: 12px; padding: 15px 14px; border: 1px solid #d9e5e2; border-radius: 14px; background: #fff; color: #173f3e; box-shadow: 0 16px 42px rgba(15, 45, 45, 0.2); pointer-events: auto; animation: app-toast-enter 180ms ease-out; }
+.app-toast-success { border-color: #a7dbc0; }
+.app-toast-error { border-color: #f2b6b6; color: #8c2222; }
+.app-toast-info { border-color: #bfd5e8; }
+.app-toast-icon { display: grid; width: 25px; height: 25px; flex: 0 0 auto; place-items: center; border-radius: 50%; background: #e5f5eb; color: #167342; font-weight: 800; }
+.app-toast-error .app-toast-icon { background: #fee9e9; color: #a12222; }
+.app-toast-info .app-toast-icon { background: #eaf3fb; color: #225d91; }
+.app-toast-message { flex: 1; padding-top: 2px; font-size: 0.94rem; line-height: 1.45; }
+.app-toast-close { width: 26px; height: 26px; border: 0; border-radius: 7px; background: transparent; color: #627371; font-size: 1.25rem; cursor: pointer; }
+.app-toast-close:hover { background: #f0f4f3; }
+@keyframes app-toast-enter { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 600px) { .app-toast-region { top: 12px; right: 12px; width: calc(100vw - 24px); } }
+
 .room-status-panel { display: grid; gap: 18px; }
 .room-status-legend { display: flex; flex-wrap: wrap; gap: 9px; }
 .room-status-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
@@ -2991,6 +3005,11 @@ a:focus-visible {
   box-shadow: 0 4px 14px rgba(15, 61, 62, 0.04);
 }
 .room-status-card > div { display: grid; gap: 4px; }
+.room-status-card > .room-status-card-badges { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.room-status-card-badges .room-status-available { color: #166534; }
+.room-status-card-badges .room-status-occupied { color: #1d4ed8; }
+.room-status-card-badges .room-status-cleaning { color: #92400e; }
+.room-status-card-badges .room-status-maintenance { color: #991b1b; }
 .room-status-card > div span, .room-status-message { color: var(--muted); font-size: 0.88rem; }
 
 .room-management-page { display: grid; gap: 24px; }

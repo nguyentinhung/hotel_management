@@ -1,5 +1,6 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import api from '../services/api';
+import { useToast } from '../components/ToastProvider';
 
 type RoomType = {
   id: number;
@@ -39,6 +40,7 @@ const formatPrice = (price: number) => new Intl.NumberFormat('vi-VN', {
 }).format(price);
 
 export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean }) {
+  const { showToast } = useToast();
   const [roomTypes, setRoomTypes] = useState<RoomType[]>([]);
   const [form, setForm] = useState<RoomTypeForm>(emptyForm);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -77,7 +79,9 @@ export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean
       const details = await api.get<RoomType>(`/api/room-types/${roomTypeId}`);
       setSelectedRoomType(details);
     } catch (detailsLoadError) {
-      setDetailsError(detailsLoadError instanceof Error ? detailsLoadError.message : 'Không thể tải chi tiết loại phòng.');
+      const message = detailsLoadError instanceof Error ? detailsLoadError.message : 'Không thể tải chi tiết loại phòng.';
+      setDetailsError(message);
+      showToast(message, 'error');
     } finally {
       setIsDetailsLoading(false);
     }
@@ -90,7 +94,9 @@ export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean
       setRoomTypes(data);
       setError('');
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Không tải được danh sách loại phòng.');
+      const message = loadError instanceof Error ? loadError.message : 'Không tải được danh sách loại phòng.';
+      setError(message);
+      showToast(message, 'error');
     } finally {
       setIsLoading(false);
     }
@@ -130,9 +136,12 @@ export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean
       const result = await api.deleteWithAuth<{ message: string }>(`/api/room-types/${roomTypeId}`, token);
       setRoomTypes((current) => current.filter((roomType) => roomType.id !== roomTypeId));
       setSuccess(result.message);
+      showToast(result.message, 'success');
       setPendingDeleteRoomType(null);
     } catch (deleteRequestError) {
-      setDeleteError(deleteRequestError instanceof Error ? deleteRequestError.message : 'Không thể xóa loại phòng.');
+      const message = deleteRequestError instanceof Error ? deleteRequestError.message : 'Không thể xóa loại phòng.';
+      setDeleteError(message);
+      showToast(message, 'error');
     } finally {
       setIsDeleting(false);
     }
@@ -149,6 +158,7 @@ export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean
 
     if (editingRoomTypeId == null && !selectedImage) {
       setError('Hãy chọn ảnh đại diện cho loại phòng mới.');
+      showToast('Hãy chọn ảnh đại diện cho loại phòng mới.', 'error');
       return;
     }
 
@@ -187,14 +197,19 @@ export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean
 
       setRoomTypes((current) => current.map((roomType) => roomType.id === savedRoomType!.id ? savedRoomType! : roomType));
       setSuccess(result.message);
+      showToast(result.message, 'success');
       setForm(emptyForm);
       setSelectedImage(null);
       setEditingRoomTypeId(null);
       setIsModalOpen(false);
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Không thể thêm loại phòng.');
+      const message = saveError instanceof Error ? saveError.message : 'Không thể thêm loại phòng.';
+      setError(message);
+      showToast(message, 'error');
       if (savedRoomType) {
-        setSuccess('Thông tin loại phòng đã được lưu. Ảnh chưa tải lên thành công; hãy thử tải ảnh lại.');
+        const warning = 'Thông tin loại phòng đã được lưu. Ảnh chưa tải lên thành công; hãy thử tải ảnh lại.';
+        setSuccess(warning);
+        showToast(warning, 'info');
       }
     } finally {
       setIsSaving(false);

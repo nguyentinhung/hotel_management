@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { verifyEmail } from '../services/authService';
+import { useToast } from '../components/ToastProvider';
 
 export default function VerifyEmailPage() {
+    const { showToast } = useToast();
     const [searchParams] = useSearchParams();
     const [message, setMessage] = useState('Đang xác thực email...');
     const [success, setSuccess] = useState(false);
@@ -15,7 +17,9 @@ export default function VerifyEmailPage() {
         const token = searchParams.get('token');
 
         if (!token) {
-            setMessage('Liên kết xác thực không hợp lệ.');
+            const errorMessage = 'Liên kết xác thực không hợp lệ.';
+            setMessage(errorMessage);
+            showToast(errorMessage, 'error');
             return;
         }
 
@@ -25,14 +29,13 @@ export default function VerifyEmailPage() {
             .then((response) => {
                 setSuccess(true);
                 setMessage(response.message);
+                showToast(response.message, 'success');
             })
             .catch((error) => {
                 setSuccess(false);
-                setMessage(
-                    error instanceof Error
-                        ? error.message
-                        : 'Xác thực email thất bại.'
-                );
+                const errorMessage = error instanceof Error ? error.message : 'Xác thực email thất bại.';
+                setMessage(errorMessage);
+                showToast(errorMessage, 'error');
             });
     }, [searchParams]);
 

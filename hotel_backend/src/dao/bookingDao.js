@@ -149,7 +149,7 @@ async function createWalkInBooking(data) {
   } else {
     // Tạo tài khoản khách hàng mới cho khách vãng lai
     const createUserResult = await pool.request()
-      .input('role_id', sql.TinyInt, 1) // 1: CUSTOMER
+      .input('role_id', sql.TinyInt, 1) // CUSTOMER
       .input('email', sql.VarChar(150), emailToUse)
       .input('password_hash', sql.VarChar(255), 'WALKIN_GUEST')
       .input('full_name', sql.NVarChar(255), guestFullName.trim())
@@ -965,12 +965,117 @@ async function updateRoomStatus(roomId, status, currentStatus = 'CLEANING') {
     .input('status', sql.VarChar(20), status)
     .input('currentStatus', sql.VarChar(20), currentStatus)
     .query(`
-      UPDATE rooms SET status = @status
+      UPDATE dbo.rooms
+      SET status = CASE
+        WHEN @currentStatus = 'CLEANING' AND @status = 'AVAILABLE' AND EXISTS (
+          SELECT 1 FROM dbo.room_problem_reports report
+          WHERE report.room_id = dbo.rooms.id AND report.status = 'OPEN'
+        ) THEN 'MAINTENANCE'
+        ELSE @status
+      END
       WHERE id = @roomId AND status = @currentStatus;
-      SELECT @@ROWCOUNT AS updated_count;
+      SELECT @@ROWCOUNT AS updated_count, (SELECT status FROM dbo.rooms WHERE id = @roomId) AS status;
     `);
   if (!result.recordset[0]?.updated_count) throw new Error('Room is not waiting for cleaning completion.');
-  return { room_id: roomId, status };
+  return { room_id: roomId, status: result.recordset[0].status };
+}
+
+async function reportRoomMaintenance({ roomId, reportedBy, description }) {
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+  await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+  try {
+    const roomResult = await transaction.request()
+      .input('roomId', sql.Int, Number(roomId))
+      .query(`SELECT id, status FROM dbo.rooms WITH (UPDLOCK, HOLDLOCK) WHERE id = @roomId;`);
+    const room = roomResult.recordset[0];
+    if (!room) throw new Error('Room not found.');
+    if (room.status !== 'CLEANING') throw new Error('Room is not waiting for cleaning completion.');
+
+    const existingResult = await transaction.request()
+      .input('roomId', sql.Int, Number(roomId))
+      .query(`
+        SELECT TOP (1) id
+        FROM dbo.room_problem_reports WITH (UPDLOCK, HOLDLOCK)
+        WHERE room_id = @roomId AND status = 'OPEN'
+        ORDER BY reported_at DESC;
+      `);
+    let reportId = existingResult.recordset[0]?.id;
+    if (!reportId) {
+      const reportResult = await transaction.request()
+        .input('roomId', sql.Int, Number(roomId))
+        .input('reportedBy', sql.BigInt, Number(reportedBy))
+        .input('title', sql.NVarChar(200), 'Phòng cần bảo trì')
+        .input('description', sql.NVarChar(sql.MAX), String(description || 'Nhân viên buồng phòng báo cần kiểm tra/bảo trì trước khi đưa phòng vào sử dụng.').trim())
+        .query(`
+          INSERT INTO dbo.room_problem_reports (room_id, reported_by, title, description, status, reported_at)
+          OUTPUT INSERTED.id
+          VALUES (@roomId, @reportedBy, @title, @description, 'OPEN', SYSUTCDATETIME());
+        `);
+      reportId = reportResult.recordset[0].id;
+    }
+    await transaction.commit();
+    return { report_id: Number(reportId), room_id: Number(roomId), room_status: 'CLEANING' };
+  } catch (error) {
+    try { await transaction.rollback(); } catch (rollbackError) { console.error('Maintenance report rollback error:', rollbackError); }
+    throw error;
+  }
+}
+
+async function getOpenRoomMaintenanceReports() {
+  const pool = await getPool();
+  const result = await pool.request().query(`
+    SELECT report.id, report.room_id, room.room_number, room.floor,
+      report.title, report.description, report.status, report.reported_at,
+      reporter.full_name AS reported_by_name
+    FROM dbo.room_problem_reports report
+    JOIN dbo.rooms room ON room.id = report.room_id
+    JOIN dbo.users reporter ON reporter.id = report.reported_by
+    WHERE report.status = 'OPEN'
+    ORDER BY report.reported_at DESC;
+  `);
+  return result.recordset;
+}
+
+async function resolveRoomMaintenanceReport(reportId) {
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+  await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+  try {
+    const reportResult = await transaction.request()
+      .input('reportId', sql.BigInt, Number(reportId))
+      .query(`
+        SELECT TOP (1) id, room_id
+        FROM dbo.room_problem_reports WITH (UPDLOCK, HOLDLOCK)
+        WHERE id = @reportId AND status = 'OPEN';
+      `);
+    const report = reportResult.recordset[0];
+    if (!report) throw new Error('Maintenance report not found or already resolved.');
+
+    await transaction.request()
+      .input('reportId', sql.BigInt, Number(reportId))
+      .query(`
+        UPDATE dbo.room_problem_reports
+        SET status = 'RESOLVED', resolved_at = SYSUTCDATETIME()
+        WHERE id = @reportId AND status = 'OPEN';
+      `);
+    await transaction.request()
+      .input('roomId', sql.Int, Number(report.room_id))
+      .query(`
+        UPDATE dbo.rooms
+        SET status = 'AVAILABLE'
+        WHERE id = @roomId AND status = 'MAINTENANCE'
+          AND NOT EXISTS (
+            SELECT 1 FROM dbo.room_problem_reports
+            WHERE room_id = @roomId AND status = 'OPEN'
+          );
+      `);
+    await transaction.commit();
+    return { report_id: Number(reportId), room_id: Number(report.room_id), status: 'RESOLVED' };
+  } catch (error) {
+    try { await transaction.rollback(); } catch (rollbackError) { console.error('Resolve maintenance report rollback error:', rollbackError); }
+    throw error;
+  }
 }
 
 async function getRoomStatuses() {
@@ -992,6 +1097,10 @@ async function getRoomStatuses() {
         JOIN bookings active_b ON active_b.id = active_br.booking_id
         WHERE active_br.room_id = r.id AND active_b.status = 'CHECKED_IN'
       ) THEN 'OCCUPIED' ELSE r.status END AS status,
+      CASE WHEN EXISTS (
+        SELECT 1 FROM dbo.room_problem_reports maintenance_report
+        WHERE maintenance_report.room_id = r.id AND maintenance_report.status = 'OPEN'
+      ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS has_open_maintenance_report,
       r.room_type_id, rt.name AS room_type_name
     FROM rooms r JOIN room_types rt ON rt.id = r.room_type_id
     ORDER BY r.floor, r.room_number;
@@ -1010,6 +1119,9 @@ module.exports = {
   getActiveBookings,
   checkOutBooking,
   updateRoomStatus,
+  reportRoomMaintenance,
+  getOpenRoomMaintenanceReports,
+  resolveRoomMaintenanceReport,
   getRoomStatuses,
   getAssignableRooms,
   assignRoomToBooking,

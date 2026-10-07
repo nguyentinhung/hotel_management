@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ServiceRequest } from '../types/Service';
+import { useToast } from './ToastProvider';
 
 interface ServiceFormProps {
     initialData?: ServiceRequest;
@@ -22,6 +23,7 @@ export default function ServiceForm({
     onSubmit,
     onCancel
 }: ServiceFormProps) {
+    const { showToast } = useToast();
     const [formData, setFormData] = useState<ServiceRequest>(initialData || emptyData);
     // Giá được giữ dạng chuỗi để người dùng gõ trực tiếp bằng bàn phím
     const [priceText, setPriceText] = useState<string>(
@@ -56,23 +58,23 @@ export default function ServiceForm({
         event.preventDefault();
 
         if (!formData.name.trim()) {
-            alert('Service name is required.');
+            showToast('Vui lòng nhập tên dịch vụ.', 'error');
             return;
         }
 
         if (priceText === '') {
-            alert('Price is required.');
+            showToast('Vui lòng nhập giá dịch vụ.', 'error');
             return;
         }
 
         const price = Number(priceText);
         if (!Number.isFinite(price) || price < 0) {
-            alert('Price must be a valid number and cannot be negative.');
+            showToast('Giá dịch vụ phải là số hợp lệ và không được âm.', 'error');
             return;
         }
 
         if (!formData.unit.trim()) {
-            alert('Unit is required.');
+            showToast('Vui lòng nhập đơn vị tính.', 'error');
             return;
         }
 

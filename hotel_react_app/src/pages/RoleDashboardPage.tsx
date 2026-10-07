@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import ReceptionRoomBooking from '../components/ReceptionRoomBooking';
 import RoomTypesPage from './RoomTypesPage';
 import ServiceListPage from './ServiceListPage';
 import BookingServicePanel from '../components/BookingServicePanel';
 import type { Role } from '../types';
-import { assignRoomToBooking, cancelBooking, finishRoomCleaning, getActiveBookings, getAssignableRooms, getBookingHistory, getRoomStatuses, updateBooking, type RoomStatusRecord } from '../services/roomService';
+import { assignRoomToBooking, cancelBooking, finishRoomCleaning, getActiveBookings, getAssignableRooms, getBookingHistory, getRoomStatuses, getRoomMaintenanceReports, reportRoomMaintenance, resolveRoomMaintenanceReport, updateBooking, type RoomMaintenanceReport, type RoomStatusRecord } from '../services/roomService';
 import type { RecentBooking } from '../types';
 import PaymentList from '../components/PaymentList';
 import { logout } from '../services/authService';
+import { resolveRole } from '../utils/role';
+import { useToast } from '../components/ToastProvider';
 
 /**
  * ============================================================================
@@ -69,19 +72,6 @@ const dashboardConfig: Record<
   },
 };
 
-const roleFromId = (roleId?: number): Role => {
-  switch (roleId) {
-    case 4:
-      return 'ADMIN';
-    case 2:
-      return 'RECEPTIONIST';
-    case 3:
-      return 'HOUSEKEEPER';
-    default:
-      return 'CUSTOMER';
-  }
-};
-
 const nextDate = (date: string) => {
   if (!date) return '';
   const value = new Date(`${date}T00:00:00Z`);
@@ -91,22 +81,53 @@ const nextDate = (date: string) => {
 
 function RoomStatusPanel({ role }: { role: Role }) {
   const [rooms, setRooms] = useState<RoomStatusRecord[]>([]);
-  const [message, setMessage] = useState('');
+  const [maintenanceReports, setMaintenanceReports] = useState<RoomMaintenanceReport[]>([]);
+  const { showToast } = useToast();
   const reload = async () => {
     const token = localStorage.getItem('accessToken');
     if (!token) return;
-    try { setRooms((await getRoomStatuses(token)).rooms); }
-    catch (error) { setMessage(error instanceof Error ? error.message : 'Không tải được danh sách phòng.'); }
+    try {
+      const roomResult = await getRoomStatuses(token);
+      setRooms(roomResult.rooms);
+      if (role === 'ADMIN') setMaintenanceReports((await getRoomMaintenanceReports(token)).reports);
+    }
+    catch (error) { showToast(error instanceof Error ? error.message : 'Không tải được danh sách phòng.', 'error'); }
   };
   useEffect(() => { void reload(); }, []);
-  const updateStatus = async (room: RoomStatusRecord, status: 'AVAILABLE' | 'MAINTENANCE') => {
+  const updateStatus = async (room: RoomStatusRecord, status: 'AVAILABLE' | 'MAINTENANCE' = 'AVAILABLE') => {
     const token = localStorage.getItem('accessToken');
     if (!token) return;
     try {
       const result = await finishRoomCleaning(room.id, token, room.status, status);
-      setMessage(result.message);
+      showToast(result.message, 'success');
       await reload();
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Không cập nhật được trạng thái phòng.'); }
+    } catch (error) { showToast(error instanceof Error ? error.message : 'Không cập nhật được trạng thái phòng.', 'error'); }
+  };
+  const reportMaintenance = async (room: RoomStatusRecord) => {
+    const token = localStorage.getItem('accessToken');
+    if (!token) return;
+    try {
+      const result = await reportRoomMaintenance(room.id, token);
+      setRooms((current) => current.map((item) => item.id === room.id
+        ? { ...item, has_open_maintenance_report: true }
+        : item));
+      showToast(result.message, 'success');
+      await reload();
+      // Keep the housekeeping card in sync even if an older backend response
+      // omits the report flag from its room status payload.
+      setRooms((current) => current.map((item) => item.id === room.id
+        ? { ...item, has_open_maintenance_report: true }
+        : item));
+    } catch (error) { showToast(error instanceof Error ? error.message : 'Không gửi được báo cáo bảo trì.', 'error'); }
+  };
+  const closeMaintenanceReport = async (report: RoomMaintenanceReport) => {
+    const token = localStorage.getItem('accessToken');
+    if (!token) return;
+    try {
+      const result = await resolveRoomMaintenanceReport(report.id, token);
+      showToast(result.message, 'success');
+      await reload();
+    } catch (error) { showToast(error instanceof Error ? error.message : 'Không đóng được báo cáo bảo trì.', 'error'); }
   };
   const names = { AVAILABLE: 'Sẵn sàng', OCCUPIED: 'Đang có khách', CLEANING: 'Đang dọn', MAINTENANCE: 'Bảo trì' };
   const visibleRooms = role === 'HOUSEKEEPER' ? rooms.filter((room) => room.status === 'CLEANING') : rooms;
@@ -114,29 +135,39 @@ function RoomStatusPanel({ role }: { role: Role }) {
   return <div className="room-status-panel">
     <div className="room-status-legend">
       {legendEntries.map(([status, name]) => <span key={status} className={`room-status-badge room-status-${status.toLowerCase()}`}>{status} · {name}</span>)}
+      {role === 'HOUSEKEEPER' && <button className="btn btn-outline btn-sm" type="button" onClick={() => void reload()}>Làm mới</button>}
     </div>
-    {message && <p className="room-status-message">{message}</p>}
     {role === 'HOUSEKEEPER' && visibleRooms.length === 0 && <p>Hiện không có phòng cần dọn.</p>}
     <div className="room-status-grid">{visibleRooms.map((room) => <article className="room-status-card" key={room.id}>
       <div><strong>Phòng {room.room_number}</strong><span>{room.room_type_name} · Tầng {room.floor}</span></div>
-      <span className={`room-status-badge room-status-${room.status.toLowerCase()}`}>{names[room.status]}</span>
-      {room.status === 'CLEANING' && <>
-        <button className="btn btn-primary btn-sm" onClick={() => void updateStatus(room, 'AVAILABLE')}>Đã dọn xong</button>
-        <button className="btn btn-outline btn-sm" onClick={() => void updateStatus(room, 'MAINTENANCE')}>Báo cần bảo trì</button>
+      <div className="room-status-card-badges">
+        <span className={`room-status-badge room-status-${room.status.toLowerCase()}`}>{names[room.status]}</span>
+        {room.has_open_maintenance_report && <span className="room-status-badge room-status-maintenance">Đã báo bảo trì</span>}
+      </div>
+      {role === 'HOUSEKEEPER' && room.status === 'CLEANING' && <>
+        <button className="btn btn-primary btn-sm" onClick={() => void updateStatus(room)}>Đã dọn xong</button>
+        <button className="btn btn-outline btn-sm" disabled={room.has_open_maintenance_report} onClick={() => void reportMaintenance(room)}>{room.has_open_maintenance_report ? 'Đã báo bảo trì' : 'Báo cần bảo trì'}</button>
       </>}
       {role === 'ADMIN' && room.status === 'AVAILABLE' && <button className="btn btn-outline btn-sm" onClick={() => void updateStatus(room, 'MAINTENANCE')}>Đánh dấu bảo trì</button>}
-      {role === 'ADMIN' && room.status === 'MAINTENANCE' && <button className="btn btn-primary btn-sm" onClick={() => void updateStatus(room, 'AVAILABLE')}>Đã sửa xong</button>}
+      {role === 'ADMIN' && room.status === 'MAINTENANCE' && <button className="btn btn-primary btn-sm" onClick={() => void updateStatus(room, 'AVAILABLE')}>Đã bảo trì xong</button>}
     </article>)}</div>
+    {role === 'ADMIN' && <section className="room-status-section">
+      <div className="room-management-heading"><div><h3>Báo cáo bảo trì đang mở</h3><p>Báo cáo không tự hoàn tất việc dọn phòng.</p></div><span className="room-assignment-count">{maintenanceReports.length} báo cáo</span></div>
+      {maintenanceReports.length ? <div className="room-assignment-list">{maintenanceReports.map((report) => <article className="room-assignment-card" key={report.id}>
+        <div className="room-assignment-details"><strong>Phòng {report.room_number} · {report.title}</strong><span>{report.description}</span><span>Người báo: {report.reported_by_name} · {new Date(report.reported_at).toLocaleString('vi-VN')}</span></div>
+        <button className="btn btn-primary btn-sm" onClick={() => void closeMaintenanceReport(report)}>Đã bảo trì xong</button>
+      </article>)}</div> : <p className="room-empty-state">Không có báo cáo bảo trì đang mở.</p>}
+    </section>}
   </div>;
 }
 
 function ReceptionRoomManagement() {
+  const { showToast } = useToast();
   const [rooms, setRooms] = useState<RoomStatusRecord[]>([]);
   const [bookings, setBookings] = useState<RecentBooking[]>([]);
   const [selectedBooking, setSelectedBooking] = useState<RecentBooking | null>(null);
   const [roomSlots, setRoomSlots] = useState<{ booking_room_id: number; room_type_id: number; room_type_name: string; assigned_room_id: number | null; rooms: RoomStatusRecord[] }[]>([]);
   const [selectedRoomIds, setSelectedRoomIds] = useState<Record<number, string>>({});
-  const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const token = () => localStorage.getItem('accessToken') || '';
   const reload = async () => {
@@ -146,12 +177,11 @@ function ReceptionRoomManagement() {
       const [roomResult, bookingResult] = await Promise.all([getRoomStatuses(accessToken), getActiveBookings(accessToken)]);
       setRooms(roomResult.rooms);
       setBookings(bookingResult.bookings);
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Không tải được dữ liệu phòng.'); }
+    } catch (error) { showToast(error instanceof Error ? error.message : 'Không tải được dữ liệu phòng.', 'error'); }
   };
   useEffect(() => { void reload(); }, []);
   const selectBooking = async (booking: RecentBooking) => {
     setLoading(true);
-    setMessage('');
     setSelectedBooking(booking);
     setSelectedRoomIds({});
     setRoomSlots([]);
@@ -160,8 +190,8 @@ function ReceptionRoomManagement() {
       if (!Array.isArray(result.room_slots)) throw new Error('Backend chưa hỗ trợ gán nhiều phòng. Hãy khởi động lại hotel_backend rồi thử lại.');
       setRoomSlots(result.room_slots);
       setSelectedRoomIds(Object.fromEntries(result.room_slots.filter((slot) => slot.assigned_room_id && slot.rooms.some((room) => room.id === slot.assigned_room_id)).map((slot) => [slot.booking_room_id, String(slot.assigned_room_id)])));
-      setMessage(`Booking này có ${result.room_slots.length} phòng cần được gán. Chọn số phòng riêng cho từng dòng.`);
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Không tải được danh sách phòng phù hợp.'); }
+      showToast(`Đã tải ${result.room_slots.length} phòng cần gán. Chọn số phòng cho từng dòng.`, 'info');
+    } catch (error) { showToast(error instanceof Error ? error.message : 'Không tải được danh sách phòng phù hợp.', 'error'); }
     finally { setLoading(false); }
   };
   const saveAssignment = async () => {
@@ -169,11 +199,11 @@ function ReceptionRoomManagement() {
     setLoading(true);
     try {
       const result = await assignRoomToBooking(selectedBooking.id, roomSlots.map((slot) => ({ booking_room_id: slot.booking_room_id, room_id: Number(selectedRoomIds[slot.booking_room_id]) })), token());
-      setMessage(result.message);
+      showToast(result.message, 'success');
       setSelectedBooking(null);
       setRoomSlots([]);
       await reload();
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Không gán được phòng. Hãy tải lại danh sách.'); }
+    } catch (error) { showToast(error instanceof Error ? error.message : 'Không gán được phòng. Hãy tải lại danh sách.', 'error'); }
     finally { setLoading(false); }
   };
   const names = { AVAILABLE: 'Sẵn sàng', OCCUPIED: 'Đang có khách', CLEANING: 'Đang dọn', MAINTENANCE: 'Bảo trì' };
@@ -202,16 +232,15 @@ function ReceptionRoomManagement() {
         </div> : <button className="btn btn-secondary btn-sm" onClick={() => void selectBooking(booking)}>{booking.assigned_room_id ? 'Xem / đổi phòng' : 'Xem phòng phù hợp'}</button>}
       </article>)}</div> : <p className="room-empty-state">Hiện không có booking online nào chờ gán phòng.</p>}
     </section>
-    {message && <p className="room-status-message" role="status">{message}</p>}
   </div>;
 }
 
 function ReceptionBookingHistory({ customerMode = false }: { customerMode?: boolean }) {
+  const { showToast } = useToast();
   const [bookings, setBookings] = useState<RecentBooking[]>([]);
   const [selectedBooking, setSelectedBooking] = useState<RecentBooking | null>(null);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [actionMessage, setActionMessage] = useState('');
   const [draft, setDraft] = useState({ check_in_date: '', check_out_date: '', guest_full_name: '', guest_phone: '', guest_email: '', adults: 1, children: 0, special_request: '' });
   const [query, setQuery] = useState('');
   const [createdFrom, setCreatedFrom] = useState('');
@@ -223,17 +252,16 @@ function ReceptionBookingHistory({ customerMode = false }: { customerMode?: bool
   const [message, setMessage] = useState('Đang tải lịch sử booking...');
   const load = async () => {
     const accessToken = localStorage.getItem('accessToken');
-    if (!accessToken) { setMessage('Vui lòng đăng nhập lại.'); return; }
+    if (!accessToken) { setMessage('Vui lòng đăng nhập lại.'); showToast('Vui lòng đăng nhập lại.', 'error'); return; }
     try {
       const result = await getBookingHistory(accessToken);
       setBookings(result.bookings);
       setMessage(result.count ? '' : 'Chưa có booking nào trong lịch sử.');
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Không tải được lịch sử booking.'); }
+    } catch (error) { const message = error instanceof Error ? error.message : 'Không tải được lịch sử booking.'; setMessage(message); showToast(message, 'error'); }
   };
   const openBooking = (booking: RecentBooking) => {
     setSelectedBooking(booking);
     setEditing(false);
-    setActionMessage('');
     setDraft({
       check_in_date: String(booking.check_in_date).slice(0, 10),
       check_out_date: String(booking.check_out_date).slice(0, 10),
@@ -249,25 +277,27 @@ function ReceptionBookingHistory({ customerMode = false }: { customerMode?: bool
     event.preventDefault();
     if (!selectedBooking) return;
     const accessToken = localStorage.getItem('accessToken');
-    if (!accessToken) return setActionMessage('Vui lòng đăng nhập lại.');
+    if (!accessToken) return showToast('Vui lòng đăng nhập lại.', 'error');
     try {
       setSaving(true);
       await updateBooking(selectedBooking.id, draft, accessToken);
       await load();
       setSelectedBooking(null);
-    } catch (error) { setActionMessage(error instanceof Error ? error.message : 'Không thể cập nhật booking.'); }
+      showToast('Đã cập nhật booking.', 'success');
+    } catch (error) { showToast(error instanceof Error ? error.message : 'Không thể cập nhật booking.', 'error'); }
     finally { setSaving(false); }
   };
   const cancelSelectedBooking = async () => {
     if (!selectedBooking || !window.confirm(`Bạn có chắc muốn hủy booking ${selectedBooking.booking_code}?`)) return;
     const accessToken = localStorage.getItem('accessToken');
-    if (!accessToken) return setActionMessage('Vui lòng đăng nhập lại.');
+    if (!accessToken) return showToast('Vui lòng đăng nhập lại.', 'error');
     try {
       setSaving(true);
       await cancelBooking(selectedBooking.id, accessToken);
       await load();
       setSelectedBooking(null);
-    } catch (error) { setActionMessage(error instanceof Error ? error.message : 'Không thể hủy booking.'); }
+      showToast('Đã hủy booking.', 'success');
+    } catch (error) { showToast(error instanceof Error ? error.message : 'Không thể hủy booking.', 'error'); }
     finally { setSaving(false); }
   };
   useEffect(() => { void load(); }, []);
@@ -354,16 +384,14 @@ function ReceptionBookingHistory({ customerMode = false }: { customerMode?: bool
           <label>Người lớn<input type="number" required min={1} max={20} value={draft.adults} onChange={(event) => setDraft({ ...draft, adults: Number(event.target.value) })} /></label>
           <label>Trẻ em<input type="number" required min={0} max={20} value={draft.children} onChange={(event) => setDraft({ ...draft, children: Number(event.target.value) })} /></label>
           <label className="booking-edit-wide">Yêu cầu đặc biệt<textarea maxLength={500} rows={3} value={draft.special_request} onChange={(event) => setDraft({ ...draft, special_request: event.target.value })} /></label>
-          {actionMessage && <p className="inline-error booking-edit-wide">{actionMessage}</p>}
-          <div className="booking-detail-actions booking-edit-wide"><button className="btn btn-primary" type="submit" disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu thay đổi'}</button><button className="btn btn-outline" type="button" onClick={() => { setEditing(false); setActionMessage(''); }}>Quay lại</button></div>
+          <div className="booking-detail-actions booking-edit-wide"><button className="btn btn-primary" type="submit" disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu thay đổi'}</button><button className="btn btn-outline" type="button" onClick={() => setEditing(false)}>Quay lại</button></div>
         </form> : <>
           <dl className="booking-detail-grid"><div><dt>Khách hàng</dt><dd>{selectedBooking.guest_full_name}</dd></div><div><dt>Điện thoại</dt><dd>{selectedBooking.guest_phone}</dd></div><div><dt>Email</dt><dd>{selectedBooking.guest_email || '—'}</dd></div><div><dt>Loại phòng / phòng</dt><dd>{selectedBooking.room_type_name || '—'}{selectedBooking.room_number ? ` · P.${selectedBooking.room_number}` : ' · Chưa gán'}</dd></div><div><dt>Nhận phòng</dt><dd>{String(selectedBooking.check_in_date).slice(0, 10)}</dd></div><div><dt>Trả phòng</dt><dd>{String(selectedBooking.check_out_date).slice(0, 10)}</dd></div><div><dt>Số khách</dt><dd>{selectedBooking.adults} người lớn, {selectedBooking.children} trẻ em</dd></div><div><dt>Trạng thái</dt><dd>{selectedBooking.status}</dd></div><div><dt>Tổng tiền</dt><dd>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(selectedBooking.total_amount)}</dd></div><div><dt>Đã cọc</dt><dd>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(selectedBooking.deposit_amount)}</dd></div><div className="booking-detail-wide"><dt>Yêu cầu đặc biệt</dt><dd>{selectedBooking.special_request || 'Không có'}</dd></div></dl>
           <BookingServicePanel bookingId={selectedBooking.id} canAddServices={selectedBooking.status === 'CHECKED_IN' || (selectedBooking.status === 'CONFIRMED' && String(selectedBooking.check_in_date).slice(0, 10) <= localToday && String(selectedBooking.check_out_date).slice(0, 10) > localToday)} onTotalChange={(total) => {
             setSelectedBooking((current) => current ? { ...current, total_amount: total } : current);
             setBookings((current) => current.map((booking) => String(booking.id) === String(selectedBooking.id) ? { ...booking, total_amount: total } : booking));
           }} />
-          {actionMessage && <p className="inline-error">{actionMessage}</p>}
-          <div className="booking-detail-actions">{selectedBooking.status === 'CONFIRMED' && String(selectedBooking.check_in_date).slice(0, 10) > localToday ? <><button type="button" className="btn btn-primary" onClick={() => { setEditing(true); setActionMessage(''); }}>Cập nhật booking</button><button type="button" className="btn btn-outline" onClick={() => void cancelSelectedBooking()} disabled={saving}>Hủy booking</button></> : selectedBooking.status === 'CONFIRMED' ? <p className="booking-manage-note">Chỉ có thể cập nhật hoặc hủy trước ngày nhận phòng. Lễ tân có thể check-in trong ngày nhận phòng đến 18:00; sau thời điểm này booking sẽ tự hủy.</p> : null}<button type="button" className="btn btn-outline" onClick={() => setSelectedBooking(null)}>Đóng</button></div>
+          <div className="booking-detail-actions">{selectedBooking.status === 'CONFIRMED' && String(selectedBooking.check_in_date).slice(0, 10) > localToday ? <><button type="button" className="btn btn-primary" onClick={() => setEditing(true)}>Cập nhật booking</button><button type="button" className="btn btn-outline" onClick={() => void cancelSelectedBooking()} disabled={saving}>Hủy booking</button></> : selectedBooking.status === 'CONFIRMED' ? <p className="booking-manage-note">Chỉ có thể cập nhật hoặc hủy trước ngày nhận phòng. Lễ tân có thể check-in trong ngày nhận phòng đến 18:00; sau thời điểm này booking sẽ tự hủy.</p> : null}<button type="button" className="btn btn-outline" onClick={() => setSelectedBooking(null)}>Đóng</button></div>
         </>}
       </section>
     </div>}
@@ -371,6 +399,8 @@ function ReceptionBookingHistory({ customerMode = false }: { customerMode?: bool
 }
 
 export default function RoleDashboardPage({ role }: { role?: Role }) {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [currentRole, setCurrentRole] = useState<Role>(role ?? 'CUSTOMER');
   const [activeModule, setActiveModule] = useState<string>('');
 
@@ -381,19 +411,24 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
     }
 
     try {
-      const parsed = JSON.parse(storedUser) as { role_id?: number; role?: Role };
-      if (parsed.role_id) {
-        setCurrentRole(roleFromId(parsed.role_id));
-        return;
-      }
-
-      if (parsed.role && ['ADMIN', 'RECEPTIONIST', 'HOUSEKEEPER', 'CUSTOMER'].includes(parsed.role)) {
-        setCurrentRole(parsed.role);
+      const parsed = JSON.parse(storedUser) as { role_id?: number; role?: Role; role_code?: string; role_name?: string };
+      const resolvedRole = resolveRole(parsed);
+      if (resolvedRole) {
+        setCurrentRole(resolvedRole);
+        const routeByRole: Record<Role, string> = {
+          CUSTOMER: '/my-bookings',
+          RECEPTIONIST: '/reception',
+          HOUSEKEEPER: '/housekeeping',
+          ADMIN: '/admin',
+        };
+        if (location.pathname !== routeByRole[resolvedRole]) {
+          navigate(routeByRole[resolvedRole], { replace: true });
+        }
       }
     } catch {
       localStorage.removeItem('user');
     }
-  }, []);
+  }, [location.pathname, navigate]);
 
   const config = useMemo(() => dashboardConfig[currentRole], [currentRole]);
 

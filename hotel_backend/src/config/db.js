@@ -78,17 +78,26 @@ async function ensureAuthTables() {
   `);
 
   await currentPool.request().query(`
+    IF EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'CUSTOMER' AND id <> 1)
+       OR EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'RECEPTIONIST' AND id <> 2)
+       OR EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'HOUSEKEEPER' AND id <> 3)
+       OR EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'ADMIN' AND id <> 4)
+      THROW 50003, 'Built-in role IDs must be CUSTOMER=1, RECEPTIONIST=2, HOUSEKEEPER=3, ADMIN=4.', 1;
+    IF EXISTS (SELECT 1 FROM dbo.roles WHERE id BETWEEN 1 AND 4 AND code NOT IN ('CUSTOMER','RECEPTIONIST','HOUSEKEEPER','ADMIN'))
+      THROW 50004, 'Role IDs 1-4 are reserved for built-in roles.', 1;
+
+    SET IDENTITY_INSERT dbo.roles ON;
     IF NOT EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'CUSTOMER')
-      INSERT INTO dbo.roles (id, code, name) VALUES (1, 'CUSTOMER', 'Khách hàng');
-
+      INSERT INTO dbo.roles (id, code, name) VALUES (1, 'CUSTOMER', N'Khách hàng');
     IF NOT EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'RECEPTIONIST')
-      INSERT INTO dbo.roles (id, code, name) VALUES (2, 'RECEPTIONIST', 'Lễ tân');
-
+      INSERT INTO dbo.roles (id, code, name) VALUES (2, 'RECEPTIONIST', N'Lễ tân');
     IF NOT EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'HOUSEKEEPER')
-      INSERT INTO dbo.roles (id, code, name) VALUES (3, 'HOUSEKEEPER', 'Buồng phòng');
-
+      INSERT INTO dbo.roles (id, code, name) VALUES (3, 'HOUSEKEEPER', N'Buồng phòng');
     IF NOT EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'ADMIN')
-      INSERT INTO dbo.roles (id, code, name) VALUES (4, 'ADMIN', 'Quản trị viên');
+      INSERT INTO dbo.roles (id, code, name) VALUES (4, 'ADMIN', N'Quản trị viên');
+    SET IDENTITY_INSERT dbo.roles OFF;
+    DECLARE @roleIdentitySeed INT = ISNULL((SELECT MAX(id) FROM dbo.roles), 0);
+    DBCC CHECKIDENT ('dbo.roles', RESEED, @roleIdentitySeed);
   `);
 }
 

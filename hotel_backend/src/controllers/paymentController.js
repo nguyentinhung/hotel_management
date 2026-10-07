@@ -1,4 +1,4 @@
-const { makePayment, getPayments, getCustomerPayments, getPaymentStatus, confirmPayment } = require('../services/paymentService');
+const { makePayment, simulateDepositPayment, getPayments, getCustomerPayments, getPaymentStatus, confirmPayment } = require('../services/paymentService');
 
 async function createPayment(req, res) {
   try {
@@ -133,4 +133,20 @@ async function confirmPaymentRequest(req, res) {
   }
 }
 
-module.exports = { createPayment, getPaymentList, getCustomerPaymentList, getPaymentStatusRequest, confirmPaymentRequest };
+async function simulateDepositPaymentRequest(req, res) {
+  const paymentCode = String(req.params?.paymentCode || '').trim();
+  const succeeded = req.body?.succeeded;
+  if (!paymentCode) return res.status(400).json({ message: 'Thiếu mã thanh toán cần mô phỏng.' });
+  if (typeof succeeded !== 'boolean') return res.status(400).json({ message: 'Kết quả mô phỏng phải là thành công hoặc thất bại.' });
+
+  try {
+    const result = await simulateDepositPayment({ paymentCode, customerId: req.auth.userId, succeeded });
+    return res.json({ message: succeeded ? 'Mô phỏng thanh toán cọc thành công.' : 'Mô phỏng giao dịch thất bại.', ...result });
+  } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ message: error.message });
+    console.error('Simulate deposit payment error:', error);
+    return res.status(500).json({ message: 'Không thể mô phỏng thanh toán cọc.' });
+  }
+}
+
+module.exports = { createPayment, getPaymentList, getCustomerPaymentList, getPaymentStatusRequest, confirmPaymentRequest, simulateDepositPaymentRequest };

@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { createCustomerBooking, checkRoomAvailability } from '../services/roomService';
 import { createFinalPayment } from '../services/paymentService';
+import { resolveRole } from '../utils/role';
 import type { CustomerBookingResponse, RoomAvailabilityItem, ServiceItem } from '../types';
+import { useToast } from '../components/ToastProvider';
 
+const vnpayEnabled = import.meta.env.VITE_VNPAY_ENABLED === 'true';
 const dateValue = (date: Date) => date.toISOString().slice(0, 10);
 const tomorrowValue = () => {
   const tomorrow = new Date();
@@ -12,6 +15,8 @@ const tomorrowValue = () => {
 };
 
 export default function CustomerBookingPage() {
+  const { showToast } = useToast();
+  const navigate = useNavigate();
   const [params] = useSearchParams();
   const [checkIn, setCheckIn] = useState(params.get('check_in_date') || dateValue(new Date()));
   const [checkOut, setCheckOut] = useState(params.get('check_out_date') || tomorrowValue());
@@ -41,19 +46,15 @@ export default function CustomerBookingPage() {
         email?: string;
         phone?: string;
         role?: string;
+        role_code?: string;
+        role_name?: string;
         role_id?: number | string;
       };
     } catch {
       return {};
     }
   }, []);
-  const roleById: Record<number, string> = {
-    1: 'CUSTOMER',
-    2: 'RECEPTIONIST',
-    3: 'HOUSEKEEPER',
-    4: 'ADMIN',
-  };
-  const currentRole = localUser.role || roleById[Number(localUser.role_id)];
+  const currentRole = resolveRole(localUser);
 
   useEffect(() => {
     if (!accessToken || (currentRole && currentRole !== 'CUSTOMER')) {
@@ -118,14 +119,17 @@ export default function CustomerBookingPage() {
     if (!accessToken) return;
     if (new Date(`${checkIn}T00:00:00`) < new Date(`${dateValue(new Date())}T00:00:00`)) {
       setError('Ngày nhận phòng không thể ở quá khứ.');
+      showToast('Ngày nhận phòng không thể ở quá khứ.', 'error');
       return;
     }
     if (checkOut <= checkIn) {
       setError('Ngày trả phòng phải sau ngày nhận phòng.');
+      showToast('Ngày trả phòng phải sau ngày nhận phòng.', 'error');
       return;
     }
     if (!selectedRoomsAvailable || !selectedCapacityMatched) {
       setError('Các phòng đã chọn không còn đủ số lượng hoặc sức chứa. Vui lòng kiểm tra lại.');
+      showToast('Các phòng đã chọn không còn đủ số lượng hoặc sức chứa. Vui lòng kiểm tra lại.', 'error');
       return;
     }
 
@@ -146,19 +150,19 @@ export default function CustomerBookingPage() {
         },
         accessToken,
       );
-      try {
-        const deposit = await createFinalPayment(result.booking.booking_code, 'VNPAY', 'DEPOSIT');
-        if (deposit.payment_url) {
-          window.location.assign(deposit.payment_url);
-          return;
-        }
-        throw new Error('VNPay chưa trả về đường dẫn thanh toán.');
-      } catch (paymentError) {
-        setBooking(result.booking);
-        throw new Error(`Đã tạo booking ${result.booking.booking_code}, nhưng chưa tạo được giao dịch cọc. Hãy bấm thanh toán cọc để thử lại. ${paymentError instanceof Error ? paymentError.message : ''}`);
+      setBooking(result.booking);
+      const method = vnpayEnabled ? 'VNPAY' : 'SIMULATED';
+      const deposit = await createFinalPayment(result.booking.booking_code, method, 'DEPOSIT');
+      if (method === 'VNPAY') {
+        if (!deposit.payment_url) throw new Error('Backend không trả về đường dẫn VNPay.');
+        window.location.assign(deposit.payment_url);
+      } else {
+        navigate(`/make-payment?bookingCode=${encodeURIComponent(result.booking.booking_code)}&paymentType=DEPOSIT&paymentCode=${encodeURIComponent(deposit.payment_code)}`);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Không thể tạo đặt phòng. Vui lòng thử lại.');
+      const message = err instanceof Error ? err.message : 'Không thể tạo đặt phòng. Vui lòng thử lại.';
+      setError(message);
+      showToast(message, 'error');
     } finally {
       setIsSubmitting(false);
     }
@@ -201,16 +205,24 @@ export default function CustomerBookingPage() {
           <p>{booking.check_in_date} đến {booking.check_out_date} · {booking.nights} đêm</p>
           <p>Tổng tiền: <strong>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(booking.total_amount)}</strong></p>
           <p>Khoản cọc tối thiểu (30% tiền phòng): <strong>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(requiredDepositAmount)}</strong></p>
-          <p>Booking đã được tạo. Vui lòng hoàn tất cọc VNPay để xác nhận thanh toán.</p>
-          <button className="btn btn-primary" type="button" onClick={async () => {
-            try {
-              const deposit = await createFinalPayment(booking.booking_code, 'VNPAY', 'DEPOSIT');
-              if (!deposit.payment_url) throw new Error('VNPay chưa trả về đường dẫn thanh toán.');
-              window.location.assign(deposit.payment_url);
-            } catch (paymentError) {
-              setError(paymentError instanceof Error ? paymentError.message : 'Không thể tạo giao dịch cọc VNPay.');
-            }
-          }}>Thanh toán cọc bằng VNPay</button>
+          <p>{vnpayEnabled
+            ? 'Booking đã được tạo. Vui lòng hoàn tất cọc VNPay để xác nhận thanh toán.'
+            : 'Booking đã được tạo. Đang mở màn hình mô phỏng đã nhận tiền cọc bằng tiền mặt; không kết nối VNPay.'}</p>
+          {error && !vnpayEnabled && (
+            <button className="btn btn-primary" type="button" disabled={isSubmitting} onClick={async () => {
+              try {
+                setIsSubmitting(true);
+                const deposit = await createFinalPayment(booking.booking_code, 'SIMULATED', 'DEPOSIT');
+                navigate(`/make-payment?bookingCode=${encodeURIComponent(booking.booking_code)}&paymentType=DEPOSIT&paymentCode=${encodeURIComponent(deposit.payment_code)}`);
+              } catch (paymentError) {
+                const message = paymentError instanceof Error ? paymentError.message : 'Không thể tạo giao dịch mô phỏng.';
+                setError(message);
+                showToast(message, 'error');
+              } finally {
+                setIsSubmitting(false);
+              }
+            }}>{isSubmitting ? 'Đang mở mô phỏng...' : 'Thử tạo giao dịch mô phỏng lại'}</button>
+          )}
           {error && <p className="inline-error" role="alert">{error}</p>}
           <Link className="btn btn-primary" to="/">Về trang chủ</Link>
         </div>

@@ -68,6 +68,7 @@ export interface RoomStatusRecord {
   room_number: string;
   floor: number;
   status: 'AVAILABLE' | 'OCCUPIED' | 'CLEANING' | 'MAINTENANCE';
+  has_open_maintenance_report?: boolean;
   room_type_name: string;
 }
 
@@ -82,6 +83,27 @@ export const assignRoomToBooking = (bookingId: string | number, roomAssignments:
 
 export const finishRoomCleaning = (roomId: number, accessToken: string, currentStatus: 'AVAILABLE' | 'OCCUPIED' | 'CLEANING' | 'MAINTENANCE' = 'CLEANING', status: 'AVAILABLE' | 'MAINTENANCE' = 'AVAILABLE') =>
   api.post<{ success: boolean; message: string }>(`/api/rooms/${roomId}/cleaning-complete`, { status, current_status: currentStatus }, accessToken);
+
+export interface RoomMaintenanceReport {
+  id: number;
+  room_id: number;
+  room_number: string;
+  floor: number;
+  title: string;
+  description: string;
+  status: string;
+  reported_at: string;
+  reported_by_name: string;
+}
+
+export const reportRoomMaintenance = (roomId: number, accessToken: string, description?: string) =>
+  api.post<{ success: boolean; message: string }>(`/api/rooms/${roomId}/maintenance-report`, { description }, accessToken);
+
+export const getRoomMaintenanceReports = (accessToken: string) =>
+  api.get<{ success: boolean; reports: RoomMaintenanceReport[] }>('/api/rooms/maintenance-reports', accessToken);
+
+export const resolveRoomMaintenanceReport = (reportId: number, accessToken: string) =>
+  api.post<{ success: boolean; message: string }>(`/api/rooms/maintenance-reports/${reportId}/resolve`, {}, accessToken);
 
 export const getRecentBookings = async (limit = 10, accessToken?: string): Promise<{ success: boolean; bookings: RecentBooking[] }> => {
   const query = new URLSearchParams({ limit: String(limit) });

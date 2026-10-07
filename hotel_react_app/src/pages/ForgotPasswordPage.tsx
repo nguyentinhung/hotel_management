@@ -1,9 +1,11 @@
 import { FormEvent, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { forgotPassword } from '../services/authService';
+import { useToast } from '../components/ToastProvider';
 
 export default function ForgotPasswordPage() {
     const navigate = useNavigate();
+    const { showToast } = useToast();
 
     const [email, setEmail] = useState('');
     const [error, setError] = useState('');
@@ -19,6 +21,7 @@ export default function ForgotPasswordPage() {
             const response = await forgotPassword(email);
 
             setMessage(response.message);
+            showToast(response.message, 'success');
 
             localStorage.setItem('resetEmail', email);
 
@@ -27,11 +30,9 @@ export default function ForgotPasswordPage() {
             }, 1000);
 
         } catch (err) {
-            setError(
-                err instanceof Error
-                    ? err.message
-                    : 'Không thể gửi mã OTP.'
-            );
+            const message = err instanceof Error ? err.message : 'Không thể gửi mã OTP.';
+            setError(message);
+            showToast(message, 'error');
         }
     };
 

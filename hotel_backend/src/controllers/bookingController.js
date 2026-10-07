@@ -1,8 +1,13 @@
 const jwt = require('jsonwebtoken');
-const { createWalkInBooking, createCustomerBooking, checkInBooking, getRecentBookings, getActiveBookings, updateBooking, cancelBooking, checkOutBooking, updateRoomStatus, getRoomStatuses, getAssignableRooms, assignRoomToBooking } = require('../dao/bookingDao');
+const { createWalkInBooking, createCustomerBooking, checkInBooking, getRecentBookings, getActiveBookings, updateBooking, cancelBooking, checkOutBooking, updateRoomStatus, reportRoomMaintenance, getOpenRoomMaintenanceReports, resolveRoomMaintenanceReport, getRoomStatuses, getAssignableRooms, assignRoomToBooking } = require('../dao/bookingDao');
 const { makeReceptionCheckoutPayment } = require('../services/paymentService');
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
-const isCustomerClaims = (claims) => Number(claims.role_id) === 1 || String(claims.role_code || '').toUpperCase() === 'CUSTOMER';
+const roleCodeById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
+const hasRole = (claims, ...roles) => {
+  const roleCode = roleCodeById[Number(claims.role_id)] || String(claims.role_code || '').toUpperCase();
+  return roles.includes(roleCode);
+};
+const isCustomerClaims = (claims) => hasRole(claims, 'CUSTOMER');
 
 async function createCustomerBookingHandler(req, res) {
   const authorization = req.headers.authorization || '';
@@ -16,7 +21,7 @@ async function createCustomerBookingHandler(req, res) {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.' });
   }
 
-  if (Number(claims.role_id) !== 1 || !claims.user_id) {
+  if (!isCustomerClaims(claims) || !claims.user_id) {
     return res.status(403).json({ success: false, message: 'Chỉ tài khoản khách hàng mới có thể đặt phòng trực tuyến.' });
   }
 
@@ -101,7 +106,7 @@ async function checkInBookingHandler(req, res) {
   } catch {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.' });
   }
-  if (![2, 4].includes(Number(claims.role_id))) {
+  if (!hasRole(claims, 'RECEPTIONIST', 'ADMIN')) {
     return res.status(403).json({ success: false, message: 'Chỉ lễ tân hoặc quản trị viên mới được xác nhận check-in.' });
   }
 
@@ -250,7 +255,7 @@ async function getRecentBookingsHandler(req, res) {
   } catch {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.' });
   }
-  if (![2, 4].includes(Number(claims.role_id))) {
+  if (!hasRole(claims, 'RECEPTIONIST', 'ADMIN')) {
     return res.status(403).json({ success: false, message: 'Bạn không có quyền xem danh sách đặt phòng.' });
   }
 
@@ -279,7 +284,7 @@ async function getBookingHistoryHandler(req, res) {
   try { claims = jwt.verify(token, JWT_SECRET); } catch {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
   }
-  if (!isCustomerClaims(claims) && ![2, 4].includes(Number(claims.role_id))) return res.status(403).json({ success: false, message: 'Bạn không có quyền xem lịch sử booking.' });
+  if (!isCustomerClaims(claims) && !hasRole(claims, 'RECEPTIONIST', 'ADMIN')) return res.status(403).json({ success: false, message: 'Bạn không có quyền xem lịch sử booking.' });
   try {
     if (isCustomerClaims(claims) && !claims.user_id) return res.status(403).json({ success: false, message: 'Không xác định được tài khoản khách hàng.' });
     const customerId = isCustomerClaims(claims) ? claims.user_id : null;
@@ -297,9 +302,8 @@ async function updateBookingHandler(req, res) {
   try { claims = jwt.verify(token, JWT_SECRET); } catch {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
   }
-  const roleId = Number(claims.role_id);
   const customer = isCustomerClaims(claims);
-  if (!customer && ![2, 4].includes(roleId)) return res.status(403).json({ success: false, message: 'Bạn không có quyền cập nhật booking.' });
+  if (!customer && !hasRole(claims, 'RECEPTIONIST', 'ADMIN')) return res.status(403).json({ success: false, message: 'Bạn không có quyền cập nhật booking.' });
   const { check_in_date, check_out_date, guest_full_name, guest_phone, guest_email, adults, children, special_request } = req.body || {};
   const datePattern = /^\d{4}-\d{2}-\d{2}$/;
   const isRealDate = (value) => {
@@ -341,9 +345,8 @@ async function cancelBookingHandler(req, res) {
   try { claims = jwt.verify(token, JWT_SECRET); } catch {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
   }
-  const roleId = Number(claims.role_id);
   const customer = isCustomerClaims(claims);
-  if (!customer && ![2, 4].includes(roleId)) return res.status(403).json({ success: false, message: 'Bạn không có quyền hủy booking.' });
+  if (!customer && !hasRole(claims, 'RECEPTIONIST', 'ADMIN')) return res.status(403).json({ success: false, message: 'Bạn không có quyền hủy booking.' });
   try {
     const booking = await cancelBooking({ bookingId: req.params.bookingId, customerId: customer ? claims.user_id : null });
     return res.json({ success: true, message: 'Đã hủy booking.', booking });
@@ -358,7 +361,7 @@ async function getActiveBookingsHandler(req, res) {
   try { claims = jwt.verify(token, JWT_SECRET); } catch {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
   }
-  if (![2, 4].includes(Number(claims.role_id))) return res.status(403).json({ success: false, message: 'Bạn không có quyền xem booking đang hoạt động.' });
+  if (!hasRole(claims, 'RECEPTIONIST', 'ADMIN')) return res.status(403).json({ success: false, message: 'Bạn không có quyền xem booking đang hoạt động.' });
   try {
     const bookings = await getActiveBookings();
     return res.json({ success: true, count: bookings.length, bookings });
@@ -374,7 +377,7 @@ async function checkOutBookingHandler(req, res) {
   try { claims = jwt.verify(token, JWT_SECRET); } catch {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
   }
-  if (![2, 4].includes(Number(claims.role_id))) return res.status(403).json({ success: false, message: 'Chỉ lễ tân hoặc quản trị viên mới được check-out.' });
+  if (!hasRole(claims, 'RECEPTIONIST', 'ADMIN')) return res.status(403).json({ success: false, message: 'Chỉ lễ tân hoặc quản trị viên mới được check-out.' });
   try {
     const result = await makeReceptionCheckoutPayment({
       bookingId: req.params.bookingId,
@@ -400,19 +403,76 @@ async function finishRoomCleaningHandler(req, res) {
   try { claims = jwt.verify(token, JWT_SECRET); } catch {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
   }
-  if (![3, 4].includes(Number(claims.role_id))) return res.status(403).json({ success: false, message: 'Chỉ nhân viên buồng phòng hoặc quản trị viên mới được cập nhật trạng thái phòng.' });
+  if (!hasRole(claims, 'HOUSEKEEPER', 'ADMIN')) return res.status(403).json({ success: false, message: 'Chỉ nhân viên buồng phòng hoặc quản trị viên mới được cập nhật trạng thái phòng.' });
   try {
     const targetStatus = String(req.body?.status || 'AVAILABLE').toUpperCase();
     const currentStatus = String(req.body?.current_status || 'CLEANING').toUpperCase();
     const validTransition = (currentStatus === 'CLEANING' && ['AVAILABLE', 'MAINTENANCE'].includes(targetStatus))
-      || (Number(claims.role_id) === 4 && currentStatus === 'AVAILABLE' && targetStatus === 'MAINTENANCE')
-      || (Number(claims.role_id) === 4 && currentStatus === 'MAINTENANCE' && targetStatus === 'AVAILABLE');
+      || (hasRole(claims, 'ADMIN') && currentStatus === 'AVAILABLE' && targetStatus === 'MAINTENANCE')
+      || (hasRole(claims, 'ADMIN') && currentStatus === 'MAINTENANCE' && targetStatus === 'AVAILABLE');
     if (!validTransition) return res.status(400).json({ success: false, message: 'Chuyển trạng thái phòng không hợp lệ.' });
-    if (currentStatus === 'MAINTENANCE' && Number(claims.role_id) !== 4) return res.status(403).json({ success: false, message: 'Chỉ quản trị viên được xác nhận hoàn tất bảo trì.' });
+    if (currentStatus === 'MAINTENANCE' && !hasRole(claims, 'ADMIN')) return res.status(403).json({ success: false, message: 'Chỉ quản trị viên được xác nhận hoàn tất bảo trì.' });
     const room = await updateRoomStatus(req.params.roomId, targetStatus, currentStatus);
-    return res.json({ success: true, message: targetStatus === 'MAINTENANCE' ? 'Đã chuyển phòng sang trạng thái bảo trì.' : currentStatus === 'CLEANING' ? 'Đã hoàn tất dọn phòng. Phòng sẵn sàng cho thuê.' : 'Đã hoàn tất bảo trì. Phòng sẵn sàng cho thuê.', room });
+    const message = room.status === 'MAINTENANCE'
+      ? targetStatus === 'MAINTENANCE'
+        ? 'Đã chuyển phòng sang trạng thái bảo trì.'
+        : 'Đã dọn xong nhưng phòng còn báo cáo bảo trì đang mở, nên vẫn được giữ ở trạng thái bảo trì.'
+      : currentStatus === 'CLEANING'
+        ? 'Đã hoàn tất dọn phòng. Phòng sẵn sàng cho thuê.'
+        : 'Đã hoàn tất bảo trì. Phòng sẵn sàng cho thuê.';
+    return res.json({ success: true, message, room });
   } catch {
     return res.status(409).json({ success: false, message: 'Phòng không ở trạng thái đang dọn.' });
+  }
+}
+
+async function reportRoomMaintenanceHandler(req, res) {
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/, '');
+  let claims;
+  try { claims = jwt.verify(token, JWT_SECRET); } catch {
+    return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
+  }
+  if (!hasRole(claims, 'HOUSEKEEPER', 'ADMIN')) return res.status(403).json({ success: false, message: 'Chỉ nhân viên buồng phòng hoặc quản trị viên mới được báo bảo trì.' });
+  try {
+    const report = await reportRoomMaintenance({
+      roomId: req.params.roomId,
+      reportedBy: claims.user_id,
+      description: req.body?.description,
+    });
+    return res.json({ success: true, message: 'Đã gửi báo cáo bảo trì. Phòng vẫn ở danh sách cần dọn đến khi xác nhận dọn xong.', report });
+  } catch (error) {
+    const notFound = /not found/i.test(error.message);
+    return res.status(notFound ? 404 : 409).json({ success: false, message: notFound ? 'Không tìm thấy phòng.' : 'Phòng không ở trạng thái đang dọn để báo bảo trì.' });
+  }
+}
+
+async function getRoomMaintenanceReportsHandler(req, res) {
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/, '');
+  let claims;
+  try { claims = jwt.verify(token, JWT_SECRET); } catch {
+    return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
+  }
+  if (!hasRole(claims, 'ADMIN')) return res.status(403).json({ success: false, message: 'Chỉ quản trị viên mới được xem báo cáo bảo trì.' });
+  try {
+    return res.json({ success: true, reports: await getOpenRoomMaintenanceReports() });
+  } catch (error) {
+    console.error('Get room maintenance reports error:', error);
+    return res.status(500).json({ success: false, message: 'Không tải được báo cáo bảo trì.' });
+  }
+}
+
+async function resolveRoomMaintenanceReportHandler(req, res) {
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/, '');
+  let claims;
+  try { claims = jwt.verify(token, JWT_SECRET); } catch {
+    return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
+  }
+  if (!hasRole(claims, 'ADMIN')) return res.status(403).json({ success: false, message: 'Chỉ quản trị viên mới được đóng báo cáo bảo trì.' });
+  try {
+    await resolveRoomMaintenanceReport(req.params.reportId);
+    return res.json({ success: true, message: 'Đã xác nhận bảo trì xong. Nếu phòng còn đang dọn, housekeeping vẫn cần xác nhận dọn xong.' });
+  } catch {
+    return res.status(404).json({ success: false, message: 'Không tìm thấy báo cáo đang mở.' });
   }
 }
 
@@ -422,7 +482,7 @@ async function getRoomStatusesHandler(req, res) {
   try { claims = jwt.verify(token, JWT_SECRET); } catch {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
   }
-  if (![2, 3, 4].includes(Number(claims.role_id))) return res.status(403).json({ success: false, message: 'Bạn không có quyền xem danh sách phòng.' });
+  if (!hasRole(claims, 'RECEPTIONIST', 'HOUSEKEEPER', 'ADMIN')) return res.status(403).json({ success: false, message: 'Bạn không có quyền xem danh sách phòng.' });
   try { return res.json({ success: true, rooms: await getRoomStatuses() }); }
   catch (error) { return res.status(500).json({ success: false, message: 'Không thể tải trạng thái phòng.', error: error.message }); }
 }
@@ -433,7 +493,7 @@ async function getAssignableRoomsHandler(req, res) {
   try { claims = jwt.verify(token, JWT_SECRET); } catch {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
   }
-  if (![2, 4].includes(Number(claims.role_id))) return res.status(403).json({ success: false, message: 'Chỉ lễ tân hoặc admin được xem phòng có thể gán.' });
+  if (!hasRole(claims, 'RECEPTIONIST', 'ADMIN')) return res.status(403).json({ success: false, message: 'Chỉ lễ tân hoặc admin được xem phòng có thể gán.' });
   try { return res.json({ success: true, ...(await getAssignableRooms(req.params.bookingId)) }); }
   catch (error) {
     const notFound = /not found/i.test(error.message);
@@ -447,7 +507,7 @@ async function assignRoomHandler(req, res) {
   try { claims = jwt.verify(token, JWT_SECRET); } catch {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
   }
-  if (![2, 4].includes(Number(claims.role_id))) return res.status(403).json({ success: false, message: 'Chỉ lễ tân hoặc admin được gán phòng.' });
+  if (!hasRole(claims, 'RECEPTIONIST', 'ADMIN')) return res.status(403).json({ success: false, message: 'Chỉ lễ tân hoặc admin được gán phòng.' });
   const roomAssignments = req.body?.room_assignments;
   if (!Array.isArray(roomAssignments) || !roomAssignments.length || roomAssignments.some((item) => !Number.isInteger(Number(item.booking_room_id)) || Number(item.booking_room_id) <= 0 || !Number.isInteger(Number(item.room_id)) || Number(item.room_id) <= 0)) return res.status(400).json({ success: false, message: 'Please assign a room to every booking room.' });
   try {
@@ -471,6 +531,9 @@ module.exports = {
   getActiveBookingsHandler,
   checkOutBookingHandler,
   finishRoomCleaningHandler,
+  reportRoomMaintenanceHandler,
+  getRoomMaintenanceReportsHandler,
+  resolveRoomMaintenanceReportHandler,
   getRoomStatusesHandler,
   getAssignableRoomsHandler,
   assignRoomHandler,

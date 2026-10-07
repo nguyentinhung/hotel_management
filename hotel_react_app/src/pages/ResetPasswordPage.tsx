@@ -1,9 +1,11 @@
 import { FormEvent, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { resetPassword } from '../services/authService';
+import { useToast } from '../components/ToastProvider';
 
 export default function ResetPasswordPage() {
     const navigate = useNavigate();
+    const { showToast } = useToast();
 
     const [email, setEmail] = useState(
         localStorage.getItem('resetEmail') || ''
@@ -29,6 +31,7 @@ export default function ResetPasswordPage() {
             );
 
             setMessage(response.message);
+            showToast(response.message, 'success');
 
             localStorage.removeItem('resetEmail');
 
@@ -37,11 +40,9 @@ export default function ResetPasswordPage() {
             }, 1500);
 
         } catch (err) {
-            setError(
-                err instanceof Error
-                    ? err.message
-                    : 'Không thể đặt lại mật khẩu.'
-            );
+            const message = err instanceof Error ? err.message : 'Không thể đặt lại mật khẩu.';
+            setError(message);
+            showToast(message, 'error');
         }
     };
 

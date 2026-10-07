@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { Service } from '../types/Service';
+import { useToast } from './ToastProvider';
 
 type ServiceRoom = { booking_room_id: number; room_id: number | null; room_number: string | null };
 type UsedService = { id: number; room_number: string | null; service_name: string; unit: string; quantity: number; unit_price: number; amount: number; used_at: string };
@@ -7,6 +8,7 @@ type UsedService = { id: number; room_number: string | null; service_name: strin
 const money = (value: number) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(value);
 
 export default function BookingServicePanel({ bookingId, canAddServices = false, onTotalChange }: { bookingId: string | number; canAddServices?: boolean; onTotalChange?: (total: number) => void }) {
+  const { showToast } = useToast();
   const [rooms, setRooms] = useState<ServiceRoom[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [usedServices, setUsedServices] = useState<UsedService[]>([]);
@@ -20,7 +22,7 @@ export default function BookingServicePanel({ bookingId, canAddServices = false,
 
   const load = async () => {
     const token = localStorage.getItem('accessToken');
-    if (!token) { setMessage('Vui lòng đăng nhập lại.'); return; }
+    if (!token) { showToast('Vui lòng đăng nhập lại.', 'error'); return; }
     try {
       const [bookingResponse, serviceResponse] = await Promise.all([
         fetch(`http://localhost:5000/api/bookings/${bookingId}/services`, { headers: { Authorization: `Bearer ${token}` } }),
@@ -48,7 +50,7 @@ export default function BookingServicePanel({ bookingId, canAddServices = false,
   const add = async (event: FormEvent) => {
     event.preventDefault();
     const token = localStorage.getItem('accessToken');
-    if (!token) { setMessage('Vui lòng đăng nhập lại.'); return; }
+    if (!token) { showToast('Vui lòng đăng nhập lại.', 'error'); return; }
     setBusy(true);
     setMessage('');
     try {
@@ -61,9 +63,10 @@ export default function BookingServicePanel({ bookingId, canAddServices = false,
       if (!response.ok) throw new Error(data.message || 'Không thể thêm dịch vụ vào booking.');
       if (data.service?.total_amount != null) onTotalChange?.(Number(data.service.total_amount));
       await load();
-      setMessage(`Đã thêm ${data.service.service_name} vào booking.`);
+      setMessage('');
+      showToast(`Đã thêm ${data.service.service_name} vào booking.`, 'success');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'Không thể thêm dịch vụ.');
+      showToast(error instanceof Error ? error.message : 'Không thể thêm dịch vụ.', 'error');
     } finally { setBusy(false); }
   };
 

@@ -70,7 +70,7 @@ export interface PaymentListItem {
   vnpay_transaction_no: string | null;
 }
 
-export function createFinalPayment(bookingCode: string, method: 'CASH' | 'VNPAY', paymentType: 'FINAL' | 'DEPOSIT' = 'FINAL'): Promise<CreatePaymentResponse> {
+export function createFinalPayment(bookingCode: string, method: 'CASH' | 'VNPAY' | 'SIMULATED', paymentType: 'FINAL' | 'DEPOSIT' = 'FINAL'): Promise<CreatePaymentResponse> {
   return api.post<CreatePaymentResponse>(
     '/api/payments',
     { booking_code: bookingCode, payment_type: paymentType, method },
@@ -105,6 +105,14 @@ export interface PaymentStatusResponse {
 export function getPaymentStatus(paymentCode: string): Promise<PaymentStatusResponse> {
   return api.get<PaymentStatusResponse>(
     `/api/payments/${encodeURIComponent(paymentCode)}/status`,
+    localStorage.getItem('accessToken') || undefined,
+  );
+}
+
+export function simulateDepositPayment(paymentCode: string, succeeded: boolean): Promise<{ message: string; payment_code: string; status: 'SUCCESS' | 'FAILED' }> {
+  return api.post<{ message: string; payment_code: string; status: 'SUCCESS' | 'FAILED' }>(
+    `/api/payments/${encodeURIComponent(paymentCode)}/simulate`,
+    { succeeded },
     localStorage.getItem('accessToken') || undefined,
   );
 }

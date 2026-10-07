@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { confirmPayment, getCustomerPaymentList, getPaymentList } from '../services/paymentService';
 import type { PaymentListItem } from '../services/paymentService';
+import { resolveRole } from '../utils/role';
+import { useToast } from './ToastProvider';
 
 const PAGE_SIZE = 5;
 
@@ -43,6 +45,7 @@ const statusLabels: Record<PaymentListItem['status'], string> = {
 };
 
 export default function PaymentList({ customerOnly = false }: { customerOnly?: boolean }) {
+  const { showToast } = useToast();
   const [payments, setPayments] = useState<PaymentListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
@@ -60,11 +63,13 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
       setPayments(await (customerOnly ? getCustomerPaymentList() : getPaymentList()));
       setCurrentPage(1);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Không thể tải danh sách thanh toán.');
+      const message = requestError instanceof Error ? requestError.message : 'Không thể tải danh sách thanh toán.';
+      setError(message);
+      showToast(message, 'error');
     } finally {
       setIsLoading(false);
     }
-  }, [customerOnly]);
+  }, [customerOnly, showToast]);
 
   useEffect(() => {
     void loadPayments();
@@ -78,8 +83,8 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
     }
 
     try {
-      const parsedUser = JSON.parse(storedUser) as { role_id?: number; role?: string };
-      const isReceptionist = Number(parsedUser.role_id) === 2 || String(parsedUser.role || '').toUpperCase() === 'RECEPTIONIST';
+      const parsedUser = JSON.parse(storedUser) as { role_id?: number; role?: string; role_code?: string; role_name?: string };
+      const isReceptionist = resolveRole(parsedUser) === 'RECEPTIONIST';
       setCanConfirmPayment(isReceptionist);
     } catch {
       setCanConfirmPayment(false);
@@ -209,7 +214,7 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
                 </td>
                 <td>
                   <span className={`payment-method payment-method-${payment.method.toLowerCase()}`}>
-                    {payment.method === 'CASH' ? 'Cash' : 'VNPay'}
+                    {payment.vnpay_transaction_no === 'SIMULATED' ? 'Cash (simulated)' : payment.method === 'CASH' ? 'Cash' : 'VNPay'}
                   </span>
                 </td>
                 <td>
@@ -218,7 +223,7 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
                   </span>
                 </td>
                 <td>{formatDate(payment.paid_at)}</td>
-                <td>{payment.vnpay_transaction_no || '—'}</td>
+                <td>{payment.vnpay_transaction_no === 'SIMULATED' ? '—' : payment.vnpay_transaction_no || '—'}</td>
               </tr>
             ))}
           </tbody>
@@ -293,8 +298,11 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
                             : payment
                         )));
                         setSelectedPayment({ ...selectedPayment, status: 'SUCCESS', paid_at: new Date().toISOString() });
+                        showToast('Đã xác nhận thanh toán tiền mặt.', 'success');
                       } catch (requestError) {
-                        setError(requestError instanceof Error ? requestError.message : 'Không thể xác nhận thanh toán.');
+                        const message = requestError instanceof Error ? requestError.message : 'Không thể xác nhận thanh toán.';
+                        setError(message);
+                        showToast(message, 'error');
                       } finally {
                         setConfirmingCode(null);
                       }
@@ -328,7 +336,7 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
                     </div>
                     <div>
                       <dt>Phương thức</dt>
-                      <dd>{selectedPayment.method === 'CASH' ? 'Cash' : 'VNPay'}</dd>
+                      <dd>{selectedPayment.vnpay_transaction_no === 'SIMULATED' ? 'Cash (simulated)' : selectedPayment.method === 'CASH' ? 'Cash' : 'VNPay'}</dd>
                     </div>
                     <div>
                       <dt>Số tiền giao dịch</dt>
@@ -346,7 +354,7 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
                       <dt>Ngày thanh toán</dt>
                       <dd>{formatDate(selectedPayment.paid_at)}</dd>
                     </div>
-                    {selectedPayment.method === 'VNPAY' && (
+                    {selectedPayment.method === 'VNPAY' && selectedPayment.vnpay_transaction_no !== 'SIMULATED' && (
                       <div className="payment-detail-wide">
                         <dt>Mã giao dịch VNPay</dt>
                         <dd>{selectedPayment.vnpay_transaction_no || '—'}</dd>

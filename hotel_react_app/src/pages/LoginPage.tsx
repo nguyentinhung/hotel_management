@@ -1,10 +1,13 @@
 import { FormEvent, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { login } from '../services/authService';
+import { resolveRole } from '../utils/role';
+import { useToast } from '../components/ToastProvider';
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { showToast } = useToast();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -15,9 +18,9 @@ export default function LoginPage() {
 
     try {
       const authResponse = await login(email, password);
-      const roleId = authResponse.user.role_id;
-      const role = roleId === 4 ? 'ADMIN' : roleId === 2 ? 'RECEPTIONIST' : roleId === 3 ? 'HOUSEKEEPER' : 'CUSTOMER';
+      const role = resolveRole(authResponse.user) || 'CUSTOMER';
       const userWithRole = { ...authResponse.user, role };
+      showToast('Đăng nhập thành công.', 'success');
 
       localStorage.setItem('user', JSON.stringify(userWithRole));
       localStorage.setItem('accessToken', authResponse.accessToken);
@@ -33,7 +36,9 @@ export default function LoginPage() {
       const dashboardPath = role === 'ADMIN' ? '/admin' : role === 'RECEPTIONIST' ? '/reception' : '/housekeeping';
       navigate(dashboardPath);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Email hoặc mật khẩu không đúng.');
+      const message = err instanceof Error ? err.message : 'Email hoặc mật khẩu không đúng.';
+      setError(message);
+      showToast(message, 'error');
     }
   };
 

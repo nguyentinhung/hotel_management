@@ -14,6 +14,7 @@ import {
 import { logout } from '../services/authService';
 import api from '../services/api';
 import { checkRoomAvailability } from '../services/roomService';
+import { resolveRole } from '../utils/role';
 import type {
   AppUser,
   Promotion,
@@ -110,15 +111,7 @@ export default function HomePage() {
     if (storedUser) {
       try {
         const parsedUser = JSON.parse(storedUser);
-        const validRoles: AppUser['role'][] = ['CUSTOMER', 'RECEPTIONIST', 'HOUSEKEEPER', 'ADMIN'];
-        const roleById: Record<number, AppUser['role']> = {
-          1: 'CUSTOMER',
-          2: 'RECEPTIONIST',
-          3: 'HOUSEKEEPER',
-          4: 'ADMIN',
-        };
-        const storedRole = validRoles.find((role) => role === parsedUser.role);
-        const mappedRole = storedRole ?? roleById[Number(parsedUser.role_id)] ?? 'CUSTOMER';
+        const mappedRole = resolveRole(parsedUser) ?? 'CUSTOMER';
         setUser({
           full_name: parsedUser.full_name || parsedUser.email || 'Khách hàng',
           role: mappedRole,

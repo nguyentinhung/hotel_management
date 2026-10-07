@@ -5,7 +5,6 @@ const nodemailer = require('nodemailer');
 const { sql, getPool } = require('../config/db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
-const DEFAULT_CUSTOMER_ROLE = 1;
 
 const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
 
@@ -58,6 +57,7 @@ const buildUserResponse = (user) => ({
   phone: user.phone,
   status: String(user.status || '').toUpperCase(),
   role_id: user.role_id,
+  role_code: user.role_code,
   role_name: user.role_name || 'Khách hàng',
 });
 
@@ -158,7 +158,8 @@ async function register(req, res) {
     }
 
     const roleQuery = await pool.request().query("SELECT TOP 1 id, code, name FROM roles WHERE code = 'CUSTOMER';");
-    const customerRole = roleQuery.recordset[0] || { id: DEFAULT_CUSTOMER_ROLE, code: 'CUSTOMER', name: 'Khách hàng' };
+    const customerRole = roleQuery.recordset[0];
+    if (!customerRole) throw new Error('Customer role is not configured.');
 
     const passwordHash = await bcrypt.hash(password, 10);
     const insertResult = await pool.request()

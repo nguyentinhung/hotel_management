@@ -1,9 +1,11 @@
 import { FormEvent, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { register } from '../services/authService';
+import { useToast } from '../components/ToastProvider';
 
 export default function RegisterPage() {
   const navigate = useNavigate();
+  const { showToast } = useToast();
   const [form, setForm] = useState({
     full_name: '',
     email: '',
@@ -26,10 +28,14 @@ export default function RegisterPage() {
 
     try {
       await register(form.full_name, form.email, form.phone_number, form.password);
-      setSuccess('Đăng ký thành công. Vui lòng kiểm tra email để xác thực tài khoản.');
+      const message = 'Đăng ký thành công. Vui lòng kiểm tra email để xác thực tài khoản.';
+      setSuccess(message);
+      showToast(message, 'success');
       setTimeout(() => navigate('/login'), 1200);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Đăng ký thất bại.');
+      const message = err instanceof Error ? err.message : 'Đăng ký thất bại.';
+      setError(message);
+      showToast(message, 'error');
     } finally {
       setIsSubmitting(false);
     }

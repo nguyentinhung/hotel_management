@@ -14,6 +14,7 @@ import type {
 } from '../types';
 import BookingServicePanel from './BookingServicePanel';
 import { createReceptionCheckout } from '../services/paymentService';
+import { useToast } from './ToastProvider';
 
 /**
  * ============================================================================
@@ -50,6 +51,7 @@ const calculateNights = (from: string, to: string) => {
 };
 
 export default function ReceptionRoomBooking() {
+  const { showToast } = useToast();
   const today = useMemo(() => formatDateInput(new Date()), []);
   const tomorrow = useMemo(() => addDays(today, 1), [today]);
 
@@ -96,7 +98,6 @@ export default function ReceptionRoomBooking() {
     special_request: '',
   });
   const [isSubmittingBooking, setIsSubmittingBooking] = useState<boolean>(false);
-  const [bookingMessage, setBookingMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // --- STATE DANH SÁCH ĐẶT PHÒNG GẦN ĐÂY ---
   const [recentBookings, setRecentBookings] = useState<RecentBooking[]>([]);
@@ -107,7 +108,6 @@ export default function ReceptionRoomBooking() {
   const [hasVerifiedOriginalId, setHasVerifiedOriginalId] = useState(false);
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [isCheckingOut, setIsCheckingOut] = useState<string | number | null>(null);
-  const [checkInMessage, setCheckInMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Tính số đêm lưu trú hiện tại theo form
   const nights = useMemo(() => calculateNights(checkInDate, checkOutDate), [checkInDate, checkOutDate]);
@@ -162,26 +162,25 @@ export default function ReceptionRoomBooking() {
     event.preventDefault();
     if (!selectedCheckInBooking) return;
     if (!hasVerifiedOriginalId) {
-      setCheckInMessage({ type: 'error', text: 'Vui lòng đối chiếu giấy tờ tùy thân bản gốc trước khi check-in.' });
+      showToast('Vui lòng đối chiếu giấy tờ tùy thân bản gốc trước khi check-in.', 'error');
       return;
     }
     const accessToken = localStorage.getItem('accessToken');
     if (!accessToken) {
-      setCheckInMessage({ type: 'error', text: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.' });
+      showToast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.', 'error');
       return;
     }
 
     try {
       setIsCheckingIn(true);
-      setCheckInMessage(null);
       const result = await checkInBooking(selectedCheckInBooking.id, checkInIdCard, accessToken);
-      setCheckInMessage({ type: 'success', text: result.message });
+      showToast(result.message, 'success');
       setSelectedCheckInBooking(null);
       setCheckInIdCard('');
       setHasVerifiedOriginalId(false);
       await fetchRecent();
     } catch (err) {
-      setCheckInMessage({ type: 'error', text: err instanceof Error ? err.message : 'Không thể xác nhận check-in.' });
+      showToast(err instanceof Error ? err.message : 'Không thể xác nhận check-in.', 'error');
     } finally {
       setIsCheckingIn(false);
     }
@@ -190,14 +189,18 @@ export default function ReceptionRoomBooking() {
   const handleCheckOut = async (booking: RecentBooking) => {
     const accessToken = localStorage.getItem('accessToken');
     if (!accessToken) return;
-    const selectedMethod = window.prompt('Chọn phương thức thanh toán khi checkout:\n1 - Tiền mặt\n2 - VNPay', '1');
+    const vnpayEnabled = import.meta.env.VITE_VNPAY_ENABLED === 'true';
+    const selectedMethod = vnpayEnabled
+      ? window.prompt('Chọn phương thức thanh toán khi checkout:\n1 - Tiền mặt\n2 - VNPay', '1')
+      : '1';
     if (selectedMethod === null) return;
-    const method = selectedMethod.trim() === '1' ? 'CASH' : selectedMethod.trim() === '2' ? 'VNPAY' : null;
+    const method = selectedMethod.trim() === '1' ? 'CASH' : selectedMethod.trim() === '2' && vnpayEnabled ? 'VNPAY' : null;
     if (!method) {
-      window.alert('Lựa chọn không hợp lệ. Nhập 1 cho tiền mặt hoặc 2 cho VNPay.');
+      showToast('Lựa chọn không hợp lệ. Chọn tiền mặt hoặc VNPay.', 'error');
       return;
     }
-    if (!window.confirm(`Xác nhận checkout cho ${booking.guest_full_name} và thanh toán bằng ${method === 'CASH' ? 'tiền mặt' : 'VNPay'}?`)) return;
+    const paymentLabel = method === 'CASH' ? 'tiền mặt' : 'VNPay';
+    if (!window.confirm(`Xác nhận checkout cho ${booking.guest_full_name} và thanh toán bằng ${paymentLabel}?`)) return;
     try {
       setIsCheckingOut(booking.id);
       const result = await createReceptionCheckout(booking.id, method);
@@ -208,7 +211,7 @@ export default function ReceptionRoomBooking() {
       }
       await fetchRecent();
     } catch (error) {
-      window.alert(error instanceof Error ? error.message : 'Không thể check-out booking.');
+      showToast(error instanceof Error ? error.message : 'Không thể check-out booking.', 'error');
     } finally {
       setIsCheckingOut(null);
     }
@@ -280,7 +283,6 @@ export default function ReceptionRoomBooking() {
     });
     setSelectedServiceQuantities({});
 
-    setBookingMessage(null);
     setIsModalOpen(true);
   };
 
@@ -312,33 +314,31 @@ export default function ReceptionRoomBooking() {
 
     // Validate họ tên và số điện thoại
     if (!walkInForm.guest_full_name.trim()) {
-      setBookingMessage({ type: 'error', text: 'Vui lòng nhập họ và tên của khách hàng.' });
+      showToast('Vui lòng nhập họ và tên của khách hàng.', 'error');
       return;
     }
     if (!walkInForm.guest_phone.trim()) {
-      setBookingMessage({ type: 'error', text: 'Vui lòng nhập số điện thoại khách hàng.' });
+      showToast('Vui lòng nhập số điện thoại khách hàng.', 'error');
       return;
     }
     const selectedTypes = [selectedRoomType, ...additionalWalkInTypes];
     const selectedRoomIds = [walkInForm.room_id, ...additionalWalkInTypes.map((_, index) => additionalWalkInRoomIds[index] || '')].filter(Boolean);
     if (new Set(selectedRoomIds).size !== selectedRoomIds.length) {
-      setBookingMessage({ type: 'error', text: 'Mỗi phòng trong booking phải được gán một phòng vật lý khác nhau.' });
+      showToast('Mỗi phòng trong booking phải được gán một phòng vật lý khác nhau.', 'error');
       return;
     }
     if (adults > selectedTypes.reduce((capacity, type) => capacity + type.max_adults, 0)
       || children > selectedTypes.reduce((capacity, type) => capacity + type.max_children, 0)) {
-      setBookingMessage({ type: 'error', text: 'Số khách vượt quá sức chứa của các phòng đã chọn.' });
+      showToast('Số khách vượt quá sức chứa của các phòng đã chọn.', 'error');
       return;
     }
     if (walkInForm.check_in_now && !/^[A-Za-z0-9-]{5,50}$/.test(walkInForm.guest_id_card.trim())) {
-      setBookingMessage({ type: 'error', text: 'Cần nhập CCCD/CMND hoặc hộ chiếu hợp lệ để check-in.' });
+      showToast('Cần nhập CCCD/CMND hoặc hộ chiếu hợp lệ để check-in.', 'error');
       return;
     }
 
     try {
       setIsSubmittingBooking(true);
-      setBookingMessage(null);
-
       const payload: WalkInBookingPayload = {
         room_type_id: selectedRoomType.id,
         room_id: walkInForm.room_id ? Number(walkInForm.room_id) : null,
@@ -364,24 +364,12 @@ export default function ReceptionRoomBooking() {
 
       const res = await createWalkInBooking(payload);
 
-      setBookingMessage({
-        type: 'success',
-        text: `${res.message} (Khách: ${res.booking.guest_full_name}, Phòng: ${res.booking.room_number || 'Tự gán'}, Tổng: ${formatCurrency(res.booking.total_amount)})`,
-      });
-
-      // Đóng modal sau 1.5 giây để lễ tân đọc thông báo thành công
-      setTimeout(() => {
-        setIsModalOpen(false);
-        // Tự động làm mới danh sách phòng trống để số phòng còn lại giảm đi ngay lập tức
-        void fetchAvailability();
-        // Tự động làm mới danh sách đặt phòng gần nhất
-        void fetchRecent();
-      }, 1500);
+      showToast(`${res.message} (Khách: ${res.booking.guest_full_name}, Phòng: ${res.booking.room_number || 'Tự gán'}, Tổng: ${formatCurrency(res.booking.total_amount)})`, 'success');
+      setIsModalOpen(false);
+      void fetchAvailability();
+      void fetchRecent();
     } catch (err) {
-      setBookingMessage({
-        type: 'error',
-        text: err instanceof Error ? err.message : 'Đặt phòng tại quầy thất bại.',
-      });
+      showToast(err instanceof Error ? err.message : 'Đặt phòng tại quầy thất bại.', 'error');
     } finally {
       setIsSubmittingBooking(false);
     }
@@ -650,14 +638,6 @@ export default function ReceptionRoomBooking() {
                 Đóng
               </button>
             </div>
-
-            {bookingMessage && (
-              <div
-                className={`reception-alert ${bookingMessage.type === 'success' ? 'alert-success' : 'alert-error'}`}
-              >
-                {bookingMessage.text}
-              </div>
-            )}
 
             <form onSubmit={handleSubmitWalkIn} className="walkin-modal-form">
               {/* Tóm tắt thông tin phòng đã chọn */}
@@ -960,7 +940,7 @@ export default function ReceptionRoomBooking() {
                           <button type="button" onClick={() => setSelectedCheckInBooking(b)}>Xác nhận check-in</button>
                         )
                       ) : b.has_pending_final_payment ? (
-                        <button type="button" disabled>Đang chờ VNPay</button>
+                        <button type="button" disabled>Đang chờ thanh toán</button>
                       ) : b.status === 'CHECKED_IN' || (b.status === 'CHECKED_OUT' && Number(b.balance_due ?? 0) > 0) ? (
                         <button type="button" disabled={String(isCheckingOut) === String(b.id)} onClick={() => void handleCheckOut(b)}>
                           {String(isCheckingOut) === String(b.id) ? 'Đang xử lý…' : b.status === 'CHECKED_OUT' ? 'Thu số dư còn lại' : 'Checkout & thanh toán'}
@@ -1010,7 +990,6 @@ export default function ReceptionRoomBooking() {
                   <input type="checkbox" checked={hasVerifiedOriginalId} onChange={(event) => setHasVerifiedOriginalId(event.target.checked)} />
                   Đã xem giấy tờ bản gốc và đối chiếu với khách đặt phòng
                 </label>
-                {checkInMessage && <p className={checkInMessage.type === 'error' ? 'inline-error' : 'success-message'} role="alert">{checkInMessage.text}</p>}
                 <div className="booking-actions">
                   <button type="submit" className="btn btn-primary" disabled={isCheckingIn || !hasVerifiedOriginalId}>{isCheckingIn ? 'Đang xác nhận...' : 'Lưu giấy tờ và check-in'}</button>
                   <button type="button" className="btn btn-outline" onClick={() => setSelectedCheckInBooking(null)} disabled={isCheckingIn}>Hủy</button>

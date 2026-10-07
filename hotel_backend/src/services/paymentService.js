@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const {
   createFinalPayment,
   createCustomerDepositPayment,
+  completeSimulatedDepositPayment,
   createReceptionCheckoutPayment,
   getPaymentList,
   getCustomerPaymentList,
@@ -12,6 +13,8 @@ const {
 } = require('../dao/paymentDao');
 const { getVnpayConfig, buildVnpayPaymentUrl, verifyVnpayResponse } = require('./vnpayGateway');
 
+const vnpayEnabled = String(process.env.VNPAY_ENABLED || '').toLowerCase() === 'true';
+
 async function makePayment({ customerId, bookingCode, paymentType, method, ipAddress }) {
   const normalizedCode = String(bookingCode || '').trim().toUpperCase();
   if (!normalizedCode || normalizedCode.length > 20) {
@@ -21,8 +24,15 @@ async function makePayment({ customerId, bookingCode, paymentType, method, ipAdd
   }
 
   const normalizedMethod = String(method || '').toUpperCase();
-  if (!['FINAL', 'DEPOSIT'].includes(paymentType) || (paymentType === 'DEPOSIT' ? normalizedMethod !== 'VNPAY' : !['CASH', 'VNPAY'].includes(normalizedMethod))) {
-    const error = new Error('Tiền cọc chỉ hỗ trợ VNPay; thanh toán FINAL hỗ trợ tiền mặt hoặc VNPay.');
+  const supportedMethods = paymentType === 'DEPOSIT'
+    ? (vnpayEnabled ? ['VNPAY'] : ['SIMULATED'])
+    : (vnpayEnabled ? ['CASH', 'VNPAY'] : ['CASH']);
+  if (!['FINAL', 'DEPOSIT'].includes(paymentType) || !supportedMethods.includes(normalizedMethod)) {
+    const error = new Error(vnpayEnabled
+      ? 'Vui lòng chọn phương thức thanh toán hợp lệ.'
+      : paymentType === 'DEPOSIT'
+        ? 'Tiền cọc hiện chỉ hỗ trợ mô phỏng thanh toán.'
+        : 'Hiện chỉ hỗ trợ thanh toán tiền mặt tại quầy.');
     error.statusCode = 400;
     throw error;
   }
@@ -30,33 +40,46 @@ async function makePayment({ customerId, bookingCode, paymentType, method, ipAdd
 
   const paymentCode = `PAY${Date.now().toString(36).toUpperCase()}${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
   const payment = paymentType === 'DEPOSIT'
-    ? await createCustomerDepositPayment({ customerId, bookingCode: normalizedCode, paymentCode })
+    ? await createCustomerDepositPayment({
+      customerId,
+      bookingCode: normalizedCode,
+      paymentCode,
+      method: normalizedMethod === 'SIMULATED' ? 'VNPAY' : normalizedMethod,
+      simulated: normalizedMethod === 'SIMULATED',
+    })
     : await createFinalPayment({
     customerId,
     bookingCode: normalizedCode,
     paymentCode,
     method: normalizedMethod,
   });
-  if (normalizedMethod !== 'VNPAY') return payment;
+  return normalizedMethod === 'VNPAY'
+    ? { ...payment, payment_url: buildVnpayPaymentUrl({ paymentCode, amount: payment.amount, ipAddress }) }
+    : payment;
+}
 
-  return {
-    ...payment,
-    payment_url: buildVnpayPaymentUrl({ paymentCode, amount: payment.amount, ipAddress }),
-  };
+async function simulateDepositPayment({ paymentCode, customerId, succeeded }) {
+  if (vnpayEnabled) {
+    const error = new Error('Mô phỏng thanh toán đang tắt khi VNPay được bật.');
+    error.statusCode = 409;
+    throw error;
+  }
+  return completeSimulatedDepositPayment({ paymentCode, customerId, succeeded });
 }
 
 async function makeReceptionCheckoutPayment({ bookingId, method, ipAddress }) {
   const normalizedMethod = String(method || '').toUpperCase();
-  if (!['CASH', 'VNPAY'].includes(normalizedMethod)) {
-    const error = new Error('Vui lòng chọn thanh toán tiền mặt hoặc VNPay.');
+  if (normalizedMethod !== 'CASH' && !(vnpayEnabled && normalizedMethod === 'VNPAY')) {
+    const error = new Error(vnpayEnabled ? 'Vui lòng chọn phương thức thanh toán hợp lệ.' : 'VNPay đang tạm dừng; hiện chỉ hỗ trợ thanh toán tiền mặt tại quầy.');
     error.statusCode = 400;
     throw error;
   }
   if (normalizedMethod === 'VNPAY') getVnpayConfig();
   const paymentCode = `PAY${Date.now().toString(36).toUpperCase()}${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
   const payment = await createReceptionCheckoutPayment({ bookingId, paymentCode, method: normalizedMethod });
-  if (normalizedMethod !== 'VNPAY' || payment.amount <= 0) return payment;
-  return { ...payment, payment_url: buildVnpayPaymentUrl({ paymentCode, amount: payment.amount, ipAddress }) };
+  return normalizedMethod === 'VNPAY' && payment.amount > 0
+    ? { ...payment, payment_url: buildVnpayPaymentUrl({ paymentCode, amount: payment.amount, ipAddress }) }
+    : payment;
 }
 
 async function getPayments() {
@@ -119,4 +142,4 @@ async function inspectVnpayReturn(params) {
   return { ...payment, paymentCode, succeeded };
 }
 
-module.exports = { makePayment, makeReceptionCheckoutPayment, getPayments, getCustomerPayments, getPaymentStatus, confirmPayment, handleVnpayCallback, inspectVnpayReturn };
+module.exports = { makePayment, simulateDepositPayment, makeReceptionCheckoutPayment, getPayments, getCustomerPayments, getPaymentStatus, confirmPayment, handleVnpayCallback, inspectVnpayReturn };

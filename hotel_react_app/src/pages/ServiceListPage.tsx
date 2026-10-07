@@ -8,6 +8,7 @@ import {
     deleteService
 } from '../services/serviceService';
 import ServiceForm from '../components/ServiceForm';
+import { useToast } from '../components/ToastProvider';
 // import './service-management.css';
 
 interface ServiceListPageProps {
@@ -38,6 +39,7 @@ const tdStyle: React.CSSProperties = {
 };
 
 export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps) {
+    const { showToast } = useToast();
     const [services, setServices] = useState<Service[]>([]);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState('');
@@ -78,7 +80,7 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
             setView('details');
         } catch (error) {
             console.error(error);
-            alert('Không thể tải chi tiết dịch vụ.');
+            showToast('Không thể tải chi tiết dịch vụ.', 'error');
         }
     };
 
@@ -89,19 +91,19 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
             setView('edit');
         } catch (error) {
             console.error(error);
-            alert('Không thể tải dịch vụ.');
+            showToast('Không thể tải dịch vụ.', 'error');
         }
     };
 
     const handleCreateSubmit = async (data: ServiceRequest) => {
         try {
             await createService(data);
-            alert('Thêm dịch vụ thành công.');
+            showToast('Thêm dịch vụ thành công.', 'success');
             setView('list');
             await loadServices();
         } catch (error) {
             console.error(error);
-            alert(error instanceof Error ? error.message : 'Không thể tạo dịch vụ.');
+            showToast(error instanceof Error ? error.message : 'Không thể tạo dịch vụ.', 'error');
         }
     };
 
@@ -109,12 +111,12 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
         if (!selectedService) return;
         try {
             await updateService(selectedService.id, data);
-            alert('Cập nhật dịch vụ thành công.');
+            showToast('Cập nhật dịch vụ thành công.', 'success');
             setView('list');
             await loadServices();
         } catch (error) {
             console.error(error);
-            alert(error instanceof Error ? error.message : 'Không thể cập nhật dịch vụ.');
+            showToast(error instanceof Error ? error.message : 'Không thể cập nhật dịch vụ.', 'error');
         }
     };
 
@@ -128,10 +130,10 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
             await deleteService(id);
             // Xóa thành công ở backend -> loại khỏi danh sách đang hiển thị ngay
             setServices((prev) => prev.filter((service) => service.id !== id));
-            alert('Xóa dịch vụ thành công.');
+            showToast('Xóa dịch vụ thành công.', 'success');
         } catch (error) {
             console.error(error);
-            alert(error instanceof Error ? error.message : 'Không thể xóa dịch vụ.');
+            showToast(error instanceof Error ? error.message : 'Không thể xóa dịch vụ.', 'error');
         }
     };
 
