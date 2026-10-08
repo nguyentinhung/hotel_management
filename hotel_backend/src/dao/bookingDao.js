@@ -462,7 +462,7 @@ async function createCustomerBooking(data) {
   }
 }
 
-async function checkInBooking({ bookingId, idCardNumber }) {
+async function checkInBooking({ bookingId, idCardNumber = '' }) {
   const pool = await getPool();
   const transaction = new sql.Transaction(pool);
   await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
@@ -474,8 +474,8 @@ async function checkInBooking({ bookingId, idCardNumber }) {
         SELECT TOP 1
           b.id, b.booking_code, b.status, b.check_in_date, b.check_out_date, b.deposit_amount,
           deposit_summary.required_deposit_amount, deposit_summary.requires_deposit_payment,
-          CASE WHEN DATEADD(hour, 7, SYSUTCDATETIME()) < DATEADD(hour, 18, CONVERT(datetime2, b.check_in_date)) THEN 1 ELSE 0 END AS before_checkin_deadline,
-          b.guest_full_name, b.guest_phone, br.room_id
+          b.guest_full_name, b.guest_phone, br.room_id,
+          guest_identity.id_card_number
         FROM bookings b WITH (UPDLOCK, HOLDLOCK)
         LEFT JOIN booking_rooms br ON br.booking_id = b.id
         OUTER APPLY (
@@ -489,6 +489,12 @@ async function checkInBooking({ bookingId, idCardNumber }) {
           FROM dbo.booking_rooms br_deposit
           WHERE br_deposit.booking_id = b.id
         ) deposit_summary
+        OUTER APPLY (
+          SELECT TOP 1 bg.id_card_number
+          FROM dbo.booking_guests bg
+          WHERE bg.booking_id = b.id
+          ORDER BY bg.id
+        ) guest_identity
         WHERE b.id = @bookingId;
       `);
     if (!bookingResult.recordset.length) throw new Error('Booking was not found.');
@@ -504,13 +510,11 @@ async function checkInBooking({ bookingId, idCardNumber }) {
     if (today < checkInDate || today >= checkOutDate) {
       throw new Error('Booking is outside its check-in dates.');
     }
-    if (!booking.before_checkin_deadline) {
-      await transaction.request()
-        .input('bookingId', sql.BigInt, booking.id)
-        .query("UPDATE bookings SET status = 'CANCELLED' WHERE id = @bookingId AND status = 'CONFIRMED';");
-      await transaction.commit();
-      return { booking_id: booking.id, booking_code: booking.booking_code, status: 'CANCELLED', auto_cancelled: true };
+    const normalizedIdCard = String(idCardNumber || '').trim();
+    if (!booking.id_card_number && !/^\d{12}$/.test(normalizedIdCard)) {
+      throw new Error('A valid 12-digit CCCD is required to check in this booking.');
     }
+    const idCardToSave = normalizedIdCard || booking.id_card_number;
     if (!booking.room_id) throw new Error('Assign a room before checking in this booking.');
 
     const assignedRoom = await transaction.request()
@@ -518,26 +522,15 @@ async function checkInBooking({ bookingId, idCardNumber }) {
       .query('SELECT status FROM rooms WITH (UPDLOCK, HOLDLOCK) WHERE id = @roomId;');
     if (assignedRoom.recordset[0]?.status !== 'AVAILABLE') throw new Error('Assigned room is not ready for check-in.');
 
-    const guestResult = await transaction.request()
+    await transaction.request()
       .input('bookingId', sql.BigInt, booking.id)
-      .input('idCardNumber', sql.VarChar(50), String(idCardNumber).trim())
+      .input('idCardNumber', sql.VarChar(50), idCardToSave)
       .query(`
         UPDATE booking_guests
-        SET id_card_number = @idCardNumber, id_card_verified = 1
+        SET id_card_number = COALESCE(id_card_number, @idCardNumber),
+            id_card_verified = 1
         WHERE booking_id = @bookingId;
-        SELECT @@ROWCOUNT AS updated_count;
       `);
-    if (!guestResult.recordset[0]?.updated_count) {
-      await transaction.request()
-        .input('bookingId', sql.BigInt, booking.id)
-        .input('fullName', sql.NVarChar(150), booking.guest_full_name)
-        .input('phone', sql.VarChar(20), booking.guest_phone)
-        .input('idCardNumber', sql.VarChar(50), String(idCardNumber).trim())
-        .query(`
-          INSERT INTO booking_guests (booking_id, full_name, phone, id_card_number, id_card_verified)
-          VALUES (@bookingId, @fullName, @phone, @idCardNumber, 1);
-        `);
-    }
 
     await transaction.request()
       .input('bookingId', sql.BigInt, booking.id)
@@ -565,7 +558,6 @@ async function checkInBooking({ bookingId, idCardNumber }) {
 }
 
 async function getRecentBookings(limit = 10, activeOnly = false, customerId = null) {
-  await cancelExpiredBookings();
   const pool = await getPool();
 
   await pool.request().query(`
@@ -608,6 +600,14 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
         b.deposit_amount,
         deposit_summary.required_deposit_amount,
         deposit_summary.requires_deposit_payment,
+        CASE
+          WHEN deposit_summary.required_deposit_amount = 0 THEN 'NOT_REQUIRED'
+          WHEN COALESCE(b.deposit_amount, 0) >= deposit_summary.required_deposit_amount THEN 'PAID'
+          WHEN COALESCE(payment_summary.has_pending_deposit_payment, 0) = 1 THEN 'PENDING'
+          WHEN COALESCE(b.deposit_amount, 0) > 0 THEN 'PARTIAL'
+          WHEN COALESCE(payment_summary.has_failed_deposit_payment, 0) = 1 THEN 'FAILED'
+          ELSE 'UNPAID'
+        END AS deposit_payment_status,
         COALESCE(payment_summary.final_paid_amount, 0) AS final_paid_amount,
         COALESCE(payment_summary.has_pending_final_payment, 0) AS has_pending_final_payment,
         b.created_at,
@@ -616,7 +616,8 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
         type_summary.room_type_id,
         room_summary.room_number,
         room_summary.assigned_room_id,
-        room_summary.room_status
+        room_summary.room_status,
+        CASE WHEN guest_identity.id_card_number IS NULL THEN CAST(0 AS bit) ELSE CAST(1 AS bit) END AS has_guest_id_card
       FROM bookings b
       OUTER APPLY (
         SELECT MIN(type_counts.room_type_id) AS room_type_id,
@@ -633,7 +634,9 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
       OUTER APPLY (
         SELECT
           SUM(CASE WHEN p.payment_type = 'FINAL' AND p.status = 'SUCCESS' THEN p.amount ELSE 0 END) AS final_paid_amount,
-          MAX(CASE WHEN p.payment_type = 'FINAL' AND p.status = 'PENDING' THEN 1 ELSE 0 END) AS has_pending_final_payment
+          MAX(CASE WHEN p.payment_type = 'FINAL' AND p.status = 'PENDING' THEN 1 ELSE 0 END) AS has_pending_final_payment,
+          MAX(CASE WHEN p.payment_type = 'DEPOSIT' AND p.status = 'PENDING' THEN 1 ELSE 0 END) AS has_pending_deposit_payment,
+          MAX(CASE WHEN p.payment_type = 'DEPOSIT' AND p.status = 'FAILED' THEN 1 ELSE 0 END) AS has_failed_deposit_payment
         FROM dbo.payments p
         WHERE p.booking_id = b.id
       ) payment_summary
@@ -656,6 +659,12 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
         LEFT JOIN rooms r ON r.id = br3.room_id
         WHERE br3.booking_id = b.id
       ) room_summary
+      OUTER APPLY (
+        SELECT TOP 1 bg.id_card_number
+        FROM dbo.booking_guests bg
+        WHERE bg.booking_id = b.id
+        ORDER BY bg.id
+      ) guest_identity
       ${activeFilter}
       ORDER BY b.id DESC;
     `);
@@ -675,6 +684,7 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
     deposit_amount: Number(item.deposit_amount ?? 0),
     required_deposit_amount: Number(item.required_deposit_amount ?? 0),
     requires_deposit_payment: Boolean(item.requires_deposit_payment),
+    deposit_payment_status: item.deposit_payment_status,
     final_paid_amount: Number(item.final_paid_amount ?? 0),
     balance_due: Math.max(0, Number(item.total_amount ?? 0) - Number(item.deposit_amount ?? 0) - Number(item.final_paid_amount ?? 0)),
     has_pending_final_payment: Boolean(item.has_pending_final_payment),
@@ -685,6 +695,7 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
     room_number: item.room_number,
     assigned_room_id: item.assigned_room_id,
     room_status: item.room_status,
+    has_guest_id_card: Boolean(item.has_guest_id_card),
   }));
 }
 
@@ -808,26 +819,23 @@ async function cancelBooking({ bookingId, customerId = null }) {
   const request = pool.request().input('bookingId', sql.BigInt, Number(bookingId));
   const ownerFilter = customerId == null ? '' : 'AND customer_id = @customerId';
   if (customerId != null) request.input('customerId', sql.BigInt, Number(customerId));
+  request.input('isReceptionCancellation', sql.Bit, customerId == null ? 1 : 0);
   const result = await request.query(`
     UPDATE bookings SET status = 'CANCELLED'
     WHERE id = @bookingId ${ownerFilter} AND status = 'CONFIRMED'
-      AND check_in_date > CONVERT(date, DATEADD(hour, 7, SYSUTCDATETIME()));
+      AND (
+        check_in_date > CONVERT(date, DATEADD(hour, 7, SYSUTCDATETIME()))
+        OR (
+          @isReceptionCancellation = 1
+          AND check_in_date = CONVERT(date, DATEADD(hour, 7, SYSUTCDATETIME()))
+          AND DATEADD(hour, 18, CONVERT(datetime2, check_in_date)) <= DATEADD(hour, 7, SYSUTCDATETIME())
+          AND created_at < DATEADD(hour, 11, CONVERT(datetime2, check_in_date))
+        )
+      );
     SELECT @@ROWCOUNT AS updated_count;
   `);
   if (!result.recordset[0]?.updated_count) throw new Error('Booking not found or cannot be cancelled.');
   return { booking_id: bookingId, status: 'CANCELLED' };
-}
-
-async function cancelExpiredBookings() {
-  const pool = await getPool();
-  const result = await pool.request().query(`
-    UPDATE bookings
-    SET status = 'CANCELLED'
-    WHERE status = 'CONFIRMED'
-      AND DATEADD(hour, 18, CONVERT(datetime2, check_in_date)) <= DATEADD(hour, 7, SYSUTCDATETIME());
-    SELECT @@ROWCOUNT AS cancelled_count;
-  `);
-  return Number(result.recordset[0]?.cancelled_count ?? 0);
 }
 
 async function getAssignableRooms(bookingId) {
@@ -1115,7 +1123,6 @@ module.exports = {
   getRecentBookings,
   updateBooking,
   cancelBooking,
-  cancelExpiredBookings,
   getActiveBookings,
   checkOutBooking,
   updateRoomStatus,

@@ -651,7 +651,7 @@ a:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  gap: 12px;
   min-height: 78px;
 }
 
@@ -659,6 +659,7 @@ a:focus-visible {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-shrink: 0;
 }
 
 .brand-badge {
@@ -679,6 +680,7 @@ a:focus-visible {
   font-weight: 800;
   font-size: 1.3rem;
   color: var(--primary);
+  white-space: nowrap;
 }
 
 .brand-wrap small {
@@ -690,19 +692,26 @@ a:focus-visible {
 .main-nav {
   display: flex;
   align-items: center;
-  gap: 20px;
+  justify-content: center;
+  gap: 14px;
 }
 
 .main-nav a {
   text-decoration: none;
   color: var(--text);
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .nav-actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.nav-shell .btn {
+  white-space: nowrap;
 }
 
 .menu-toggle {
@@ -719,6 +728,7 @@ a:focus-visible {
 .welcome-text {
   font-weight: 600;
   color: var(--primary);
+  white-space: nowrap;
 }
 
 .btn {
@@ -2896,6 +2906,19 @@ a:focus-visible {
   border-radius: 12px;
 }
 
+.overdue-bookings-attention {
+  margin-bottom: 20px;
+  padding: 18px;
+  border: 1px solid #f2d49b;
+  border-radius: 12px;
+  background: #fffaf0;
+}
+
+.overdue-booking-list { display: grid; gap: 12px; }
+.overdue-booking-item { padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.overdue-booking-item .booking-detail-grid { padding: 0; }
+.overdue-booking-item > p { margin: 12px 8px; }
+
 .reception-table th,
 .reception-table td {
   white-space: nowrap;
@@ -3850,6 +3873,44 @@ a:focus-visible {
 
 .payment-list-error {
   color: #963737;
+}
+
+.dashboard-shell {
+  font-family: 'Be Vietnam Pro', sans-serif;
+  line-height: 1.55;
+}
+
+.dashboard-shell :is(button, input, select, textarea) {
+  font-family: inherit;
+}
+
+.dashboard-shell :is(h2, h3, h4) {
+  font-family: 'Bricolage Grotesque', sans-serif;
+  line-height: 1.35;
+}
+
+.dashboard-shell :is(
+  .panel-head h2,
+  .module-section-title,
+  .section-title-sm,
+  .room-types-heading h2,
+  .room-type-modal-heading h3,
+  .room-management-heading h3,
+  .payment-list-heading h3,
+  .service-page > h1
+) {
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+
+.dashboard-shell :is(table, .service-form) {
+  font-family: inherit;
+  font-size: 0.9rem;
+}
+
+.dashboard-shell :is(.form-group label, .room-type-field, .booking-history-search, .room-assignment-slot) {
+  font-size: 0.88rem;
+  line-height: 1.45;
 }
 
 @media (max-width: 600px) {

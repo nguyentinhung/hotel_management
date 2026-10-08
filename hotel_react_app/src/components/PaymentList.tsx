@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { confirmPayment, getCustomerPaymentList, getPaymentList } from '../services/paymentService';
 import type { PaymentListItem } from '../services/paymentService';
 import { resolveRole } from '../utils/role';
@@ -139,7 +138,6 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
       <div className="payment-list-state">
         <strong>Chưa có giao dịch thanh toán</strong>
         <span>Các yêu cầu thanh toán sẽ xuất hiện ở đây.</span>
-        {customerOnly && <Link className="btn btn-primary" to="/make-payment">Thanh toán booking</Link>}
       </div>
     );
   }
@@ -153,7 +151,6 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
         </svg>
         <h3>{customerOnly ? 'Lịch sử thanh toán' : 'Danh sách thanh toán'}</h3>
         <span>({customerOnly ? payments.length : filteredPayments.length} giao dịch{customerOnly ? '' : ' thành công'})</span>
-        {customerOnly && <Link className="btn btn-primary" to="/make-payment">Thanh toán booking</Link>}
       </div>
       {!customerOnly && (
         <div className="payment-list-search">

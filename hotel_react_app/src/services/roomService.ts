@@ -50,12 +50,12 @@ export const createCustomerBooking = async (
 
 export const checkInBooking = async (
   bookingId: string | number,
-  idCardNumber: string,
   accessToken: string,
+  idCardNumber?: string,
 ): Promise<{ success: boolean; message: string }> => {
   return api.post<{ success: boolean; message: string }>(
     `/api/bookings/${bookingId}/check-in`,
-    { id_card_number: idCardNumber },
+    idCardNumber ? { id_card_number: idCardNumber } : {},
     accessToken,
   );
 };

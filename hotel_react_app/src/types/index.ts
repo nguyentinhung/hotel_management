@@ -151,6 +151,7 @@ export interface RecentBooking {
   deposit_amount: number;
   required_deposit_amount?: number;
   requires_deposit_payment?: boolean;
+  deposit_payment_status?: 'NOT_REQUIRED' | 'PAID' | 'PENDING' | 'PARTIAL' | 'FAILED' | 'UNPAID';
   final_paid_amount?: number;
   balance_due?: number;
   has_pending_final_payment?: boolean;
@@ -161,5 +162,5 @@ export interface RecentBooking {
   room_status?: 'AVAILABLE' | 'OCCUPIED' | 'CLEANING' | 'MAINTENANCE';
   room_type_id?: number;
   assigned_room_id?: number | null;
+  has_guest_id_card?: boolean;
 }
-

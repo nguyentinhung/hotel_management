@@ -111,21 +111,20 @@ async function checkInBookingHandler(req, res) {
   }
 
   const idCardNumber = String(req.body?.id_card_number || '').trim();
-  if (!/^[A-Za-z0-9-]{5,50}$/.test(idCardNumber)) {
-    return res.status(400).json({ success: false, message: 'Vui lòng nhập số CCCD/CMND hoặc hộ chiếu hợp lệ.' });
+  if (idCardNumber && !/^\d{12}$/.test(idCardNumber)) {
+    return res.status(400).json({ success: false, message: 'CCCD phải gồm đúng 12 chữ số.' });
   }
 
   try {
     const result = await checkInBooking({ bookingId: req.params.bookingId, idCardNumber });
-    if (result.auto_cancelled) {
-      return res.status(409).json({ success: false, message: 'Đã quá 18:00 ngày nhận phòng. Booking đã tự động hủy, không thể check-in.', booking: result });
-    }
-    return res.json({ success: true, message: 'Đã lưu thông tin giấy tờ và xác nhận check-in.', booking: result });
+    return res.json({ success: true, message: 'Đã xác nhận check-in thành công.', booking: result });
   } catch (error) {
     const status = /not found/i.test(error.message)
       ? 404
       : /not waiting for check-in|outside its check-in dates|assign a room|not ready for check-in|deposit payment is required/i.test(error.message)
         ? 409
+        : /valid 12-digit CCCD is required/i.test(error.message)
+          ? 400
         : 500;
     const message = /not found/i.test(error.message)
       ? 'Không tìm thấy booking cần check-in.'
@@ -139,6 +138,8 @@ async function checkInBookingHandler(req, res) {
               ? 'Booking online chưa thanh toán đủ tiền cọc tối thiểu 30%, không thể check-in.'
             : /not ready for check-in/i.test(error.message)
               ? 'Phòng đã gán hiện chưa sẵn sàng. Vui lòng chọn phòng khác hoặc xử lý trạng thái phòng trước.'
+            : /valid 12-digit CCCD is required/i.test(error.message)
+              ? 'Booking online cần nhập CCCD gồm đúng 12 chữ số để check-in.'
             : 'Không thể cập nhật check-in lúc này. Vui lòng thử lại.';
     return res.status(status).json({ success: false, message });
   }
@@ -193,12 +194,17 @@ async function createWalkInBookingHandler(req, res) {
     if (!guest_full_name || !guest_full_name.trim()) {
       return res.status(400).json({ success: false, message: 'Vui lòng nhập họ tên khách hàng.' });
     }
-    if (!guest_phone || !guest_phone.trim()) {
-      return res.status(400).json({ success: false, message: 'Vui lòng nhập số điện thoại khách hàng.' });
+    const normalizedPhone = String(guest_phone || '').trim();
+    if (!/^\d{10}$/.test(normalizedPhone)) {
+      return res.status(400).json({ success: false, message: 'Số điện thoại phải gồm đúng 10 chữ số.' });
     }
     const normalizedIdCard = String(guest_id_card || '').trim();
-    if (check_in_now && !/^[A-Za-z0-9-]{5,50}$/.test(normalizedIdCard)) {
-      return res.status(400).json({ success: false, message: 'Cần nhập CCCD/CMND hoặc hộ chiếu hợp lệ để check-in.' });
+    if (!/^\d{12}$/.test(normalizedIdCard)) {
+      return res.status(400).json({ success: false, message: 'CCCD phải gồm đúng 12 chữ số.' });
+    }
+    const normalizedEmail = String(guest_email || '').trim();
+    if (normalizedEmail && (normalizedEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(normalizedEmail))) {
+      return res.status(400).json({ success: false, message: 'Vui lòng nhập email đúng định dạng, ví dụ khach@example.com.' });
     }
 
     const inDate = new Date(check_in_date);
@@ -215,8 +221,8 @@ async function createWalkInBookingHandler(req, res) {
       adults: Number(adults || 1),
       children: Number(children || 0),
       guestFullName: guest_full_name,
-      guestPhone: guest_phone,
-      guestEmail: guest_email,
+      guestPhone: normalizedPhone,
+      guestEmail: normalizedEmail || null,
       guestIdCard: normalizedIdCard,
       depositAmount: Number(deposit_amount || 0),
       serviceSelections: services.map((selection) => ({ serviceId: Number(selection.service_id), quantity: Number(selection.quantity) })),

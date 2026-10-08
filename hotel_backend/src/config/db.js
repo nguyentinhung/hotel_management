@@ -101,8 +101,111 @@ async function ensureAuthTables() {
   `);
 }
 
+async function ensureBookingStatusConstraint() {
+  const currentPool = await getPool();
+
+  await currentPool.request().query(`
+    IF OBJECT_ID(N'dbo.bookings', N'U') IS NULL
+      THROW 50005, 'Table dbo.bookings was not found in the current database.', 1;
+
+    IF NOT EXISTS (
+      SELECT 1
+      FROM sys.check_constraints
+      WHERE parent_object_id = OBJECT_ID(N'dbo.bookings')
+        AND name = N'chk_booking_status'
+        AND definition LIKE N'%PENDING_PAYMENT%'
+    )
+    BEGIN
+      DECLARE @allowedStatuses NVARCHAR(MAX);
+      DECLARE @sql NVARCHAR(MAX);
+
+      SELECT @allowedStatuses = STRING_AGG(QUOTENAME([status], ''''), N',')
+      FROM (
+        SELECT DISTINCT [status]
+        FROM dbo.bookings
+        WHERE [status] IS NOT NULL
+
+        UNION
+        SELECT N'PENDING_PAYMENT'
+        UNION
+        SELECT N'CONFIRMED'
+        UNION
+        SELECT N'CHECKED_IN'
+        UNION
+        SELECT N'CHECKED_OUT'
+        UNION
+        SELECT N'CANCELLED'
+      ) AS statuses;
+
+      IF EXISTS (
+        SELECT 1
+        FROM sys.check_constraints
+        WHERE parent_object_id = OBJECT_ID(N'dbo.bookings')
+          AND name = N'chk_booking_status'
+      )
+        ALTER TABLE dbo.bookings DROP CONSTRAINT chk_booking_status;
+
+      SET @sql = N'
+        ALTER TABLE dbo.bookings WITH CHECK
+        ADD CONSTRAINT chk_booking_status
+        CHECK ([status] IN (' + @allowedStatuses + N'));
+
+        ALTER TABLE dbo.bookings CHECK CONSTRAINT chk_booking_status;
+      ';
+
+      EXEC sys.sp_executesql @sql;
+    END;
+  `);
+}
+
+async function ensureGuestIdCardOptional() {
+  const currentPool = await getPool();
+
+  await currentPool.request().query(`
+    IF OBJECT_ID(N'dbo.booking_guests', N'U') IS NULL
+      THROW 50006, 'Table dbo.booking_guests was not found in the current database.', 1;
+
+    IF COL_LENGTH(N'dbo.booking_guests', N'id_card_number') IS NULL
+      THROW 50007, 'Column dbo.booking_guests.id_card_number was not found in the current database.', 1;
+
+    IF EXISTS (
+      SELECT 1
+      FROM sys.columns
+      WHERE object_id = OBJECT_ID(N'dbo.booking_guests')
+        AND name = N'id_card_number'
+        AND is_nullable = 0
+    )
+    BEGIN
+      DECLARE @columnType SYSNAME;
+      DECLARE @maxLength SMALLINT;
+      DECLARE @declaredLength NVARCHAR(10);
+      DECLARE @sql NVARCHAR(200);
+
+      SELECT @columnType = TYPE_NAME(system_type_id), @maxLength = max_length
+      FROM sys.columns
+      WHERE object_id = OBJECT_ID(N'dbo.booking_guests')
+        AND name = N'id_card_number';
+
+      IF @columnType NOT IN (N'varchar', N'nvarchar', N'char', N'nchar')
+        THROW 50008, 'Column dbo.booking_guests.id_card_number must be a character column.', 1;
+
+      SET @declaredLength = CASE
+        WHEN @maxLength = -1 THEN N'MAX'
+        WHEN @columnType IN (N'nvarchar', N'nchar') THEN CONVERT(NVARCHAR(10), @maxLength / 2)
+        ELSE CONVERT(NVARCHAR(10), @maxLength)
+      END;
+
+      SET @sql = N'ALTER TABLE dbo.booking_guests ALTER COLUMN id_card_number '
+        + QUOTENAME(@columnType) + N'(' + @declaredLength + N') NULL;';
+      EXEC sys.sp_executesql @sql;
+    END;
+  `);
+}
+
 module.exports = {
   sql,
   getPool,
   ensureAuthTables,
+  ensureBookingStatusConstraint,
+  ensureGuestIdCardOptional,
 };

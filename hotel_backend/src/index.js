@@ -12,8 +12,7 @@ const cors = require('cors');
 const multer = require('multer');
 const sql = require('mssql');
 const jwt = require('jsonwebtoken');
-const { getPool, ensureAuthTables } = require('./config/db');
-const { cancelExpiredBookings } = require('./dao/bookingDao');
+const { getPool, ensureAuthTables, ensureBookingStatusConstraint, ensureGuestIdCardOptional } = require('./config/db');
 // Seed data đã được tắt để dùng dữ liệu mẫu bạn insert trực tiếp trong SQL Server.
 const { getHomeData, getRoomTypes, getRoomTypeDetails, getPromotions, getServices, getActiveServiceById, getReviews } = require('./controllers/homeController');
 const { register, login, logout, verifyEmail, forgotPassword, resetPassword } = require('./controllers/authController');
@@ -469,6 +468,8 @@ app.post('/api/room-types/:roomTypeId/image', requireAdmin, upload.single('image
 
 async function bootstrap() {
   await ensureAuthTables();
+  await ensureBookingStatusConstraint();
+  await ensureGuestIdCardOptional();
   const pool = await getPool();
   await pool.request().query(`
     IF OBJECT_ID(N'dbo.services', N'U') IS NOT NULL
@@ -489,7 +490,7 @@ async function bootstrap() {
   `);
   if (!serviceSchema.recordset[0]?.has_is_deleted) {
     throw new Error(
-      `Database migration did not create dbo.services.is_deleted in "${serviceSchema.recordset[0]?.database_name ?? 'unknown'}". Run sql/add_services_is_deleted.sql against the database used by the backend.`,
+      `Database migration did not create dbo.services.is_deleted in "${serviceSchema.recordset[0]?.database_name ?? 'unknown'}".`,
     );
   }
   const legacyImages = await pool.request().query(`
@@ -523,22 +524,6 @@ async function bootstrap() {
     console.log(`Migrated ${legacyImages.recordset.length} legacy room image row(s) to SQL Server where source files were available.`);
   }
 
-  let isExpirySweepRunning = false;
-  const sweepExpiredBookings = async () => {
-    if (isExpirySweepRunning) return;
-    isExpirySweepRunning = true;
-    try {
-      const cancelledCount = await cancelExpiredBookings();
-      if (cancelledCount > 0) console.log(`Auto-cancelled ${cancelledCount} booking(s) past the 18:00 check-in deadline.`);
-    } catch (error) {
-      console.error('Expired booking sweep failed:', error);
-    } finally {
-      isExpirySweepRunning = false;
-    }
-  };
-  await sweepExpiredBookings();
-  const expirySweepTimer = setInterval(() => void sweepExpiredBookings(), 30_000);
-  expirySweepTimer.unref();
   app.listen(PORT, () => {
     console.log(`Hotel backend is running on http://localhost:${PORT}`);
   });

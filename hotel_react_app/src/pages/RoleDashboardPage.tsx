@@ -391,7 +391,7 @@ function ReceptionBookingHistory({ customerMode = false }: { customerMode?: bool
             setSelectedBooking((current) => current ? { ...current, total_amount: total } : current);
             setBookings((current) => current.map((booking) => String(booking.id) === String(selectedBooking.id) ? { ...booking, total_amount: total } : booking));
           }} />
-          <div className="booking-detail-actions">{selectedBooking.status === 'CONFIRMED' && String(selectedBooking.check_in_date).slice(0, 10) > localToday ? <><button type="button" className="btn btn-primary" onClick={() => setEditing(true)}>Cập nhật booking</button><button type="button" className="btn btn-outline" onClick={() => void cancelSelectedBooking()} disabled={saving}>Hủy booking</button></> : selectedBooking.status === 'CONFIRMED' ? <p className="booking-manage-note">Chỉ có thể cập nhật hoặc hủy trước ngày nhận phòng. Lễ tân có thể check-in trong ngày nhận phòng đến 18:00; sau thời điểm này booking sẽ tự hủy.</p> : null}<button type="button" className="btn btn-outline" onClick={() => setSelectedBooking(null)}>Đóng</button></div>
+          <div className="booking-detail-actions">{selectedBooking.status === 'CONFIRMED' && String(selectedBooking.check_in_date).slice(0, 10) > localToday ? <><button type="button" className="btn btn-primary" onClick={() => setEditing(true)}>Cập nhật booking</button><button type="button" className="btn btn-outline" onClick={() => void cancelSelectedBooking()} disabled={saving}>Hủy booking</button></> : selectedBooking.status === 'CONFIRMED' ? <p className="booking-manage-note">Chỉ có thể cập nhật hoặc hủy trước ngày nhận phòng. Nếu chưa check-in sau 18:00, lễ tân sẽ liên hệ để xử lý booking.</p> : null}<button type="button" className="btn btn-outline" onClick={() => setSelectedBooking(null)}>Đóng</button></div>
         </>}
       </section>
     </div>}
@@ -503,8 +503,8 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
       <main className="dashboard-main">
         <header className="dashboard-header">
           <div>
-            <p className="eyebrow eyebrow-soft">Quản lý</p>
-            <h1>{config.title}</h1>
+            <p className="eyebrow eyebrow-soft">{config.title}</p>
+            <h1 id="dashboard-page-title">{activeItem.label}</h1>
           </div>
           <div className="dashboard-header-actions">
             <a href="/" className="btn btn-outline btn-sm">
@@ -513,10 +513,7 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
           </div>
         </header>
 
-        <section className="dashboard-panel">
-          <div className="panel-head">
-            <h2>{activeItem.label}</h2>
-          </div>
+        <section className="dashboard-panel" aria-labelledby="dashboard-page-title">
 
           {/* =========================================================================
               CHỨC NĂNG: KIỂM TRA PHÒNG TRỐNG & ĐẶT PHÒNG TẠI QUẦY CHO LỄ TÂN
