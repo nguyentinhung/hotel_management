@@ -11,6 +11,7 @@ type RoomType = {
   max_adults: number;
   max_children: number;
   amenities?: string[];
+  amenity_ids?: number[];
   images?: { image_url: string; is_primary: boolean }[];
   average_rating?: number | null;
   review_count?: number;
@@ -23,7 +24,10 @@ type RoomTypeForm = {
   base_price: string;
   max_adults: string;
   max_children: string;
+  amenity_ids: number[];
 };
+
+type Amenity = { id: number; name: string };
 
 const emptyForm: RoomTypeForm = {
   name: '',
@@ -31,6 +35,7 @@ const emptyForm: RoomTypeForm = {
   base_price: '',
   max_adults: '2',
   max_children: '0',
+  amenity_ids: [],
 };
 
 const formatPrice = (price: number) => new Intl.NumberFormat('vi-VN', {
@@ -42,6 +47,9 @@ const formatPrice = (price: number) => new Intl.NumberFormat('vi-VN', {
 export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean }) {
   const { showToast } = useToast();
   const [roomTypes, setRoomTypes] = useState<RoomType[]>([]);
+  const [amenities, setAmenities] = useState<Amenity[]>([]);
+  const [isAmenitiesLoading, setIsAmenitiesLoading] = useState(false);
+  const [amenitiesError, setAmenitiesError] = useState('');
   const [form, setForm] = useState<RoomTypeForm>(emptyForm);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -58,6 +66,23 @@ export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean
   const [deleteError, setDeleteError] = useState('');
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [selectedImagePreview, setSelectedImagePreview] = useState<string | null>(null);
+
+  const loadAmenities = useCallback(async () => {
+    if (readOnly) return;
+    setIsAmenitiesLoading(true);
+    setAmenitiesError('');
+    try {
+      const token = localStorage.getItem('accessToken') || undefined;
+      setAmenities(await api.get<Amenity[]>('/api/admin/amenities', token));
+    } catch (loadError) {
+      const message = loadError instanceof Error ? loadError.message : 'Không thể tải danh sách tiện nghi.';
+      setAmenities([]);
+      setAmenitiesError(message);
+      showToast(message, 'error');
+    } finally {
+      setIsAmenitiesLoading(false);
+    }
+  }, [readOnly, showToast]);
 
   useEffect(() => {
     if (!selectedImage) {
@@ -120,6 +145,7 @@ export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean
       base_price: String(roomType.base_price),
       max_adults: String(roomType.max_adults),
       max_children: String(roomType.max_children),
+      amenity_ids: roomType.amenity_ids || [],
     });
     setError('');
     setSuccess('');
@@ -151,6 +177,10 @@ export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean
     void loadRoomTypes();
   }, [loadRoomTypes]);
 
+  useEffect(() => {
+    void loadAmenities();
+  }, [loadAmenities]);
+
   const handleSave = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError('');
@@ -173,6 +203,7 @@ export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean
         base_price: Number(form.base_price),
         max_adults: Number(form.max_adults),
         max_children: Number(form.max_children),
+        amenity_ids: form.amenity_ids,
       };
       const result = editingRoomTypeId == null
         ? await api.postWithAuth<{ message: string; roomType: RoomType }>('/api/room-types', payload, token)
@@ -332,6 +363,29 @@ export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean
                   <span>Số trẻ em tối đa</span>
                   <input required type="number" min="0" max="255" step="1" value={form.max_children} onChange={(event) => setForm({ ...form, max_children: event.target.value })} />
                 </label>
+                <fieldset className="room-type-amenity-picker room-type-field-wide">
+                  <legend>Tiện nghi</legend>
+                  {isAmenitiesLoading ? <p>Đang tải tiện nghi...</p> : amenitiesError ? (
+                    <div className="error-text" role="alert">
+                      <p>{amenitiesError}</p>
+                      <button className="btn btn-outline" type="button" onClick={() => void loadAmenities()}>Tải lại</button>
+                    </div>
+                  ) : amenities.length ? <div className="room-type-amenity-options">
+                    {amenities.map((amenity) => <label key={amenity.id}>
+                      <input
+                        type="checkbox"
+                        checked={form.amenity_ids.includes(amenity.id)}
+                        onChange={(event) => setForm((current) => ({
+                          ...current,
+                          amenity_ids: event.target.checked
+                            ? [...current.amenity_ids, amenity.id]
+                            : current.amenity_ids.filter((id) => id !== amenity.id),
+                        }))}
+                      />
+                      <span>{amenity.name}</span>
+                    </label>)}
+                  </div> : <p>Chưa có tiện nghi nào trong hệ thống.</p>}
+                </fieldset>
               </div>
               <div className="room-type-form-actions">
                 <button className="btn btn-outline" type="button" onClick={() => setIsModalOpen(false)} disabled={isSaving}>Hủy</button>

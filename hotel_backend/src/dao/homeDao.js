@@ -23,6 +23,12 @@ async function getRoomTypes() {
         WHERE rta.room_type_id = rt.id
       ) AS amenities,
       (
+        SELECT STRING_AGG(CONVERT(varchar(20), a.id), ',')
+        FROM room_type_amenities rta
+        JOIN amenities a ON a.id = rta.amenity_id
+        WHERE rta.room_type_id = rt.id
+      ) AS amenity_ids,
+      (
         SELECT AVG(r.rating)
         FROM reviews r
         WHERE r.room_type_id = rt.id AND r.is_hidden = 0
@@ -57,6 +63,12 @@ async function getRoomTypeById(roomTypeId) {
           JOIN amenities a ON a.id = rta.amenity_id
           WHERE rta.room_type_id = rt.id
         ) AS amenities,
+        (
+          SELECT STRING_AGG(CONVERT(varchar(20), a.id), ',')
+          FROM room_type_amenities rta
+          JOIN amenities a ON a.id = rta.amenity_id
+          WHERE rta.room_type_id = rt.id
+        ) AS amenity_ids,
         (
           SELECT AVG(CAST(r.rating AS DECIMAL(4, 2)))
           FROM reviews r
@@ -100,6 +112,7 @@ async function getRoomTypeById(roomTypeId) {
     average_rating: roomType.average_rating == null ? null : Number(roomType.average_rating),
     review_count: Number(roomType.review_count ?? 0),
     amenities: String(roomType.amenities || '').split(',').map((item) => item.trim()).filter(Boolean),
+    amenity_ids: String(roomType.amenity_ids || '').split(',').map(Number).filter(Number.isInteger),
     images: imagesResult.recordset,
     reviews: reviewsResult.recordset,
   };

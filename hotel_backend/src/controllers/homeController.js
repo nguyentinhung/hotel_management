@@ -28,6 +28,7 @@ async function getRoomTypes(req, res) {
       max_adults: item.max_adults ?? 0,
       max_children: item.max_children ?? 0,
       amenities: String(item.amenities || '').split(',').map((entry) => entry.trim()).filter(Boolean),
+      amenity_ids: String(item.amenity_ids || '').split(',').map(Number).filter(Number.isInteger),
       image_url: item.image_url || null,
       average_rating: Number((item.average_rating ?? 0).toFixed(1)),
       review_count: Number(item.review_count ?? 0),

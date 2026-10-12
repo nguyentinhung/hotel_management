@@ -19,7 +19,7 @@ const { register, login, logout, verifyEmail, forgotPassword, resetPassword } = 
 const { checkAvailability, getAvailableRooms } = require('./controllers/roomController');
 const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, updateBookingHandler, cancelBookingHandler, getActiveBookingsHandler, checkOutBookingHandler, finishRoomCleaningHandler, reportRoomMaintenanceHandler, getRoomMaintenanceReportsHandler, resolveRoomMaintenanceReportHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
 const serviceController = require('./controllers/serviceController');
-const { requireCustomer, requirePaymentStaff, requirePaymentActor } = require('./middleware/customerAuth');
+const { requireCustomer, requirePaymentStaff, requirePaymentActor } = require('./services/customerAuth');
 const { createPayment, getPaymentList, getCustomerPaymentList, getPaymentStatusRequest, confirmPaymentRequest, simulateDepositPaymentRequest } = require('./controllers/paymentController');
 const { handleVnpayReturn, handleVnpayIpn } = require('./controllers/vnpayController');
 const bookingServiceController = require('./controllers/bookingServiceController');
@@ -91,6 +91,47 @@ app.get('/api/home', getHomeData);
 // Lấy danh sách loại phòng để render UI
 app.get('/api/room-types', getRoomTypes);
 app.get('/api/room-types/:roomTypeId', getRoomTypeDetails);
+app.get('/api/admin/amenities', requireAdmin, async (_req, res) => {
+  try {
+    const pool = await getPool();
+    const result = await pool.request().query('SELECT id, name FROM amenities ORDER BY name, id;');
+    return res.json(result.recordset);
+  } catch (error) {
+    console.error('Get room amenities error:', error);
+    return res.status(500).json({ message: 'Không thể tải danh sách tiện nghi.' });
+  }
+});
+
+function normalizeAmenityIds(value) {
+  if (value == null) return [];
+  if (!Array.isArray(value)) return null;
+  const ids = value.map(Number);
+  if (ids.some((id) => !Number.isInteger(id) || id < 1)) return null;
+  return [...new Set(ids)];
+}
+
+async function validateAmenityIds(request, amenityIds) {
+  if (!amenityIds.length) return true;
+  const placeholders = amenityIds.map((id, index) => {
+    request.input(`amenityId${index}`, sql.Int, id);
+    return `@amenityId${index}`;
+  });
+  const result = await request.query(`SELECT COUNT(*) AS count FROM amenities WHERE id IN (${placeholders.join(', ')});`);
+  return Number(result.recordset[0].count) === amenityIds.length;
+}
+
+async function saveRoomTypeAmenities(transaction, roomTypeId, amenityIds) {
+  await new sql.Request(transaction)
+    .input('roomTypeId', sql.Int, roomTypeId)
+    .query('DELETE FROM room_type_amenities WHERE room_type_id = @roomTypeId;');
+  for (const amenityId of amenityIds) {
+    await new sql.Request(transaction)
+      .input('roomTypeId', sql.Int, roomTypeId)
+      .input('amenityId', sql.Int, amenityId)
+      .query('INSERT INTO room_type_amenities (room_type_id, amenity_id) VALUES (@roomTypeId, @amenityId);');
+  }
+}
+
 // Chỉ admin được tạo loại phòng (UC-04.1).
 app.post('/api/room-types', async (req, res) => {
   const authorization = req.headers.authorization || '';
@@ -110,6 +151,7 @@ app.post('/api/room-types', async (req, res) => {
   }
 
   const { name, description, base_price, max_adults, max_children } = req.body || {};
+  const amenityIds = normalizeAmenityIds(req.body?.amenity_ids);
   const normalizedName = typeof name === 'string' ? name.trim() : '';
   const price = Number(base_price);
   const adults = Number(max_adults);
@@ -124,7 +166,11 @@ app.post('/api/room-types', async (req, res) => {
   if (description != null && typeof description !== 'string') {
     return res.status(400).json({ message: 'Mô tả không hợp lệ.' });
   }
+  if (amenityIds == null) {
+    return res.status(400).json({ message: 'Danh sách tiện nghi không hợp lệ.' });
+  }
 
+  let transaction;
   try {
     const pool = await getPool();
     const existingType = await pool.request()
@@ -134,7 +180,13 @@ app.post('/api/room-types', async (req, res) => {
       return res.status(409).json({ message: 'Tên loại phòng đã tồn tại.' });
     }
 
-    const result = await pool.request()
+    if (!await validateAmenityIds(pool.request(), amenityIds)) {
+      return res.status(400).json({ message: 'Một hoặc nhiều tiện nghi không tồn tại.' });
+    }
+
+    transaction = new sql.Transaction(pool);
+    await transaction.begin();
+    const result = await new sql.Request(transaction)
       .input('name', sql.NVarChar(100), normalizedName)
       .input('description', sql.NVarChar(sql.MAX), description?.trim() || null)
       .input('base_price', sql.Decimal(12, 2), price)
@@ -147,11 +199,17 @@ app.post('/api/room-types', async (req, res) => {
         VALUES (@name, @description, @base_price, @max_adults, @max_children);
       `);
 
+    const roomType = result.recordset[0];
+    await saveRoomTypeAmenities(transaction, roomType.id, amenityIds);
+    await transaction.commit();
+    transaction = null;
+
     return res.status(201).json({
       message: 'Thêm loại phòng thành công.',
-      roomType: { ...result.recordset[0], base_price: Number(result.recordset[0].base_price) },
+      roomType: { ...roomType, base_price: Number(roomType.base_price), amenities: [], amenity_ids: amenityIds },
     });
   } catch (error) {
+    if (transaction) await transaction.rollback();
     if (error.number === 2601 || error.number === 2627) {
       return res.status(409).json({ message: 'Tên loại phòng đã tồn tại.' });
     }
@@ -183,6 +241,7 @@ app.put('/api/room-types/:roomTypeId', async (req, res) => {
   }
 
   const { name, description, base_price, max_adults, max_children } = req.body || {};
+  const amenityIds = normalizeAmenityIds(req.body?.amenity_ids);
   const normalizedName = typeof name === 'string' ? name.trim() : '';
   const price = Number(base_price);
   const adults = Number(max_adults);
@@ -197,7 +256,11 @@ app.put('/api/room-types/:roomTypeId', async (req, res) => {
   if (description != null && typeof description !== 'string') {
     return res.status(400).json({ message: 'Mô tả không hợp lệ.' });
   }
+  if (amenityIds == null) {
+    return res.status(400).json({ message: 'Danh sách tiện nghi không hợp lệ.' });
+  }
 
+  let transaction;
   try {
     const pool = await getPool();
     const existingType = await pool.request()
@@ -208,7 +271,13 @@ app.put('/api/room-types/:roomTypeId', async (req, res) => {
       return res.status(409).json({ message: 'Tên loại phòng đã được sử dụng.' });
     }
 
-    const result = await pool.request()
+    if (!await validateAmenityIds(pool.request(), amenityIds)) {
+      return res.status(400).json({ message: 'Một hoặc nhiều tiện nghi không tồn tại.' });
+    }
+
+    transaction = new sql.Transaction(pool);
+    await transaction.begin();
+    const result = await new sql.Request(transaction)
       .input('roomTypeId', sql.Int, roomTypeId)
       .input('name', sql.NVarChar(100), normalizedName)
       .input('description', sql.NVarChar(sql.MAX), description?.trim() || null)
@@ -228,13 +297,19 @@ app.put('/api/room-types/:roomTypeId', async (req, res) => {
       `);
 
     if (!result.recordset.length) {
+      await transaction.rollback();
+      transaction = null;
       return res.status(404).json({ message: 'Không tìm thấy loại phòng.' });
     }
+    await saveRoomTypeAmenities(transaction, roomTypeId, amenityIds);
+    await transaction.commit();
+    transaction = null;
     return res.json({
       message: 'Cập nhật loại phòng thành công.',
-      roomType: { ...result.recordset[0], base_price: Number(result.recordset[0].base_price) },
+      roomType: { ...result.recordset[0], base_price: Number(result.recordset[0].base_price), amenity_ids: amenityIds },
     });
   } catch (error) {
+    if (transaction) await transaction.rollback();
     console.error('Update room type error:', error);
     return res.status(500).json({ message: 'Không thể cập nhật loại phòng.' });
   }
