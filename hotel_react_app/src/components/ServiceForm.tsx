@@ -14,7 +14,8 @@ const emptyData: ServiceRequest = {
     description: '',
     price: 0,
     unit: '',
-    is_active: true
+    is_active: true,
+    booking_policy: 'ON_DEMAND'
 };
 
 export default function ServiceForm({
@@ -136,6 +137,18 @@ export default function ServiceForm({
                 >
                     <option value="true">Active</option>
                     <option value="false">Inactive</option>
+                </select>
+            </div>
+
+            <div className="form-group">
+                <label>Cách cung cấp dịch vụ</label>
+                <select
+                    name="booking_policy"
+                    value={formData.booking_policy}
+                    onChange={handleChange}
+                >
+                    <option value="PREBOOK">Đặt trước khi đặt phòng</option>
+                    <option value="ON_DEMAND">Ghi nhận khi khách yêu cầu</option>
                 </select>
             </div>
 

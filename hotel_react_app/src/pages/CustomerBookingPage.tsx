@@ -63,7 +63,9 @@ export default function CustomerBookingPage() {
     }
     fetch('http://localhost:5000/api/services?active=true')
       .then((response) => response.ok ? response.json() : Promise.reject(new Error('Không tải được danh sách dịch vụ.')))
-      .then((data: ServiceItem[]) => setServiceOptions(Array.isArray(data) ? data : []))
+      .then((data: ServiceItem[]) => setServiceOptions(Array.isArray(data)
+        ? data.filter((service) => service.booking_policy === 'PREBOOK')
+        : []))
       .catch(() => setServiceOptions([]));
 
     if (params.has('room_type_id') && (!Number.isInteger(roomTypeId) || roomTypeId < 1)) {

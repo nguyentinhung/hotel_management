@@ -92,6 +92,9 @@ async function addBookingService(req, res) {
     const service = await addServiceToCheckedInBooking({ bookingId: req.params.bookingId, bookingRoomId, serviceId, quantity, customerId: req.bookingServiceCustomerId });
     return res.status(201).json({ success: true, service });
   } catch (error) {
+    if (/not configured for on-demand/i.test(error.message)) {
+      return res.status(400).json({ message: 'Chỉ có thể ghi nhận dịch vụ được cấu hình là “Ghi nhận khi khách yêu cầu”.' });
+    }
     if (/not found, or booking is not checked in/i.test(error.message)) {
       return res.status(409).json({ message: 'Chỉ có thể thêm dịch vụ vào booking của bạn đang trong thời gian lưu trú và dịch vụ còn hoạt động.' });
     }

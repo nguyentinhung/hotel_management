@@ -54,7 +54,7 @@ async function addServiceToCheckedInBooking({ bookingId, bookingRoomId, serviceI
     if (customerId != null) request.input('customerId', sql.BigInt, Number(customerId));
     const result = await request.query(`
       SELECT b.id AS booking_id, b.status, br.id AS booking_room_id,
-        s.id AS service_id, s.name AS service_name, s.unit, s.price
+        s.id AS service_id, s.name AS service_name, s.unit, s.price, s.booking_policy
       FROM bookings b WITH (UPDLOCK, HOLDLOCK)
       JOIN booking_rooms br WITH (UPDLOCK, HOLDLOCK) ON br.booking_id = b.id
       JOIN services s WITH (UPDLOCK, HOLDLOCK) ON s.id = @serviceId
@@ -67,6 +67,9 @@ async function addServiceToCheckedInBooking({ bookingId, bookingRoomId, serviceI
     `);
     const row = result.recordset[0];
     if (!row) throw new Error('Booking room or active service was not found, or booking is not checked in.');
+    if (row.booking_policy !== 'ON_DEMAND') {
+      throw new Error('Selected service is not configured for on-demand booking usage.');
+    }
 
     const insert = await transaction.request()
       .input('bookingId', sql.BigInt, bookingId)

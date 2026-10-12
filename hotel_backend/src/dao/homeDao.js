@@ -122,7 +122,7 @@ async function getServices(activeOnly = true) {
   const pool = await getPool();
   const request = pool.request();
   let query = `
-    SELECT id, name, description, price, unit, is_active
+    SELECT id, name, description, price, unit, is_active, booking_policy
     FROM services
   `;
 
@@ -140,7 +140,7 @@ async function getActiveServiceById(id) {
   const pool = await getPool();
   const result = await pool.request()
     .input('id', sql.Int, id)
-    .query(`SELECT id, name, description, price, unit, is_active FROM services WHERE id = @id AND is_active = 1 AND is_deleted = 0;`);
+    .query(`SELECT id, name, description, price, unit, is_active, booking_policy FROM services WHERE id = @id AND is_active = 1 AND is_deleted = 0;`);
   return result.recordset[0] || null;
 }
 

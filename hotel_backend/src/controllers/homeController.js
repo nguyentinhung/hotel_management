@@ -92,6 +92,7 @@ async function getServices(req, res) {
       price: Number(item.price ?? 0),
       unit: item.unit,
       is_active: Boolean(item.is_active),
+      booking_policy: item.booking_policy,
     })));
   } catch (error) {
     console.error('getServices error:', error);

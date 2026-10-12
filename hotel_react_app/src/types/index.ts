@@ -33,6 +33,7 @@ export interface ServiceItem {
   price: number;
   unit: string;
   is_active: boolean;
+  booking_policy: 'PREBOOK' | 'ON_DEMAND';
 }
 
 export interface Review {

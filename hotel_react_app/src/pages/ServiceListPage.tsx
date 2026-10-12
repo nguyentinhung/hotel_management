@@ -162,7 +162,8 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
             description: selectedService.description,
             price: selectedService.price,
             unit: selectedService.unit,
-            is_active: selectedService.is_active
+            is_active: selectedService.is_active,
+            booking_policy: selectedService.booking_policy
         };
 
         return (
@@ -209,6 +210,7 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
                     <div className="service-detail-facts">
                         <div><span>Giá dịch vụ</span><strong>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(selectedService.price)}</strong></div>
                         <div><span>Đơn vị tính</span><strong>{selectedService.unit}</strong></div>
+                        <div><span>Cách cung cấp</span><strong>{selectedService.booking_policy === 'PREBOOK' ? 'Đặt trước khi đặt phòng' : 'Ghi nhận khi khách yêu cầu'}</strong></div>
                         <div><span>Mã dịch vụ</span><strong>#{selectedService.id}</strong></div>
                     </div>
                 </article>
@@ -254,6 +256,7 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
                                 <th style={thStyle}>Mô tả</th>
                                 <th style={thStyle}>Giá</th>
                                 <th style={thStyle}>Đơn vị</th>
+                                <th style={thStyle}>Cách cung cấp</th>
                                 <th style={thStyle}>Trạng thái</th>
                                 <th style={thStyle}>Thao tác</th>
                             </tr>
@@ -277,6 +280,7 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
                                     </td>
                                     <td style={tdStyle}>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(service.price)}</td>
                                     <td style={tdStyle}>{service.unit}</td>
+                                    <td style={tdStyle}>{service.booking_policy === 'PREBOOK' ? 'Đặt trước' : 'Khi khách yêu cầu'}</td>
                                     <td style={tdStyle}>
                                         <span className={`status-badge ${service.is_active ? 'active' : 'inactive'}`}>
                                             {service.is_active ? 'Active' : 'Inactive'}

@@ -22,6 +22,9 @@ function validateService(data) {
     if (data.is_active != null && typeof data.is_active !== 'boolean') {
         throw new Error('Service status must be active or inactive.');
     }
+    if (data.booking_policy != null && !['PREBOOK', 'ON_DEMAND'].includes(data.booking_policy)) {
+        throw new Error('Service booking policy must be PREBOOK or ON_DEMAND.');
+    }
 }
 
 async function getAllServices() {
@@ -47,7 +50,8 @@ async function createService(data) {
         description: data.description ? data.description.trim() : '',
         price: Number(data.price),
         unit: data.unit.trim(),
-        is_active: data.is_active !== false
+        is_active: data.is_active !== false,
+        booking_policy: data.booking_policy || 'ON_DEMAND'
     });
 }
 
@@ -62,7 +66,8 @@ async function updateService(id, data) {
         description: data.description ? data.description.trim() : '',
         price: Number(data.price),
         unit: data.unit.trim(),
-        is_active: data.is_active !== false
+        is_active: data.is_active !== false,
+        booking_policy: data.booking_policy || existing.booking_policy || 'ON_DEMAND'
     });
 }
 

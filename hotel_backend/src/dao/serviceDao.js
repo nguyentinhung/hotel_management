@@ -9,7 +9,8 @@ async function findAll() {
             description,
             price,
             unit,
-            is_active
+            is_active,
+            booking_policy
         FROM services
         WHERE is_deleted = 0
         ORDER BY id;
@@ -26,7 +27,8 @@ async function findActive() {
             description,
             price,
             unit,
-            is_active
+            is_active,
+            booking_policy
         FROM services
         WHERE is_active = 1 AND is_deleted = 0
         ORDER BY id;
@@ -45,7 +47,8 @@ async function findById(id) {
                 description,
                 price,
                 unit,
-                is_active
+                is_active,
+                booking_policy
             FROM services
             WHERE id = @id AND is_deleted = 0;
         `);
@@ -60,6 +63,7 @@ async function create(service) {
         .input('price', service.price)
         .input('unit', service.unit)
         .input('is_active', service.is_active)
+        .input('booking_policy', service.booking_policy)
         .query(`
             INSERT INTO services
             (
@@ -67,7 +71,8 @@ async function create(service) {
                 description,
                 price,
                 unit,
-                is_active
+                is_active,
+                booking_policy
             )
             OUTPUT
                 INSERTED.id,
@@ -75,14 +80,16 @@ async function create(service) {
                 INSERTED.description,
                 INSERTED.price,
                 INSERTED.unit,
-                INSERTED.is_active
+                INSERTED.is_active,
+                INSERTED.booking_policy
             VALUES
             (
                 @name,
                 @description,
                 @price,
                 @unit,
-                @is_active
+                @is_active,
+                @booking_policy
             );
         `);
     return result.recordset[0];
@@ -97,6 +104,7 @@ async function update(id, service) {
         .input('price', service.price)
         .input('unit', service.unit)
         .input('is_active', service.is_active)
+        .input('booking_policy', service.booking_policy)
         .query(`
             UPDATE services
             SET
@@ -104,14 +112,16 @@ async function update(id, service) {
                 description = @description,
                 price = @price,
                 unit = @unit,
-                is_active = @is_active
+                is_active = @is_active,
+                booking_policy = @booking_policy
             OUTPUT
                 INSERTED.id,
                 INSERTED.name,
                 INSERTED.description,
                 INSERTED.price,
                 INSERTED.unit,
-                INSERTED.is_active
+                INSERTED.is_active,
+                INSERTED.booking_policy
             WHERE id = @id AND is_deleted = 0;
         `);
     return result.recordset[0] || null;

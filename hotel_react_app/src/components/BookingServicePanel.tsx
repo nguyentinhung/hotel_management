@@ -34,11 +34,14 @@ export default function BookingServicePanel({ bookingId, canAddServices = false,
       if (!serviceResponse.ok) throw new Error(serviceData.message || 'Không tải được danh sách dịch vụ.');
       setRooms(bookingData.rooms || []);
       setUsedServices(bookingData.services || []);
-      setServices(Array.isArray(serviceData) ? serviceData : []);
+      const onDemandServices = Array.isArray(serviceData)
+        ? serviceData.filter((service: Service) => service.booking_policy === 'ON_DEMAND')
+        : [];
+      setServices(onDemandServices);
       setRoomId((previous) => bookingData.rooms?.some((room: ServiceRoom) => String(room.booking_room_id) === previous)
         ? previous : String(bookingData.rooms?.[0]?.booking_room_id || ''));
-      setServiceId((previous) => Array.isArray(serviceData) && serviceData.some((service: Service) => String(service.id) === previous)
-        ? previous : String((Array.isArray(serviceData) ? serviceData[0]?.id : '') || ''));
+      setServiceId((previous) => onDemandServices.some((service: Service) => String(service.id) === previous)
+        ? previous : String(onDemandServices[0]?.id || ''));
       setMessage('');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Không tải được dữ liệu dịch vụ.');
@@ -80,6 +83,7 @@ export default function BookingServicePanel({ bookingId, canAddServices = false,
     </form>}
     {message && <p className="booking-services-message" role="status">{message}</p>}
     {canAddServices && rooms.length === 0 && !message && <p className="booking-services-message">Không tìm thấy phòng thuộc booking trong thời gian lưu trú.</p>}
+    {canAddServices && rooms.length > 0 && services.length === 0 && !message && <p className="booking-services-message">Không có dịch vụ nào đang được ghi nhận khi khách yêu cầu.</p>}
     {usedServices.length > 0 ? <div className="table-wrap"><table className="reception-table"><thead><tr><th>Dịch vụ</th><th>Phòng</th><th>Số lượng</th><th>Đơn giá</th><th>Tổng</th><th>Thời gian</th></tr></thead><tbody>{usedServices.map((item) => <tr key={item.id}><td>{item.service_name}</td><td>{item.room_number || '—'}</td><td>{item.quantity} {item.unit}</td><td>{money(Number(item.unit_price))}</td><td>{money(Number(item.amount))}</td><td>{new Date(item.used_at).toLocaleString('vi-VN')}</td></tr>)}</tbody></table></div> : <p className="booking-services-message">Booking chưa có dịch vụ phát sinh.</p>}
   </section>;
 }

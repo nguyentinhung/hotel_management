@@ -79,7 +79,7 @@ async function createCustomerBookingHandler(req, res) {
         ? 403
         : /room type was not found/i.test(error.message)
           ? 404
-          : /guest count exceeds/i.test(error.message)
+          : /guest count exceeds|only prebook services/i.test(error.message)
             ? 400
             : 500;
     const message = /no rooms are available|not enough rooms available/i.test(error.message)
@@ -88,8 +88,10 @@ async function createCustomerBookingHandler(req, res) {
         ? 'Tài khoản khách hàng không còn hoạt động.'
         : /room type was not found/i.test(error.message)
           ? 'Không tìm thấy loại phòng đã chọn.'
-          : /guest count exceeds/i.test(error.message)
-            ? 'Số lượng khách vượt quá sức chứa của loại phòng này.'
+          : /only prebook services/i.test(error.message)
+            ? 'Chỉ có thể chọn dịch vụ được cấu hình cho phép đặt trước.'
+            : /guest count exceeds/i.test(error.message)
+              ? 'Số lượng khách vượt quá sức chứa của loại phòng này.'
             : 'Không thể tạo đặt phòng lúc này. Vui lòng thử lại.';
     return res.status(status).json({ success: false, message });
   }
@@ -239,9 +241,12 @@ async function createWalkInBookingHandler(req, res) {
     });
   } catch (error) {
     console.error('Create walk-in booking error:', error);
-    return res.status(500).json({
+    const isInvalidServicePolicy = /only prebook services/i.test(error.message);
+    return res.status(isInvalidServicePolicy ? 400 : 500).json({
       success: false,
-      message: error.message || 'Không thể tạo đơn đặt phòng tại quầy.',
+      message: isInvalidServicePolicy
+        ? 'Chỉ có thể chọn dịch vụ được cấu hình cho phép đặt trước.'
+        : error.message || 'Không thể tạo đơn đặt phòng tại quầy.',
     });
   }
 }

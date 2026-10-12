@@ -116,13 +116,17 @@ async function createWalkInBooking(data) {
     }
     const serviceResult = await pool.request()
       .input('serviceId', sql.Int, serviceId)
-      .query('SELECT TOP 1 id, price FROM services WHERE id = @serviceId AND is_active = 1 AND is_deleted = 0;');
+      .query('SELECT TOP 1 id, price, booking_policy FROM services WHERE id = @serviceId AND is_active = 1 AND is_deleted = 0;');
     if (!serviceResult.recordset.length) throw new Error('Selected service was not found.');
+    if (serviceResult.recordset[0].booking_policy !== 'PREBOOK') {
+      throw new Error('Only prebook services can be selected when creating a booking.');
+    }
     validServices.push({ serviceId, quantity, price: Number(serviceResult.recordset[0].price ?? 0) });
   }
   const serviceTotal = validServices.reduce((sum, service) => sum + service.price * service.quantity, 0) * selectedRooms.length;
   const totalAmount = totalPerNight * nights + serviceTotal;
   const requiredDepositAmount = Math.ceil(totalPerNight * nights * 0.3);
+  const finalDeposit = Number(depositAmount ?? 0);
   if (checkInNow && finalDeposit < requiredDepositAmount) {
     throw new Error(`A deposit of at least ${requiredDepositAmount} is required before check-in.`);
   }
@@ -168,7 +172,6 @@ async function createWalkInBooking(data) {
   // Nếu lễ tân chọn "Nhận phòng ngay" -> CHECKED_IN, ngược lại CONFIRMED
   const bookingCode = generateBookingCode();
   const initialStatus = checkInNow ? 'CHECKED_IN' : 'CONFIRMED';
-  const finalDeposit = Number(depositAmount ?? 0);
   if (checkInNow && selectedRooms.some(({ room }) => !room)) throw new Error('Cannot check in before every room is assigned and ready.');
 
   // 5. Thêm bản ghi vào bảng bookings
@@ -356,12 +359,15 @@ async function createCustomerBooking(data) {
       const serviceResult = await transaction.request()
         .input('serviceId', sql.Int, serviceId)
         .query(`
-          SELECT TOP 1 id, name, price
+          SELECT TOP 1 id, name, price, booking_policy
           FROM services
           WHERE id = @serviceId AND is_active = 1 AND is_deleted = 0;
         `);
       if (!serviceResult.recordset.length) throw new Error('Selected service was not found.');
       const service = serviceResult.recordset[0];
+      if (service.booking_policy !== 'PREBOOK') {
+        throw new Error('Only prebook services can be selected when creating a booking.');
+      }
       validServices.push({ serviceId: Number(service.id), quantity, price: Number(service.price ?? 0), name: service.name });
     }
 

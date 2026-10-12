@@ -165,6 +165,9 @@ export default function ReceptionRoomBooking() {
   const [hasVerifiedOriginalId, setHasVerifiedOriginalId] = useState(false);
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [isCheckingOut, setIsCheckingOut] = useState<string | number | null>(null);
+  const [selectedCheckOutBooking, setSelectedCheckOutBooking] = useState<RecentBooking | null>(null);
+  const [checkOutPaymentMethod, setCheckOutPaymentMethod] = useState<'CASH' | 'VNPAY'>('CASH');
+  const vnpayEnabled = import.meta.env.VITE_VNPAY_ENABLED === 'true';
 
   const vietnamToday = getVietnamToday(attentionNow);
   const overdueCheckInCutoffUtc = getVietnamCheckInCutoffUtc(attentionNow);
@@ -321,21 +324,26 @@ export default function ReceptionRoomBooking() {
     }
   };
 
-  const handleCheckOut = async (booking: RecentBooking) => {
+  const handleCheckOut = (booking: RecentBooking) => {
     const accessToken = localStorage.getItem('accessToken');
-    if (!accessToken) return;
-    const vnpayEnabled = import.meta.env.VITE_VNPAY_ENABLED === 'true';
-    const selectedMethod = vnpayEnabled
-      ? window.prompt('Chọn phương thức thanh toán khi checkout:\n1 - Tiền mặt\n2 - VNPay', '1')
-      : '1';
-    if (selectedMethod === null) return;
-    const method = selectedMethod.trim() === '1' ? 'CASH' : selectedMethod.trim() === '2' && vnpayEnabled ? 'VNPAY' : null;
-    if (!method) {
-      showToast('Lựa chọn không hợp lệ. Chọn tiền mặt hoặc VNPay.', 'error');
+    if (!accessToken) {
+      showToast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.', 'error');
       return;
     }
-    const paymentLabel = method === 'CASH' ? 'tiền mặt' : 'VNPay';
-    if (!window.confirm(`Xác nhận checkout cho ${booking.guest_full_name} và thanh toán bằng ${paymentLabel}?`)) return;
+    setCheckOutPaymentMethod('CASH');
+    setSelectedCheckOutBooking(booking);
+  };
+
+  const confirmCheckOut = async () => {
+    if (!selectedCheckOutBooking) return;
+    const accessToken = localStorage.getItem('accessToken');
+    if (!accessToken) {
+      showToast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.', 'error');
+      setSelectedCheckOutBooking(null);
+      return;
+    }
+    const booking = selectedCheckOutBooking;
+    const method = checkOutPaymentMethod;
     try {
       setIsCheckingOut(booking.id);
       const result = await createReceptionCheckout(booking.id, method);
@@ -344,6 +352,7 @@ export default function ReceptionRoomBooking() {
         window.location.assign(result.payment_url);
         return;
       }
+      setSelectedCheckOutBooking(null);
       await fetchRecent();
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Không thể check-out booking.', 'error');
@@ -359,7 +368,9 @@ export default function ReceptionRoomBooking() {
     void fetchAttentionBookings();
     fetch('http://localhost:5000/api/services?active=true')
       .then((response) => response.ok ? response.json() : Promise.reject(new Error('Không tải được danh sách dịch vụ.')))
-      .then((data: ServiceItem[]) => setServiceOptions(Array.isArray(data) ? data : []))
+      .then((data: ServiceItem[]) => setServiceOptions(Array.isArray(data)
+        ? data.filter((service) => service.booking_policy === 'PREBOOK')
+        : []))
       .catch(() => setServiceOptions([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1241,6 +1252,41 @@ export default function ReceptionRoomBooking() {
                   <button type="button" className="btn btn-outline" onClick={() => setSelectedCheckInBooking(null)} disabled={isCheckingIn}>Hủy</button>
                 </div>
               </form>
+            </section>
+          </div>
+        )}
+        {selectedCheckOutBooking && (
+          <div className="checkout-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && isCheckingOut == null) setSelectedCheckOutBooking(null); }}>
+            <section className="checkout-modal" role="dialog" aria-modal="true" aria-labelledby="checkout-modal-title">
+              <header className="checkin-modal-header">
+                <div><span className="checkin-modal-eyebrow">Thanh toán checkout</span><h3 id="checkout-modal-title">Xác nhận checkout</h3></div>
+                <button className="checkin-modal-close" type="button" aria-label="Đóng" disabled={isCheckingOut != null} onClick={() => setSelectedCheckOutBooking(null)}>×</button>
+              </header>
+              <div className="checkin-modal-booking">
+                <strong>{selectedCheckOutBooking.guest_full_name}</strong>
+                <span>{selectedCheckOutBooking.booking_code} · {selectedCheckOutBooking.room_type_name || 'Phòng'}{selectedCheckOutBooking.room_number ? ` · P.${selectedCheckOutBooking.room_number}` : ''}</span>
+                {Number(selectedCheckOutBooking.balance_due ?? 0) > 0 && <span>Số tiền cần thanh toán: {formatCurrency(Number(selectedCheckOutBooking.balance_due))}</span>}
+              </div>
+              <div className="checkout-modal-content">
+                <fieldset className="checkout-payment-options">
+                  <legend>Chọn phương thức thanh toán</legend>
+                  <label>
+                    <input type="radio" name="checkout-payment-method" value="CASH" checked={checkOutPaymentMethod === 'CASH'} onChange={() => setCheckOutPaymentMethod('CASH')} />
+                    <span>Tiền mặt</span>
+                  </label>
+                  {vnpayEnabled && <label>
+                    <input type="radio" name="checkout-payment-method" value="VNPAY" checked={checkOutPaymentMethod === 'VNPAY'} onChange={() => setCheckOutPaymentMethod('VNPAY')} />
+                    <span>VNPay</span>
+                  </label>}
+                </fieldset>
+                <p className="checkout-modal-note">Xác nhận checkout cho khách và thanh toán bằng {checkOutPaymentMethod === 'CASH' ? 'tiền mặt' : 'VNPay'}?</p>
+                <div className="booking-actions">
+                  <button className="btn btn-primary" type="button" disabled={isCheckingOut != null} onClick={() => void confirmCheckOut()}>
+                    {isCheckingOut != null ? 'Đang xử lý...' : 'Xác nhận checkout'}
+                  </button>
+                  <button className="btn btn-outline" type="button" disabled={isCheckingOut != null} onClick={() => setSelectedCheckOutBooking(null)}>Hủy</button>
+                </div>
+              </div>
             </section>
           </div>
         )}

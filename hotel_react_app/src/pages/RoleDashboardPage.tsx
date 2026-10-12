@@ -132,25 +132,33 @@ function RoomStatusPanel({ role }: { role: Role }) {
   const names = { AVAILABLE: 'Sẵn sàng', OCCUPIED: 'Đang có khách', CLEANING: 'Đang dọn', MAINTENANCE: 'Bảo trì' };
   const visibleRooms = role === 'HOUSEKEEPER' ? rooms.filter((room) => room.status === 'CLEANING') : rooms;
   const legendEntries = role === 'HOUSEKEEPER' ? [['CLEANING', names.CLEANING]] : Object.entries(names);
+  const roomsByType = visibleRooms.reduce<Record<string, RoomStatusRecord[]>>((groups, room) => {
+    const roomTypeName = room.room_type_name || 'Chưa phân loại';
+    (groups[roomTypeName] ||= []).push(room);
+    return groups;
+  }, {});
   return <div className="room-status-panel">
     <div className="room-status-legend">
       {legendEntries.map(([status, name]) => <span key={status} className={`room-status-badge room-status-${status.toLowerCase()}`}>{status} · {name}</span>)}
       {role === 'HOUSEKEEPER' && <button className="btn btn-outline btn-sm" type="button" onClick={() => void reload()}>Làm mới</button>}
     </div>
     {role === 'HOUSEKEEPER' && visibleRooms.length === 0 && <p>Hiện không có phòng cần dọn.</p>}
-    <div className="room-status-grid">{visibleRooms.map((room) => <article className="room-status-card" key={room.id}>
-      <div><strong>Phòng {room.room_number}</strong><span>{room.room_type_name} · Tầng {room.floor}</span></div>
-      <div className="room-status-card-badges">
-        <span className={`room-status-badge room-status-${room.status.toLowerCase()}`}>{names[room.status]}</span>
-        {room.has_open_maintenance_report && <span className="room-status-badge room-status-maintenance">Đã báo bảo trì</span>}
-      </div>
-      {role === 'HOUSEKEEPER' && room.status === 'CLEANING' && <>
-        <button className="btn btn-primary btn-sm" onClick={() => void updateStatus(room)}>Đã dọn xong</button>
-        <button className="btn btn-outline btn-sm" disabled={room.has_open_maintenance_report} onClick={() => void reportMaintenance(room)}>{room.has_open_maintenance_report ? 'Đã báo bảo trì' : 'Báo cần bảo trì'}</button>
-      </>}
-      {role === 'ADMIN' && room.status === 'AVAILABLE' && <button className="btn btn-outline btn-sm" onClick={() => void updateStatus(room, 'MAINTENANCE')}>Đánh dấu bảo trì</button>}
-      {role === 'ADMIN' && room.status === 'MAINTENANCE' && <button className="btn btn-primary btn-sm" onClick={() => void updateStatus(room, 'AVAILABLE')}>Đã bảo trì xong</button>}
-    </article>)}</div>
+    <div className="room-status-type-groups">{Object.entries(roomsByType).map(([roomTypeName, typeRooms]) => <section className="room-status-type-group" key={roomTypeName}>
+      <div className="room-status-type-heading"><h4>{roomTypeName}</h4><span>{typeRooms.length} phòng</span></div>
+      <div className="room-status-grid">{typeRooms.map((room) => <article className="room-status-card" key={room.id}>
+        <div><strong>Phòng {room.room_number}</strong><span>{roomTypeName} · Tầng {room.floor}</span></div>
+        <div className="room-status-card-badges">
+          <span className={`room-status-badge room-status-${room.status.toLowerCase()}`}>{names[room.status]}</span>
+          {room.has_open_maintenance_report && <span className="room-status-badge room-status-maintenance">Đã báo bảo trì</span>}
+        </div>
+        {role === 'HOUSEKEEPER' && room.status === 'CLEANING' && <>
+          <button className="btn btn-primary btn-sm" onClick={() => void updateStatus(room)}>Đã dọn xong</button>
+          <button className="btn btn-outline btn-sm" disabled={room.has_open_maintenance_report} onClick={() => void reportMaintenance(room)}>{room.has_open_maintenance_report ? 'Đã báo bảo trì' : 'Báo cần bảo trì'}</button>
+        </>}
+        {role === 'ADMIN' && room.status === 'AVAILABLE' && <button className="btn btn-outline btn-sm" onClick={() => void updateStatus(room, 'MAINTENANCE')}>Đánh dấu bảo trì</button>}
+        {role === 'ADMIN' && room.status === 'MAINTENANCE' && <button className="btn btn-primary btn-sm" onClick={() => void updateStatus(room, 'AVAILABLE')}>Đã bảo trì xong</button>}
+      </article>)}</div>
+    </section>)}</div>
     {role === 'ADMIN' && <section className="room-status-section">
       <div className="room-management-heading"><div><h3>Báo cáo bảo trì đang mở</h3><p>Báo cáo không tự hoàn tất việc dọn phòng.</p></div><span className="room-assignment-count">{maintenanceReports.length} báo cáo</span></div>
       {maintenanceReports.length ? <div className="room-assignment-list">{maintenanceReports.map((report) => <article className="room-assignment-card" key={report.id}>

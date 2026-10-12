@@ -48,7 +48,8 @@ export default function ServiceEditPage() {
         description: service.description,
         price: service.price,
         unit: service.unit,
-        is_active: service.is_active
+        is_active: service.is_active,
+        booking_policy: service.booking_policy
     };
 
     return (
