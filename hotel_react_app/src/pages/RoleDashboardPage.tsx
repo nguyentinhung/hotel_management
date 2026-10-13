@@ -46,8 +46,10 @@ const dashboardConfig: Record<
     accent: 'Lễ tân',
     nav: [
       { label: 'Booking Management', description: 'Kiểm tra phòng trống (Check Room Availability) và tạo booking trực tiếp tại quầy.' },
+      { label: 'Check-in', description: 'Xem và xác nhận các booking đã đặt đến làm thủ tục nhận phòng.' },
+      { label: 'Check-out', description: 'Xem khách đang lưu trú và thực hiện thủ tục trả phòng, thanh toán.' },
       { label: 'Assign Room to Booking', description: 'Theo dõi trạng thái phòng và gán phòng cụ thể cho booking đã xác nhận.' },
-      { label: 'Booking', description: 'Xem toàn bộ booking, kể cả booking đang hoạt động, đã checkout hoặc đã hủy.' },
+      { label: 'Lịch sử booking', description: 'Xem toàn bộ booking, bao gồm booking đã checkout hoặc đã hủy.' },
       { label: 'Thanh toán', description: 'Theo dõi trạng thái thanh toán và xác nhận giao dịch tại quầy.' },
       { label: 'Loại phòng', description: 'Tra cứu giá, sức chứa và tiện nghi của từng loại phòng.' },
       { label: 'Dịch vụ', description: 'Xem danh sách và chi tiết dịch vụ khách sạn.' },
@@ -533,10 +535,14 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
               <RoomTypesPage readOnly={currentRole === 'RECEPTIONIST'} />
             </div>
           ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Booking Management' ? (
-            <ReceptionRoomBooking />
+            <ReceptionRoomBooking mode="management" />
+          ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Check-in' ? (
+            <ReceptionRoomBooking mode="checkin" />
+          ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Check-out' ? (
+            <ReceptionRoomBooking mode="checkout" />
           ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Assign Room to Booking' ? (
             <ReceptionRoomManagement />
-          ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Booking' ? (
+          ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Lịch sử booking' ? (
             <ReceptionBookingHistory />
           ) : currentRole === 'CUSTOMER' && activeItem.label === 'Bookings' ? (
             <ReceptionBookingHistory customerMode />

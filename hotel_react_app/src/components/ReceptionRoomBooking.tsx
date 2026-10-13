@@ -99,7 +99,9 @@ function getDepositPaymentStatus(booking: RecentBooking) {
       : 'Chưa thanh toán đủ cọc';
 }
 
-export default function ReceptionRoomBooking() {
+type ReceptionBookingMode = 'management' | 'checkin' | 'checkout';
+
+export default function ReceptionRoomBooking({ mode = 'management' }: { mode?: ReceptionBookingMode }) {
   const { showToast } = useToast();
   const today = useMemo(() => formatDateInput(new Date()), []);
   const tomorrow = useMemo(() => addDays(today, 1), [today]);
@@ -316,7 +318,10 @@ export default function ReceptionRoomBooking() {
       setSelectedCheckInBooking(null);
       setCheckInIdCard('');
       setHasVerifiedOriginalId(false);
-      await fetchRecent();
+      await Promise.all([
+        fetchRecent(),
+        ...(mode === 'checkin' ? [fetchAttentionBookings()] : []),
+      ]);
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Không thể xác nhận check-in.', 'error');
     } finally {
@@ -363,17 +368,19 @@ export default function ReceptionRoomBooking() {
 
   // Tự động tải dữ liệu khi component được gắn vào giao diện
   useEffect(() => {
-    void fetchAvailability();
     void fetchRecent();
-    void fetchAttentionBookings();
-    fetch('http://localhost:5000/api/services?active=true')
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error('Không tải được danh sách dịch vụ.')))
-      .then((data: ServiceItem[]) => setServiceOptions(Array.isArray(data)
-        ? data.filter((service) => service.booking_policy === 'PREBOOK')
-        : []))
-      .catch(() => setServiceOptions([]));
+    if (mode === 'management') {
+      void fetchAvailability();
+      fetch('http://localhost:5000/api/services?active=true')
+        .then((response) => response.ok ? response.json() : Promise.reject(new Error('Không tải được danh sách dịch vụ.')))
+        .then((data: ServiceItem[]) => setServiceOptions(Array.isArray(data)
+          ? data.filter((service) => service.booking_policy === 'PREBOOK')
+          : []))
+        .catch(() => setServiceOptions([]));
+    }
+    if (mode === 'checkin') void fetchAttentionBookings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [mode]);
 
   // Refresh deposit totals after a payment is confirmed, even when reception
   // leaves this dashboard open in another tab during the customer's payment.
@@ -381,7 +388,7 @@ export default function ReceptionRoomBooking() {
     const refreshBookings = () => {
       if (document.visibilityState === 'visible') {
         void fetchRecent();
-        void fetchAttentionBookings();
+        if (mode === 'checkin') void fetchAttentionBookings();
       }
     };
     const intervalId = window.setInterval(refreshBookings, 10000);
@@ -393,7 +400,7 @@ export default function ReceptionRoomBooking() {
       document.removeEventListener('visibilitychange', refreshBookings);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [mode]);
 
   /**
    * 3. XỬ LÝ MỞ MODAL ĐẶT PHÒNG TẠI QUẦY
@@ -544,9 +551,25 @@ export default function ReceptionRoomBooking() {
   const totalAvailableRoomsCount = useMemo(() => {
     return availabilityList.reduce((sum, item) => sum + item.available_rooms, 0);
   }, [availabilityList]);
+  const visibleBookings = recentBookings.filter((booking) => {
+    if (mode === 'checkin') return booking.status === 'CONFIRMED';
+    if (mode === 'checkout') return booking.status === 'CHECKED_IN';
+    return booking.status === 'CONFIRMED' || booking.status === 'CHECKED_IN';
+  });
+  const bookingTableTitle = mode === 'checkin'
+    ? 'Booking chờ check-in'
+    : mode === 'checkout'
+      ? 'Khách đang lưu trú · Chờ check-out'
+      : 'Booking chờ check-in / đang lưu trú';
+  const bookingTableDescription = mode === 'checkin'
+    ? 'Chỉ hiển thị booking đã xác nhận, đủ điều kiện làm thủ tục nhận phòng.'
+    : mode === 'checkout'
+      ? 'Chỉ hiển thị khách đã check-in và đang lưu trú.'
+      : 'Booking đã check-in vẫn được giữ tại đây; booking đã checkout nằm trong lịch sử booking.';
 
   return (
     <div className="reception-booking-module">
+      {mode === 'management' && <>
       {/* =========================================================================
           KHỐI 1: BỘ LỌC KIỂM TRA PHÒNG TRỐNG (CHECK ROOM AVAILABILITY CONTROLS)
           ========================================================================= */}
@@ -1002,6 +1025,7 @@ export default function ReceptionRoomBooking() {
           </div>
         </div>
       )}
+      </>}
 
       {/* =========================================================================
           KHỐI 4: DANH SÁCH CÁC ĐƠN ĐẶT PHÒNG GẦN ĐÂY (RECENT BOOKINGS)
@@ -1009,10 +1033,8 @@ export default function ReceptionRoomBooking() {
       <div className="reception-recent-bookings-card">
         <div className="recent-card-header">
           <div>
-            <h4 className="module-section-title">Booking chờ check-in / đang lưu trú</h4>
-            <p className="module-section-subtitle">
-              Chỉ hiển thị booking đã xác nhận đang chờ check-in hoặc khách đang lưu trú.
-            </p>
+            <h4 className="module-section-title">{bookingTableTitle}</h4>
+            <p className="module-section-subtitle">{bookingTableDescription}</p>
           </div>
           <button
             type="button"
@@ -1024,7 +1046,7 @@ export default function ReceptionRoomBooking() {
           </button>
         </div>
 
-        <section className="overdue-bookings-attention" aria-labelledby="overdue-bookings-title">
+        {mode === 'checkin' && <section className="overdue-bookings-attention" aria-labelledby="overdue-bookings-title">
           <div className="recent-card-header">
             <div>
               <h4 id="overdue-bookings-title" className="module-section-title">Booking chưa Check-in</h4>
@@ -1077,7 +1099,7 @@ export default function ReceptionRoomBooking() {
               ))}
             </div>
           )}
-        </section>
+        </section>}
 
         <div className="table-wrap">
           <table className="reception-table">
@@ -1093,19 +1115,23 @@ export default function ReceptionRoomBooking() {
                 <th>Ngày tạo booking</th>
                 <th>Tổng tiền</th>
                 <th>Tiền cọc</th>
-                {/* <th>Trạng thái</th> */}
-                {/* <th>Thao tác</th> */}
+                <th>Trạng thái booking</th>
+                {mode !== 'management' && <th>Thao tác</th>}
               </tr>
             </thead>
             <tbody>
-              {recentBookings.length === 0 ? (
+              {visibleBookings.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="text-center py-4 text-muted">
-                    Hiện không có booking nào đang chờ check-in hoặc đang lưu trú.
+                  <td colSpan={mode === 'management' ? 11 : 12} className="text-center py-4 text-muted">
+                    {mode === 'checkin'
+                      ? 'Hiện không có booking nào chờ check-in.'
+                      : mode === 'checkout'
+                        ? 'Hiện không có khách nào đang chờ check-out.'
+                        : 'Hiện không có booking nào đang hoạt động.'}
                   </td>
                 </tr>
               ) : (
-                recentBookings.map((b) => (
+                visibleBookings.map((b) => (
                   <React.Fragment key={b.id}>
                   <tr className="booking-history-row" onClick={() => setSelectedBookingDetail(b)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedBookingDetail(b); } }} tabIndex={0} title="Nhấn để xem chi tiết booking">
                     <td>
@@ -1133,42 +1159,34 @@ export default function ReceptionRoomBooking() {
                     <td className="text-sm">{b.created_at ? new Date(b.created_at).toLocaleString('vi-VN') : '—'}</td>
                     <td>{formatCurrency(b.total_amount)}</td>
                     <td>{formatCurrency(b.deposit_amount)}</td>
-                    {/* <td>
-                      <span
-                        className={`status-badge ${
-                          b.status === 'CHECKED_IN'
-                            ? 'status-checked-in'
-                            : b.status === 'CONFIRMED'
-                            ? 'status-confirmed'
-                            : b.status === 'CHECKED_OUT'
-                            ? 'status-checked-out'
-                            : b.status === 'CANCELLED'
-                            ? 'status-cancelled'
-                            : 'status-pending'
-                        }`}
-                      >
-                        {b.status === 'CONFIRMED' ? 'Đã đặt · Chờ check-in' : b.status === 'CHECKED_IN' ? 'Đã check-in' : b.status}
+                    <td>
+                      <span className={`status-badge ${b.status === 'CHECKED_IN' ? 'status-checked-in' : 'status-confirmed'}`}>
+                        {b.status === 'CHECKED_IN' ? 'Đã check-in' : 'Chờ check-in'}
                       </span>
-                    </td> */}
-                    <td onClick={(event) => event.stopPropagation()}>
-                      {b.status === 'CONFIRMED' ? (
+                    </td>
+                    {mode !== 'management' && <td onClick={(event) => event.stopPropagation()}>
+                      {mode === 'checkin' && b.status === 'CONFIRMED' ? (
                         b.requires_deposit_payment && Number(b.deposit_amount) < Number(b.required_deposit_amount || 0) ? (
                           <button type="button" disabled title="Khách cần thanh toán đủ cọc tối thiểu 30% trước khi check-in.">Chưa đủ cọc</button>
                         ) : (
                           <button type="button" onClick={() => {
+                            if (b.assigned_room_id == null) {
+                              showToast('Booking chưa được gán phòng. Vui lòng gán phòng trước khi check-in.', 'error');
+                              return;
+                            }
                             setCheckInIdCard('');
                             setHasVerifiedOriginalId(false);
                             setSelectedCheckInBooking(b);
                           }}>Xác nhận check-in</button>
                         )
-                      ) : b.has_pending_final_payment ? (
+                      ) : mode === 'checkout' && b.has_pending_final_payment ? (
                         <button type="button" disabled>Đang chờ thanh toán</button>
-                      ) : b.status === 'CHECKED_IN' || (b.status === 'CHECKED_OUT' && Number(b.balance_due ?? 0) > 0) ? (
+                      ) : mode === 'checkout' && b.status === 'CHECKED_IN' ? (
                         <button type="button" disabled={String(isCheckingOut) === String(b.id)} onClick={() => void handleCheckOut(b)}>
-                          {String(isCheckingOut) === String(b.id) ? 'Đang xử lý…' : b.status === 'CHECKED_OUT' ? 'Thu số dư còn lại' : 'Checkout & thanh toán'}
+                          {String(isCheckingOut) === String(b.id) ? 'Đang xử lý…' : 'Checkout & thanh toán'}
                         </button>
                       ) : '—'}
-                    </td>
+                    </td>}
                   </tr>
                   </React.Fragment>
                 ))
