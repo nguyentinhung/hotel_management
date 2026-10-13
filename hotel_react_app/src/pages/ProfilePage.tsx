@@ -14,7 +14,7 @@ export default function ProfilePage() {
       <div className="card profile-box">
         <div className="info-row">
           <span>Full name</span>
-          <strong>{user?.fullName || 'Admin Hotel'}</strong>
+          <strong>{user?.full_name || 'Admin Hotel'}</strong>
         </div>
         <div className="info-row">
           <span>Email</span>
@@ -26,7 +26,7 @@ export default function ProfilePage() {
         </div>
         <div className="info-row">
           <span>Role</span>
-          <strong>{user?.roleName || 'Administrator'}</strong>
+          <strong>{user?.role_name || 'Administrator'}</strong>
         </div>
         <div className="info-row">
           <span>Status</span>

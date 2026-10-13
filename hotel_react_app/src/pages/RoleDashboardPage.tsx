@@ -9,7 +9,7 @@ import type { RecentBooking } from '../types';
 import PaymentList from '../components/PaymentList';
 import { logout } from '../services/authService';
 import ChangePasswordPage from './ChangePasswordPage';
-
+import ProfilePage from './ProfilePage';
 /**
  * ============================================================================
  * TRANG DASHBOARD THEO VAI TRÒ (ROLE DASHBOARD PAGE)
@@ -66,6 +66,7 @@ const dashboardConfig: Record<
     nav: [
       { label: 'Bookings', description: 'Xem, cập nhật hoặc hủy booking của tài khoản.' },
       { label: 'Thanh toán', description: 'Thanh toán khoản còn lại của booking tại quầy.' },
+      { label: 'Hồ sơ cá nhân', description: 'Xem và cập nhật thông tin cá nhân.' },
       { label: 'Đổi mật khẩu', description: 'Thay đổi mật khẩu tài khoản.' },
     ],
   },
@@ -490,7 +491,14 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
               Khi tài khoản Lễ tân chọn tab "Đặt phòng tại quầy", "Đặt phòng" hoặc "Tổng quan",
               hệ thống sẽ hiển thị giao diện tra cứu phòng trống và đặt phòng trực tiếp.
               ========================================================================= */}
-          {(currentRole === 'ADMIN' || currentRole === 'RECEPTIONIST') && activeItem.label === 'Loại phòng' ? (
+          {currentRole === 'CUSTOMER' &&
+            activeItem.label === 'Hồ sơ cá nhân' ? (
+            <div className="module-content">
+              <ProfilePage />
+            </div>
+          ) : (currentRole === 'ADMIN' ||
+            currentRole === 'RECEPTIONIST') &&
+            activeItem.label === 'Loại phòng' ? (
             <div className="module-content">
               <RoomTypesPage readOnly={currentRole === 'RECEPTIONIST'} />
             </div>
