@@ -506,7 +506,8 @@ async function checkInBooking({ bookingId, idCardNumber = '' }) {
     if (!bookingResult.recordset.length) throw new Error('Booking was not found.');
     const booking = bookingResult.recordset[0];
     if (booking.status !== 'CONFIRMED') throw new Error('Booking is not waiting for check-in.');
-    if (Number(booking.deposit_amount || 0) < Number(booking.required_deposit_amount || 0)) {
+    if (booking.requires_deposit_payment
+      && Number(booking.deposit_amount || 0) < Number(booking.required_deposit_amount || 0)) {
       throw new Error('Deposit payment is required before check-in.');
     }
 
@@ -582,7 +583,10 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
   const filters = [];
   if (activeOnly) filters.push(`(
     b.status = 'CHECKED_IN'
-    OR (b.status = 'CONFIRMED' AND COALESCE(b.deposit_amount, 0) >= deposit_summary.required_deposit_amount)
+    OR (b.status = 'CONFIRMED' AND (
+      deposit_summary.requires_deposit_payment = 0
+      OR COALESCE(b.deposit_amount, 0) >= deposit_summary.required_deposit_amount
+    ))
     OR (b.status = 'CHECKED_OUT' AND b.total_amount > b.deposit_amount + COALESCE(payment_summary.final_paid_amount, 0))
   )`);
   if (customerId !== null) {

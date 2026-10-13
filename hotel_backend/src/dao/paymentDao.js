@@ -494,7 +494,7 @@ async function getPaymentList(customerId = null, successOnly = false) {
       p.vnpay_transaction_no
     FROM dbo.payments p
     JOIN dbo.bookings b ON b.id = p.booking_id
-    JOIN dbo.users u ON u.id = b.customer_id
+    LEFT JOIN dbo.users u ON u.id = b.customer_id
     LEFT JOIN dbo.invoices i ON i.id = p.invoice_id
     ${whereClause}
     ORDER BY p.id DESC;
