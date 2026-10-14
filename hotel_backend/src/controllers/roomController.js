@@ -1,4 +1,4 @@
-const { checkRoomAvailability, createRoom: saveRoom, getAvailableRoomsForType, getRoomList: fetchRoomList } = require('../dao/roomDao');
+const { checkRoomAvailability, createRoom: saveRoom, getAvailableRoomsForType, getRoomList: fetchRoomList, getRoomDetails: fetchRoomDetails } = require('../dao/roomDao');
 
 /**
  * ============================================================================
@@ -22,6 +22,24 @@ async function getRoomList(req, res) {
   } catch (error) {
     console.error('Get room list error:', error);
     return res.status(500).json({ success: false, message: 'Không thể tải danh sách phòng.' });
+  }
+}
+
+async function getRoomDetails(req, res) {
+  const roomId = Number(req.params.roomId);
+  if (!Number.isInteger(roomId) || roomId < 1) {
+    return res.status(400).json({ success: false, message: 'Mã phòng không hợp lệ.' });
+  }
+
+  try {
+    const room = await fetchRoomDetails(roomId);
+    if (!room) {
+      return res.status(404).json({ success: false, message: 'Phòng không còn tồn tại hoặc không thể tìm thấy.' });
+    }
+    return res.json({ success: true, room });
+  } catch (error) {
+    console.error('Get room details error:', error);
+    return res.status(500).json({ success: false, message: 'Không thể tải chi tiết phòng.' });
   }
 }
 
@@ -176,6 +194,7 @@ async function getAvailableRooms(req, res) {
 
 module.exports = {
   getRoomList,
+  getRoomDetails,
   createRoom,
   checkAvailability,
   getAvailableRooms,

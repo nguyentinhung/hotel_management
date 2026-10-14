@@ -5,7 +5,7 @@ import RoomTypesPage from './RoomTypesPage';
 import ServiceListPage from './ServiceListPage';
 import BookingServicePanel from '../components/BookingServicePanel';
 import type { Role } from '../types';
-import { addRoom, assignRoomToBooking, cancelBooking, finishRoomCleaning, getActiveBookings, getAssignableRooms, getBookingHistory, getRoomList, getRoomStatuses, getRoomMaintenanceReports, getRoomTypesForRoomForm, reportRoomMaintenance, resolveRoomMaintenanceReport, updateBooking, type RoomMaintenanceReport, type RoomStatusRecord, type RoomTypeOption } from '../services/roomService';
+import { addRoom, assignRoomToBooking, cancelBooking, finishRoomCleaning, getActiveBookings, getAssignableRooms, getBookingHistory, getRoomDetails, getRoomList, getRoomStatuses, getRoomMaintenanceReports, getRoomTypesForRoomForm, reportRoomMaintenance, resolveRoomMaintenanceReport, updateBooking, type RoomDetails, type RoomMaintenanceReport, type RoomStatusRecord, type RoomTypeOption } from '../services/roomService';
 import type { RecentBooking } from '../types';
 import PaymentList from '../components/PaymentList';
 import { logout } from '../services/authService';
@@ -96,7 +96,12 @@ function RoomStatusPanel({ role }: { role: Role }) {
   const [roomSearch, setRoomSearch] = useState('');
   const [selectedFloor, setSelectedFloor] = useState('');
   const [selectedRoomType, setSelectedRoomType] = useState('');
+  const [roomDetailId, setRoomDetailId] = useState<number | null>(null);
+  const [roomDetail, setRoomDetail] = useState<RoomDetails | null>(null);
+  const [roomDetailLoading, setRoomDetailLoading] = useState(false);
+  const [roomDetailError, setRoomDetailError] = useState('');
   const roomsRequestInFlight = useRef(false);
+  const roomDetailRequest = useRef(0);
   const { showToast } = useToast();
   const reload = async () => {
     if (roomsRequestInFlight.current) return;
@@ -175,6 +180,41 @@ function RoomStatusPanel({ role }: { role: Role }) {
       showToast(error instanceof Error ? error.message : 'Không tải được danh sách loại phòng.', 'error');
     } finally {
       setRoomTypesLoading(false);
+    }
+  };
+  const closeRoomDetails = () => {
+    roomDetailRequest.current += 1;
+    setRoomDetailId(null);
+    setRoomDetail(null);
+    setRoomDetailError('');
+    setRoomDetailLoading(false);
+  };
+  const loadRoomDetails = async (roomId: number) => {
+    const requestId = ++roomDetailRequest.current;
+    setRoomDetailId(roomId);
+    setRoomDetail(null);
+    setRoomDetailError('');
+    setRoomDetailLoading(false);
+    const token = localStorage.getItem('accessToken');
+    if (!token) {
+      setRoomDetailError('Vui lòng đăng nhập lại để xem chi tiết phòng.');
+      return;
+    }
+    setRoomDetailLoading(true);
+    try {
+      const result = await getRoomDetails(roomId, token);
+      if (roomDetailRequest.current !== requestId) return;
+      setRoomDetail(result.room);
+    } catch (error) {
+      if (roomDetailRequest.current !== requestId) return;
+      if (error instanceof ApiError && error.status === 404) {
+        closeRoomDetails();
+        showToast('Phòng không còn tồn tại hoặc không thể tìm thấy.', 'error');
+      } else {
+        setRoomDetailError('Không thể tải chi tiết phòng. Vui lòng thử lại.');
+      }
+    } finally {
+      if (roomDetailRequest.current === requestId) setRoomDetailLoading(false);
     }
   };
   useEffect(() => {
@@ -412,6 +452,7 @@ function RoomStatusPanel({ role }: { role: Role }) {
           <span className={`room-status-badge room-status-${room.status.toLowerCase()}`}>{names[room.status]}</span>
           {room.has_open_maintenance_report && <span className="room-status-badge room-status-maintenance">Đã báo bảo trì</span>}
         </div>
+        {role !== 'HOUSEKEEPER' && <button className="btn btn-outline btn-sm room-details-open" type="button" onClick={() => void loadRoomDetails(room.id)}>Xem chi tiết</button>}
         {role === 'HOUSEKEEPER' && room.status === 'CLEANING' && <>
           <button className="btn btn-primary btn-sm" onClick={() => void updateStatus(room)}>Đã dọn xong</button>
           <button className="btn btn-outline btn-sm" disabled={room.has_open_maintenance_report} onClick={() => void reportMaintenance(room)}>{room.has_open_maintenance_report ? 'Đã báo bảo trì' : 'Báo cần bảo trì'}</button>
@@ -424,6 +465,41 @@ function RoomStatusPanel({ role }: { role: Role }) {
     {!roomsLoading && roomLoadError && rooms.length > 0 && <div className="room-list-state room-list-error" role="alert">
       <p>Không thể tải danh sách phòng mới nhất. Đang giữ dữ liệu đã tải trước đó.</p>
       <button className="btn btn-outline btn-sm" type="button" onClick={() => void reload()}>Thử lại</button>
+    </div>}
+    {roomDetailId !== null && <div className="room-details-backdrop" role="presentation" onMouseDown={(event) => {
+      if (event.target === event.currentTarget) closeRoomDetails();
+    }}>
+      <section className="room-details-dialog" role="dialog" aria-modal="true" aria-labelledby="room-details-title">
+        <header className="room-details-header">
+          <div>
+            <p>Room Details</p>
+            <h2 id="room-details-title">{roomDetail ? `Phòng ${roomDetail.room_number}` : 'Chi tiết phòng'}</h2>
+          </div>
+          <button className="room-details-close" type="button" onClick={closeRoomDetails} aria-label="Đóng chi tiết phòng">×</button>
+        </header>
+        {roomDetailLoading && <p className="room-list-state" role="status">Đang tải chi tiết phòng...</p>}
+        {!roomDetailLoading && roomDetailError && <div className="room-list-state room-list-error" role="alert">
+          <p>{roomDetailError}</p>
+          <button className="btn btn-outline btn-sm" type="button" onClick={() => void loadRoomDetails(roomDetailId)}>Thử lại</button>
+        </div>}
+        {!roomDetailLoading && roomDetail && <div className="room-details-content">
+          <div className="room-details-summary">
+            <div><span>Số phòng</span><strong>{roomDetail.room_number}</strong></div>
+            <span className={`room-status-badge room-status-${roomDetail.status.toLowerCase()}`}>{names[roomDetail.status]}</span>
+          </div>
+          <dl className="room-details-grid">
+            <div><dt>Loại phòng</dt><dd>{roomDetail.room_type_name}</dd></div>
+            <div><dt>Tầng</dt><dd>{roomDetail.floor == null ? 'Chưa xác định' : roomDetail.floor}</dd></div>
+            <div><dt>Mã phòng</dt><dd>{roomDetail.id}</dd></div>
+            <div><dt>Giá cơ bản</dt><dd>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(roomDetail.base_price)}</dd></div>
+            <div><dt>Sức chứa</dt><dd>{roomDetail.max_adults} người lớn · {roomDetail.max_children} trẻ em</dd></div>
+            {roomDetail.room_type_description && <div className="room-details-wide"><dt>Mô tả loại phòng</dt><dd>{roomDetail.room_type_description}</dd></div>}
+          </dl>
+          <footer className="room-details-footer">
+            <button className="btn btn-outline" type="button" onClick={closeRoomDetails}>Đóng</button>
+          </footer>
+        </div>}
+      </section>
     </div>}
     {role === 'ADMIN' && <section className="room-status-section">
       <div className="room-management-heading"><div><h3>Báo cáo bảo trì đang mở</h3><p>Báo cáo không tự hoàn tất việc dọn phòng.</p></div><span className="room-assignment-count">{maintenanceReports.length} báo cáo</span></div>

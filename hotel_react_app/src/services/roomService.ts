@@ -94,8 +94,18 @@ export interface RoomStatusRecord {
   room_type_name: string;
 }
 
+export interface RoomDetails extends RoomStatusRecord {
+  room_type_description: string | null;
+  base_price: number;
+  max_adults: number;
+  max_children: number;
+}
+
 export const getRoomList = (accessToken: string) =>
   api.get<{ success: boolean; rooms: RoomStatusRecord[] }>('/api/rooms', accessToken);
+
+export const getRoomDetails = (roomId: number, accessToken: string) =>
+  api.getWithAuth<{ success: boolean; room: RoomDetails }>(`/api/rooms/${roomId}`, accessToken);
 
 export const getRoomStatuses = (accessToken: string) =>
   api.get<{ success: boolean; rooms: RoomStatusRecord[] }>('/api/rooms/statuses', accessToken);

@@ -16,7 +16,7 @@ const { getPool, ensureAuthTables, ensureBookingStatusConstraint, ensureGuestIdC
 // Seed data đã được tắt để dùng dữ liệu mẫu bạn insert trực tiếp trong SQL Server.
 const { getHomeData, getRoomTypes, getRoomTypeDetails, getPromotions, getServices, getActiveServiceById, getReviews } = require('./controllers/homeController');
 const { register, login, logout, verifyEmail, forgotPassword, resetPassword } = require('./controllers/authController');
-const { getRoomList: getRoomListHandler, createRoom: createRoomHandler, checkAvailability, getAvailableRooms } = require('./controllers/roomController');
+const { getRoomList: getRoomListHandler, getRoomDetails: getRoomDetailsHandler, createRoom: createRoomHandler, checkAvailability, getAvailableRooms } = require('./controllers/roomController');
 const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, updateBookingHandler, cancelBookingHandler, getActiveBookingsHandler, checkOutBookingHandler, finishRoomCleaningHandler, reportRoomMaintenanceHandler, getRoomMaintenanceReportsHandler, resolveRoomMaintenanceReportHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
 const serviceController = require('./controllers/serviceController');
 const { requireCustomer, requirePaymentStaff, requirePaymentActor } = require('./services/customerAuth');
@@ -72,7 +72,7 @@ function requireRoomListAccess(req, res, next) {
     const roleById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
     const roleCode = roleById[Number(user.role_id)] || String(user.role_code || '').toUpperCase();
     if (!['ADMIN', 'RECEPTIONIST'].includes(roleCode)) {
-      return res.status(403).json({ success: false, message: 'Bạn không có quyền xem danh sách phòng.' });
+      return res.status(403).json({ success: false, message: 'Bạn không có quyền xem thông tin phòng.' });
     }
     return next();
   } catch {
@@ -437,6 +437,7 @@ app.post('/api/rooms/:roomId/maintenance-report', reportRoomMaintenanceHandler);
 app.get('/api/rooms/maintenance-reports', getRoomMaintenanceReportsHandler);
 app.post('/api/rooms/maintenance-reports/:reportId/resolve', resolveRoomMaintenanceReportHandler);
 app.get('/api/rooms/statuses', getRoomStatusesHandler);
+app.get('/api/rooms/:roomId', requireRoomListAccess, getRoomDetailsHandler);
 
 // 4. Lấy danh sách đặt phòng gần đây cho màn hình Dashboard Lễ tân
 app.get('/api/bookings/recent', getRecentBookingsHandler);

@@ -234,6 +234,21 @@ async function getRoomList() {
   return result.recordset;
 }
 
+async function getRoomDetails(roomId) {
+  const pool = await getPool();
+  const result = await pool.request()
+    .input('roomId', sql.Int, roomId)
+    .query(`
+      SELECT r.id, r.room_number, r.room_type_id, rt.name AS room_type_name,
+        r.floor, r.status, rt.description AS room_type_description,
+        rt.base_price, rt.max_adults, rt.max_children
+      FROM dbo.rooms r
+      INNER JOIN dbo.room_types rt ON rt.id = r.room_type_id
+      WHERE r.id = @roomId;
+    `);
+  return result.recordset[0] || null;
+}
+
 async function createRoom({ roomNumber, roomTypeId, floor }) {
   const pool = await getPool();
   let transaction = new sql.Transaction(pool);
@@ -290,5 +305,6 @@ module.exports = {
   checkRoomAvailability,
   getAvailableRoomsForType,
   getRoomList,
+  getRoomDetails,
   createRoom,
 };

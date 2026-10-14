@@ -19,6 +19,17 @@ export const api = {
     return response.json();
   },
 
+  getWithAuth: async <T>(url: string, token: string): Promise<T> => {
+    const response = await fetch(`${API_BASE_URL}${url}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new ApiError(payload?.message || `Request failed: ${response.status}`, response.status);
+    }
+    return payload as T;
+  },
+
   post: async <T>(url: string, body: unknown, token?: string): Promise<T> => {
     const response = await fetch(`${API_BASE_URL}${url}`, {
       method: 'POST',
