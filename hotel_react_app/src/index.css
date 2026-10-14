@@ -3071,16 +3071,24 @@ a:focus-visible {
 
 .room-status-panel { display: grid; gap: 18px; }
 .room-status-legend { display: flex; flex-wrap: wrap; gap: 9px; }
-.room-list-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; }
-.room-list-toolbar-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
+.room-list-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.room-list-header h2 { margin: 0 0 5px; color: var(--primary); font-size: clamp(1.35rem, 2vw, 1.7rem); }
+.room-list-header p { margin: 0; color: var(--muted); }
+.room-list-header > .btn { flex: 0 0 auto; }
+.room-list-controls { display: grid; grid-template-columns: minmax(220px, 1.5fr) minmax(150px, 1fr) minmax(180px, 1.15fr) auto; align-items: center; gap: 12px; width: 100%; }
+.room-list-search input, .room-list-filter select { width: 100%; min-width: 0; min-height: 44px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--text); font: inherit; }
+.room-list-search input:focus, .room-list-filter select:focus { outline: 3px solid rgba(15, 90, 87, 0.12); border-color: var(--primary); }
+.room-list-controls-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .room-list-state { margin: 0; padding: 18px; border: 1px dashed rgba(15, 61, 62, 0.2); border-radius: 12px; color: var(--muted); background: rgba(255, 255, 255, 0.75); }
 .room-list-state p { margin: 0; }
 .room-list-error { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; color: #963737; }
-.room-status-type-groups { display: grid; gap: 18px; }
-.room-status-type-group { display: grid; gap: 10px; }
-.room-status-type-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.room-status-type-heading h4 { margin: 0; color: var(--primary); font-size: 1rem; }
-.room-status-type-heading span { color: var(--muted); font-size: 0.82rem; font-weight: 600; }
+.room-status-floor-groups { display: grid; gap: 20px; }
+.room-status-floor-group { display: grid; gap: 11px; min-width: 0; }
+.room-status-floor-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-bottom: 9px; border-bottom: 1px solid var(--line); }
+.room-status-floor-heading > div { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.room-status-floor-heading h3 { margin: 0; color: var(--primary); font-size: 1.05rem; }
+.room-status-floor-heading span { padding: 4px 9px; border-radius: 999px; background: #eef5f2; color: var(--primary); font-size: 0.78rem; font-weight: 700; }
 .room-status-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
 .room-status-card {
   display: flex;
@@ -3093,7 +3101,9 @@ a:focus-visible {
   border: 1px solid var(--line);
   border-radius: 12px;
   box-shadow: 0 4px 14px rgba(15, 61, 62, 0.04);
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
 }
+.room-status-card:hover { transform: translateY(-1px); border-color: rgba(15, 90, 87, 0.28); box-shadow: 0 8px 20px rgba(15, 61, 62, 0.08); }
 .room-status-card > div { display: grid; gap: 4px; }
 .room-status-card > .room-status-card-badges { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
 .room-status-card-badges .room-status-available { color: #166534; }
@@ -3227,8 +3237,11 @@ a:focus-visible {
 }
 
 @media (max-width: 600px) {
-  .room-list-toolbar { flex-wrap: wrap; }
-  .room-list-toolbar-actions { width: 100%; justify-content: flex-end; }
+  .room-list-header { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .room-list-header > .btn { width: 100%; }
+  .room-list-controls { grid-template-columns: minmax(0, 1fr); }
+  .room-list-controls-actions { justify-content: space-between; }
+  .room-list-controls-actions .btn { min-width: 110px; }
   .room-status-section { padding: 14px; }
   .room-management-heading, .room-assignment-card { align-items: flex-start; flex-direction: column; }
   .room-assignment-controls, .room-assignment-controls select { width: 100%; }

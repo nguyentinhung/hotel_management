@@ -93,6 +93,9 @@ function RoomStatusPanel({ role }: { role: Role }) {
   const [roomFormErrors, setRoomFormErrors] = useState<Record<string, string>>({});
   const [roomFormMessage, setRoomFormMessage] = useState('');
   const [roomSubmitting, setRoomSubmitting] = useState(false);
+  const [roomSearch, setRoomSearch] = useState('');
+  const [selectedFloor, setSelectedFloor] = useState('');
+  const [selectedRoomType, setSelectedRoomType] = useState('');
   const roomsRequestInFlight = useRef(false);
   const { showToast } = useToast();
   const reload = async () => {
@@ -174,6 +177,9 @@ function RoomStatusPanel({ role }: { role: Role }) {
       setRoomTypesLoading(false);
     }
   };
+  useEffect(() => {
+    if (role !== 'HOUSEKEEPER') void loadRoomTypes();
+  }, []);
   const openAddRoomForm = () => {
     setRoomForm({ room_number: '', room_type_id: '', floor: '' });
     setRoomFormErrors({});
@@ -242,11 +248,35 @@ function RoomStatusPanel({ role }: { role: Role }) {
   const names = { AVAILABLE: 'Sẵn sàng', OCCUPIED: 'Đang có khách', CLEANING: 'Đang dọn', MAINTENANCE: 'Bảo trì' };
   const visibleRooms = role === 'HOUSEKEEPER' ? rooms.filter((room) => room.status === 'CLEANING') : rooms;
   const legendEntries = role === 'HOUSEKEEPER' ? [['CLEANING', names.CLEANING]] : Object.entries(names);
-  const roomsByType = visibleRooms.reduce<Record<string, RoomStatusRecord[]>>((groups, room) => {
-    const roomTypeName = room.room_type_name || 'Chưa phân loại';
-    (groups[roomTypeName] ||= []).push(room);
+  const normalizedSearch = roomSearch.trim().toLocaleLowerCase('vi');
+  const filteredRooms = visibleRooms.filter((room) => (
+    (!normalizedSearch || room.room_number.toLocaleLowerCase('vi').includes(normalizedSearch))
+    && (!selectedFloor || (room.floor == null ? 'unknown' : String(room.floor)) === selectedFloor)
+    && (!selectedRoomType || String(room.room_type_id) === selectedRoomType)
+  ));
+  const roomTypesById = new Map<number, string>(roomTypes.map(({ id, name }) => [id, name]));
+  for (const room of rooms) {
+    if (!roomTypesById.has(room.room_type_id)) roomTypesById.set(room.room_type_id, room.room_type_name);
+  }
+  const floorOptions = [...new Set(rooms.map((room) => room.floor))]
+    .sort((a, b) => {
+      if (a == null) return 1;
+      if (b == null) return -1;
+      return a - b;
+    });
+  const roomsByFloor = filteredRooms.reduce<Record<string, RoomStatusRecord[]>>((groups, room) => {
+    const floorKey = room.floor == null ? 'unknown' : String(room.floor);
+    (groups[floorKey] ||= []).push(room);
     return groups;
   }, {});
+  const sortedFloorGroups = Object.entries(roomsByFloor).sort(([floorA], [floorB]) => {
+    if (floorA === 'unknown') return 1;
+    if (floorB === 'unknown') return -1;
+    return Number(floorA) - Number(floorB);
+  });
+  for (const [, floorRooms] of sortedFloorGroups) {
+    floorRooms.sort((a, b) => a.room_number.localeCompare(b.room_number, undefined, { numeric: true, sensitivity: 'base' }));
+  }
   if (addingRoom && role === 'ADMIN') {
     return <div className="room-status-panel">
       <div className="room-management-heading">
@@ -323,30 +353,61 @@ function RoomStatusPanel({ role }: { role: Role }) {
     </div>;
   }
   return <div className="room-status-panel">
+    {role !== 'HOUSEKEEPER' && <header className="room-list-header">
+      <div>
+        <h2>Quản lý phòng</h2>
+        <p>Theo dõi danh sách và trạng thái phòng trong khách sạn.</p>
+      </div>
+      {role === 'ADMIN' && <button className="btn btn-primary btn-sm" type="button" onClick={openAddRoomForm} disabled={roomsLoading}>+ Thêm phòng</button>}
+    </header>}
+    {role !== 'HOUSEKEEPER' && <div className="room-list-controls">
+      <label className="room-list-search">
+        <span className="sr-only">Tìm số phòng</span>
+        <input type="search" value={roomSearch} placeholder="Tìm số phòng..." onChange={(event) => setRoomSearch(event.target.value)} />
+      </label>
+      <label className="room-list-filter">
+        <span className="sr-only">Lọc theo tầng</span>
+        <select value={selectedFloor} onChange={(event) => setSelectedFloor(event.target.value)}>
+          <option value="">Tất cả tầng</option>
+          {floorOptions.map((floor) => <option key={floor == null ? 'unknown' : floor} value={floor == null ? 'unknown' : String(floor)}>
+            {floor == null ? 'Chưa xác định tầng' : `Tầng ${floor}`}
+          </option>)}
+        </select>
+      </label>
+      <label className="room-list-filter">
+        <span className="sr-only">Lọc theo loại phòng</span>
+        <select value={selectedRoomType} onChange={(event) => setSelectedRoomType(event.target.value)}>
+          <option value="">Tất cả loại phòng</option>
+          {[...roomTypesById.entries()].sort((a, b) => a[1].localeCompare(b[1], 'vi')).map(([id, name]) => (
+            <option key={id} value={String(id)}>{name}</option>
+          ))}
+        </select>
+      </label>
+      <div className="room-list-controls-actions">
+        {!roomsLoading && !roomLoadError && <span className="room-assignment-count">{filteredRooms.length} / {rooms.length} phòng</span>}
+        <button className="btn btn-outline btn-sm" type="button" onClick={() => void reload()} disabled={roomsLoading}>
+          {roomsLoading ? 'Đang tải...' : 'Làm mới'}
+        </button>
+      </div>
+    </div>}
     <div className="room-status-legend">
       {legendEntries.map(([status, name]) => <span key={status} className={`room-status-badge room-status-${status.toLowerCase()}`}>{status} · {name}</span>)}
       {role === 'HOUSEKEEPER' && <button className="btn btn-outline btn-sm" type="button" onClick={() => void reload()} disabled={roomsLoading}>{roomsLoading ? 'Đang tải...' : 'Làm mới'}</button>}
     </div>
-    {role !== 'HOUSEKEEPER' && <div className="room-list-toolbar">
-      {!roomsLoading && !roomLoadError && <span className="room-assignment-count">{rooms.length} phòng</span>}
-      <div className="room-list-toolbar-actions">
-        <button className="btn btn-outline btn-sm" type="button" onClick={() => void reload()} disabled={roomsLoading}>
-          {roomsLoading ? 'Đang tải...' : 'Làm mới'}
-        </button>
-        {role === 'ADMIN' && <button className="btn btn-primary btn-sm" type="button" onClick={openAddRoomForm} disabled={roomsLoading}>+ Thêm phòng</button>}
-      </div>
-    </div>}
     {roomsLoading && rooms.length === 0 && <p className="room-list-state" role="status">Đang tải danh sách phòng...</p>}
     {!roomsLoading && roomLoadError && rooms.length === 0 && <div className="room-list-state room-list-error" role="alert">
       <p>Không thể tải danh sách phòng.</p>
       <button className="btn btn-outline btn-sm" type="button" onClick={() => void reload()}>Thử lại</button>
     </div>}
     {!roomsLoading && !roomLoadError && role !== 'HOUSEKEEPER' && rooms.length === 0 && <p className="room-list-state">Chưa có phòng nào trong hệ thống.</p>}
+    {!roomsLoading && !roomLoadError && role !== 'HOUSEKEEPER' && rooms.length > 0 && filteredRooms.length === 0 && <p className="room-list-state">Không tìm thấy phòng phù hợp.</p>}
     {!roomsLoading && !roomLoadError && role === 'HOUSEKEEPER' && visibleRooms.length === 0 && <p className="room-list-state">Hiện không có phòng cần dọn.</p>}
-    {rooms.length > 0 && <div className="room-status-type-groups">{Object.entries(roomsByType).map(([roomTypeName, typeRooms]) => <section className="room-status-type-group" key={roomTypeName}>
-      <div className="room-status-type-heading"><h4>{roomTypeName}</h4><span>{typeRooms.length} phòng</span></div>
-      <div className="room-status-grid">{typeRooms.map((room) => <article className="room-status-card" key={room.id}>
-        <div><strong>Phòng {room.room_number}</strong><span>{roomTypeName} · Tầng {room.floor ?? '—'}</span></div>
+    {filteredRooms.length > 0 && <div className="room-status-floor-groups">{sortedFloorGroups.map(([floorKey, floorRooms]) => <section className="room-status-floor-group" key={floorKey}>
+      <div className="room-status-floor-heading">
+        <div><h3>{floorKey === 'unknown' ? 'Chưa xác định tầng' : `Tầng ${floorKey}`}</h3><span>{floorRooms.length} phòng</span></div>
+      </div>
+      <div className="room-status-grid">{floorRooms.map((room) => <article className="room-status-card" key={room.id}>
+        <div><strong>Phòng {room.room_number}</strong><span>{room.room_type_name} · Tầng {room.floor ?? '—'}</span></div>
         <div className="room-status-card-badges">
           <span className={`room-status-badge room-status-${room.status.toLowerCase()}`}>{names[room.status]}</span>
           {room.has_open_maintenance_report && <span className="room-status-badge room-status-maintenance">Đã báo bảo trì</span>}

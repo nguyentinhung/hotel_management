@@ -87,6 +87,7 @@ export const checkOutBooking = async (bookingId: string | number, accessToken: s
 export interface RoomStatusRecord {
   id: number;
   room_number: string;
+  room_type_id: number;
   floor: number | null;
   status: 'AVAILABLE' | 'OCCUPIED' | 'CLEANING' | 'MAINTENANCE';
   has_open_maintenance_report?: boolean;
