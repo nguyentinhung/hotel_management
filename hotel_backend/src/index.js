@@ -16,7 +16,7 @@ const { getPool, ensureAuthTables, ensureBookingStatusConstraint, ensureGuestIdC
 // Seed data đã được tắt để dùng dữ liệu mẫu bạn insert trực tiếp trong SQL Server.
 const { getHomeData, getRoomTypes, getRoomTypeDetails, getPromotions, getServices, getActiveServiceById, getReviews } = require('./controllers/homeController');
 const { register, login, logout, verifyEmail, forgotPassword, resetPassword } = require('./controllers/authController');
-const { checkAvailability, getAvailableRooms } = require('./controllers/roomController');
+const { getRoomList: getRoomListHandler, createRoom: createRoomHandler, checkAvailability, getAvailableRooms } = require('./controllers/roomController');
 const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, updateBookingHandler, cancelBookingHandler, getActiveBookingsHandler, checkOutBookingHandler, finishRoomCleaningHandler, reportRoomMaintenanceHandler, getRoomMaintenanceReportsHandler, resolveRoomMaintenanceReportHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
 const serviceController = require('./controllers/serviceController');
 const { requireCustomer, requirePaymentStaff, requirePaymentActor } = require('./services/customerAuth');
@@ -52,11 +52,31 @@ function requireAdmin(req, res, next) {
   try {
     const user = jwt.verify(token, JWT_SECRET);
     if (user.role_code !== 'ADMIN') {
-      return res.status(403).json({ message: 'Chỉ quản trị viên được tải ảnh loại phòng.' });
+      return res.status(403).json({ message: 'Chỉ quản trị viên mới có quyền thực hiện thao tác này.' });
     }
     return next();
   } catch {
     return res.status(401).json({ message: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.' });
+  }
+}
+
+function requireRoomListAccess(req, res, next) {
+  const authorization = req.headers.authorization || '';
+  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+  if (!token) {
+    return res.status(401).json({ success: false, message: 'Vui lòng đăng nhập để tiếp tục.' });
+  }
+
+  try {
+    const user = jwt.verify(token, JWT_SECRET);
+    const roleById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
+    const roleCode = roleById[Number(user.role_id)] || String(user.role_code || '').toUpperCase();
+    if (!['ADMIN', 'RECEPTIONIST'].includes(roleCode)) {
+      return res.status(403).json({ success: false, message: 'Bạn không có quyền xem danh sách phòng.' });
+    }
+    return next();
+  } catch {
+    return res.status(401).json({ success: false, message: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.' });
   }
 }
 
@@ -395,6 +415,8 @@ app.get('/api/reviews', getReviews);
 // ============================================================================
 // 1. Khách vãng lai (Guest), khách hàng (Customer) và Lễ tân (Receptionist) kiểm tra loại phòng còn trống theo ngày
 app.get('/api/rooms/availability', checkAvailability);
+app.get('/api/rooms', requireRoomListAccess, getRoomListHandler);
+app.post('/api/rooms', requireAdmin, createRoomHandler);
 
 // 2. Lấy danh sách số phòng vật lý còn trống theo từng loại phòng để lễ tân chọn tại quầy
 app.get('/api/rooms/available-list', getAvailableRooms);

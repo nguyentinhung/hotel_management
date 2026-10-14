@@ -4,9 +4,30 @@ import type {
   CustomerBookingResponse,
   RecentBooking,
   RoomAvailabilityItem,
+  RoomType,
   WalkInBookingPayload,
   WalkInBookingResponse,
 } from '../types';
+
+export type RoomTypeOption = Pick<RoomType, 'id' | 'name'>;
+
+export interface AddRoomPayload {
+  room_number: string;
+  room_type_id: number;
+  floor: number;
+}
+
+export const getRoomTypesForRoomForm = async (): Promise<RoomTypeOption[]> => {
+  const roomTypes = await api.get<RoomType[]>('/api/room-types');
+  return roomTypes.map(({ id, name }) => ({ id, name }));
+};
+
+export const addRoom = (payload: AddRoomPayload, accessToken: string) =>
+  api.postWithAuth<{ success: boolean; message: string; room: RoomStatusRecord }>(
+    '/api/rooms',
+    payload,
+    accessToken,
+  );
 
 export interface CheckAvailabilityParams {
   check_in_date: string;
@@ -66,11 +87,14 @@ export const checkOutBooking = async (bookingId: string | number, accessToken: s
 export interface RoomStatusRecord {
   id: number;
   room_number: string;
-  floor: number;
+  floor: number | null;
   status: 'AVAILABLE' | 'OCCUPIED' | 'CLEANING' | 'MAINTENANCE';
   has_open_maintenance_report?: boolean;
   room_type_name: string;
 }
+
+export const getRoomList = (accessToken: string) =>
+  api.get<{ success: boolean; rooms: RoomStatusRecord[] }>('/api/rooms', accessToken);
 
 export const getRoomStatuses = (accessToken: string) =>
   api.get<{ success: boolean; rooms: RoomStatusRecord[] }>('/api/rooms/statuses', accessToken);

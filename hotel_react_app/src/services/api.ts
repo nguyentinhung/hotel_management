@@ -1,5 +1,12 @@
 const API_BASE_URL = 'http://localhost:5000';
 
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 export const api = {
   get: async <T>(url: string, token?: string): Promise<T> => {
     const response = await fetch(`${API_BASE_URL}${url}`, {
@@ -55,7 +62,7 @@ export const api = {
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      throw new Error(payload?.message || `Request failed: ${response.status}`);
+      throw new ApiError(payload?.message || `Request failed: ${response.status}`, response.status);
     }
     return payload as T;
   },

@@ -222,7 +222,73 @@ async function getAvailableRoomsForType({ roomTypeId, checkInDate, checkOutDate 
   return result.recordset;
 }
 
+async function getRoomList() {
+  const pool = await getPool();
+  const result = await pool.request().query(`
+    SELECT r.id, r.room_number, r.room_type_id, rt.name AS room_type_name,
+      r.floor, r.status
+    FROM dbo.rooms r
+    INNER JOIN dbo.room_types rt ON rt.id = r.room_type_id
+    ORDER BY r.floor, r.room_number;
+  `);
+  return result.recordset;
+}
+
+async function createRoom({ roomNumber, roomTypeId, floor }) {
+  const pool = await getPool();
+  let transaction = new sql.Transaction(pool);
+  await transaction.begin();
+
+  try {
+    const roomTypeResult = await new sql.Request(transaction)
+      .input('roomTypeId', sql.Int, roomTypeId)
+      .query('SELECT id FROM dbo.room_types WITH (UPDLOCK, HOLDLOCK) WHERE id = @roomTypeId;');
+
+    if (!roomTypeResult.recordset.length) {
+      await transaction.rollback();
+      transaction = null;
+      return { reason: 'ROOM_TYPE_NOT_FOUND' };
+    }
+
+    const existingRoom = await new sql.Request(transaction)
+      .input('roomNumber', sql.VarChar(10), roomNumber)
+      .query('SELECT id FROM dbo.rooms WITH (UPDLOCK, HOLDLOCK) WHERE room_number = @roomNumber;');
+
+    if (existingRoom.recordset.length) {
+      await transaction.rollback();
+      transaction = null;
+      return { reason: 'ROOM_NUMBER_EXISTS' };
+    }
+
+    const result = await new sql.Request(transaction)
+      .input('roomNumber', sql.VarChar(10), roomNumber)
+      .input('roomTypeId', sql.Int, roomTypeId)
+      .input('floor', sql.TinyInt, floor)
+      .query(`
+        INSERT INTO dbo.rooms (room_number, room_type_id, floor, status)
+        OUTPUT INSERTED.id, INSERTED.room_number, INSERTED.room_type_id,
+               INSERTED.floor, INSERTED.status
+        VALUES (@roomNumber, @roomTypeId, @floor, 'AVAILABLE');
+      `);
+
+    await transaction.commit();
+    transaction = null;
+    return { room: result.recordset[0] };
+  } catch (error) {
+    if (transaction) {
+      try {
+        await transaction.rollback();
+      } catch (rollbackError) {
+        console.error('Create room rollback error:', rollbackError);
+      }
+    }
+    throw error;
+  }
+}
+
 module.exports = {
   checkRoomAvailability,
   getAvailableRoomsForType,
+  getRoomList,
+  createRoom,
 };

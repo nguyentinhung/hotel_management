@@ -3071,6 +3071,11 @@ a:focus-visible {
 
 .room-status-panel { display: grid; gap: 18px; }
 .room-status-legend { display: flex; flex-wrap: wrap; gap: 9px; }
+.room-list-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; }
+.room-list-toolbar-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 9px; }
+.room-list-state { margin: 0; padding: 18px; border: 1px dashed rgba(15, 61, 62, 0.2); border-radius: 12px; color: var(--muted); background: rgba(255, 255, 255, 0.75); }
+.room-list-state p { margin: 0; }
+.room-list-error { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; color: #963737; }
 .room-status-type-groups { display: grid; gap: 18px; }
 .room-status-type-group { display: grid; gap: 10px; }
 .room-status-type-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -3096,6 +3101,22 @@ a:focus-visible {
 .room-status-card-badges .room-status-cleaning { color: #92400e; }
 .room-status-card-badges .room-status-maintenance { color: #991b1b; }
 .room-status-card > div span, .room-status-message { color: var(--muted); font-size: 0.88rem; }
+.add-room-form { display: grid; gap: 20px; max-width: 760px; padding: 22px; border: 1px solid var(--line); border-radius: 16px; background: #fff; }
+.add-room-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.add-room-field { display: grid; align-content: start; gap: 7px; color: var(--primary); font-size: 0.9rem; font-weight: 600; }
+.add-room-field b { color: #b42318; }
+.add-room-field input, .add-room-field select { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid rgba(15, 61, 62, 0.18); border-radius: 10px; background: #fff; color: var(--text); font: inherit; font-weight: 400; }
+.add-room-field input[aria-invalid='true'], .add-room-field select[aria-invalid='true'] { border-color: #b42318; }
+.add-room-field-error, .add-room-form-error { color: #b42318; font-size: 0.82rem; }
+.add-room-form-error { margin: 0; }
+.add-room-form-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.add-room-retry { justify-self: start; }
+@media (max-width: 600px) {
+  .add-room-form-grid { grid-template-columns: 1fr; }
+  .add-room-form { padding: 16px; }
+  .add-room-form-actions { flex-direction: column-reverse; }
+  .add-room-form-actions .btn { width: 100%; }
+}
 
 .room-management-page { display: grid; gap: 24px; }
 .room-status-section { display: grid; gap: 14px; padding: 20px; background: #fff; border: 1px solid var(--line); border-radius: 16px; }
@@ -3206,6 +3227,8 @@ a:focus-visible {
 }
 
 @media (max-width: 600px) {
+  .room-list-toolbar { flex-wrap: wrap; }
+  .room-list-toolbar-actions { width: 100%; justify-content: flex-end; }
   .room-status-section { padding: 14px; }
   .room-management-heading, .room-assignment-card { align-items: flex-start; flex-direction: column; }
   .room-assignment-controls, .room-assignment-controls select { width: 100%; }

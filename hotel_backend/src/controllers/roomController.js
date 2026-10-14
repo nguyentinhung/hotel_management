@@ -1,4 +1,4 @@
-const { checkRoomAvailability, getAvailableRoomsForType } = require('../dao/roomDao');
+const { checkRoomAvailability, createRoom: saveRoom, getAvailableRoomsForType, getRoomList: fetchRoomList } = require('../dao/roomDao');
 
 /**
  * ============================================================================
@@ -13,6 +13,58 @@ const { checkRoomAvailability, getAvailableRoomsForType } = require('../dao/room
  */
 function formatDate(d) {
   return d.toISOString().slice(0, 10);
+}
+
+async function getRoomList(req, res) {
+  try {
+    const rooms = await fetchRoomList();
+    return res.json({ success: true, rooms });
+  } catch (error) {
+    console.error('Get room list error:', error);
+    return res.status(500).json({ success: false, message: 'Không thể tải danh sách phòng.' });
+  }
+}
+
+async function createRoom(req, res) {
+  const body = req.body || {};
+  const roomNumber = typeof body.room_number === 'string' ? body.room_number.trim() : '';
+  const roomTypeId = Number(body.room_type_id);
+  const floorValue = body.floor;
+  const floor = floorValue === '' || floorValue == null ? NaN : Number(floorValue);
+
+  if (!roomNumber || roomNumber.length > 10) {
+    return res.status(400).json({ message: 'Số phòng là bắt buộc và không được vượt quá 10 ký tự.' });
+  }
+  if (!Number.isInteger(roomTypeId) || roomTypeId < 1) {
+    return res.status(400).json({ message: 'Vui lòng chọn loại phòng hợp lệ.' });
+  }
+  if (!Number.isInteger(floor) || floor < 0 || floor > 255) {
+    return res.status(400).json({ message: 'Tầng phải là số nguyên từ 0 đến 255.' });
+  }
+
+  try {
+    const result = await saveRoom({ roomNumber, roomTypeId, floor });
+    if (result.reason === 'ROOM_TYPE_NOT_FOUND') {
+      return res.status(404).json({ message: 'Loại phòng đã chọn không còn khả dụng.' });
+    }
+    if (result.reason === 'ROOM_NUMBER_EXISTS') {
+      return res.status(409).json({ message: 'Số phòng đã được sử dụng.' });
+    }
+    return res.status(201).json({
+      success: true,
+      message: 'Thêm phòng thành công.',
+      room: result.room,
+    });
+  } catch (error) {
+    if (error.number === 2601 || error.number === 2627) {
+      return res.status(409).json({ message: 'Số phòng đã được sử dụng.' });
+    }
+    if (error.number === 547) {
+      return res.status(404).json({ message: 'Loại phòng đã chọn không còn khả dụng.' });
+    }
+    console.error('Create room error:', error);
+    return res.status(500).json({ message: 'Không thể thêm phòng.' });
+  }
 }
 
 /**
@@ -123,6 +175,8 @@ async function getAvailableRooms(req, res) {
 }
 
 module.exports = {
+  getRoomList,
+  createRoom,
   checkAvailability,
   getAvailableRooms,
 };

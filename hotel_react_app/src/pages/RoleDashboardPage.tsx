@@ -1,16 +1,17 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ReceptionRoomBooking from '../components/ReceptionRoomBooking';
 import RoomTypesPage from './RoomTypesPage';
 import ServiceListPage from './ServiceListPage';
 import BookingServicePanel from '../components/BookingServicePanel';
 import type { Role } from '../types';
-import { assignRoomToBooking, cancelBooking, finishRoomCleaning, getActiveBookings, getAssignableRooms, getBookingHistory, getRoomStatuses, getRoomMaintenanceReports, reportRoomMaintenance, resolveRoomMaintenanceReport, updateBooking, type RoomMaintenanceReport, type RoomStatusRecord } from '../services/roomService';
+import { addRoom, assignRoomToBooking, cancelBooking, finishRoomCleaning, getActiveBookings, getAssignableRooms, getBookingHistory, getRoomList, getRoomStatuses, getRoomMaintenanceReports, getRoomTypesForRoomForm, reportRoomMaintenance, resolveRoomMaintenanceReport, updateBooking, type RoomMaintenanceReport, type RoomStatusRecord, type RoomTypeOption } from '../services/roomService';
 import type { RecentBooking } from '../types';
 import PaymentList from '../components/PaymentList';
 import { logout } from '../services/authService';
 import { resolveRole } from '../utils/role';
 import { useToast } from '../components/ToastProvider';
+import { ApiError } from '../services/api';
 
 /**
  * ============================================================================
@@ -49,6 +50,7 @@ const dashboardConfig: Record<
       { label: 'Assign Room to Booking', description: 'Theo dõi trạng thái phòng và gán phòng cụ thể cho booking đã xác nhận.' },
       { label: 'Booking', description: 'Xem toàn bộ booking, kể cả booking đang hoạt động, đã checkout hoặc đã hủy.' },
       { label: 'Thanh toán', description: 'Theo dõi trạng thái thanh toán và xác nhận giao dịch tại quầy.' },
+      { label: 'Quản lý phòng', description: 'Xem danh sách phòng, loại phòng, tầng và trạng thái hiện tại.' },
       { label: 'Loại phòng', description: 'Tra cứu giá, sức chứa và tiện nghi của từng loại phòng.' },
       { label: 'Dịch vụ', description: 'Xem danh sách và chi tiết dịch vụ khách sạn.' },
     ],
@@ -81,17 +83,50 @@ const nextDate = (date: string) => {
 
 function RoomStatusPanel({ role }: { role: Role }) {
   const [rooms, setRooms] = useState<RoomStatusRecord[]>([]);
+  const [roomsLoading, setRoomsLoading] = useState(true);
+  const [roomLoadError, setRoomLoadError] = useState(false);
   const [maintenanceReports, setMaintenanceReports] = useState<RoomMaintenanceReport[]>([]);
+  const [addingRoom, setAddingRoom] = useState(false);
+  const [roomTypes, setRoomTypes] = useState<RoomTypeOption[]>([]);
+  const [roomTypesLoading, setRoomTypesLoading] = useState(false);
+  const [roomForm, setRoomForm] = useState({ room_number: '', room_type_id: '', floor: '' });
+  const [roomFormErrors, setRoomFormErrors] = useState<Record<string, string>>({});
+  const [roomFormMessage, setRoomFormMessage] = useState('');
+  const [roomSubmitting, setRoomSubmitting] = useState(false);
+  const roomsRequestInFlight = useRef(false);
   const { showToast } = useToast();
   const reload = async () => {
+    if (roomsRequestInFlight.current) return;
     const token = localStorage.getItem('accessToken');
-    if (!token) return;
-    try {
-      const roomResult = await getRoomStatuses(token);
-      setRooms(roomResult.rooms);
-      if (role === 'ADMIN') setMaintenanceReports((await getRoomMaintenanceReports(token)).reports);
+    if (!token) {
+      setRoomLoadError(true);
+      setRoomsLoading(false);
+      showToast('Vui lòng đăng nhập lại để tải danh sách phòng.', 'error');
+      return;
     }
-    catch (error) { showToast(error instanceof Error ? error.message : 'Không tải được danh sách phòng.', 'error'); }
+    roomsRequestInFlight.current = true;
+    setRoomsLoading(true);
+    try {
+      const roomResult = role === 'HOUSEKEEPER'
+        ? await getRoomStatuses(token)
+        : await getRoomList(token);
+      setRooms(roomResult.rooms);
+      setRoomLoadError(false);
+    }
+    catch (error) {
+      setRoomLoadError(true);
+      showToast(error instanceof Error ? error.message : 'Không thể tải danh sách phòng.', 'error');
+    } finally {
+      setRoomsLoading(false);
+      roomsRequestInFlight.current = false;
+    }
+    if (role === 'ADMIN') {
+      try {
+        setMaintenanceReports((await getRoomMaintenanceReports(token)).reports);
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : 'Không thể tải báo cáo bảo trì.', 'error');
+      }
+    }
   };
   useEffect(() => { void reload(); }, []);
   const updateStatus = async (room: RoomStatusRecord, status: 'AVAILABLE' | 'MAINTENANCE' = 'AVAILABLE') => {
@@ -129,6 +164,81 @@ function RoomStatusPanel({ role }: { role: Role }) {
       await reload();
     } catch (error) { showToast(error instanceof Error ? error.message : 'Không đóng được báo cáo bảo trì.', 'error'); }
   };
+  const loadRoomTypes = async () => {
+    setRoomTypesLoading(true);
+    try {
+      setRoomTypes(await getRoomTypesForRoomForm());
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Không tải được danh sách loại phòng.', 'error');
+    } finally {
+      setRoomTypesLoading(false);
+    }
+  };
+  const openAddRoomForm = () => {
+    setRoomForm({ room_number: '', room_type_id: '', floor: '' });
+    setRoomFormErrors({});
+    setRoomFormMessage('');
+    setAddingRoom(true);
+    void loadRoomTypes();
+  };
+  const cancelAddRoom = () => {
+    if (roomSubmitting) return;
+    setAddingRoom(false);
+    setRoomFormErrors({});
+    setRoomFormMessage('');
+  };
+  const submitAddRoom = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const roomNumber = roomForm.room_number.trim();
+    const roomTypeId = Number(roomForm.room_type_id);
+    const floor = roomForm.floor.trim() ? Number(roomForm.floor) : NaN;
+    const errors: Record<string, string> = {};
+
+    if (!roomNumber) errors.room_number = 'Vui lòng nhập số phòng.';
+    else if (roomNumber.length > 10) errors.room_number = 'Số phòng không được vượt quá 10 ký tự.';
+    if (!Number.isInteger(roomTypeId) || roomTypeId < 1) errors.room_type_id = 'Vui lòng chọn loại phòng.';
+    if (!Number.isInteger(floor) || floor < 0 || floor > 255) errors.floor = 'Tầng phải là số nguyên từ 0 đến 255.';
+
+    setRoomFormErrors(errors);
+    setRoomFormMessage('');
+    if (Object.keys(errors).length) return;
+
+    const accessToken = localStorage.getItem('accessToken');
+    if (!accessToken) {
+      showToast('Vui lòng đăng nhập lại để thêm phòng.', 'error');
+      return;
+    }
+
+    setRoomSubmitting(true);
+    try {
+      const result = await addRoom({
+        room_number: roomNumber,
+        room_type_id: roomTypeId,
+        floor,
+      }, accessToken);
+      showToast(result.message, 'success');
+      setAddingRoom(false);
+      setRoomForm({ room_number: '', room_type_id: '', floor: '' });
+      await reload();
+    } catch (error) {
+      if (error instanceof ApiError && error.status < 500) {
+        const message = error.message;
+        if (error.status === 409 && /số phòng/i.test(message)) {
+          setRoomFormErrors({ room_number: message });
+        } else if (error.status === 404 || /loại phòng/i.test(message)) {
+          setRoomFormErrors({ room_type_id: message });
+        } else {
+          setRoomFormMessage(message);
+        }
+        showToast(message, 'error');
+      } else {
+        showToast('Không thể thêm phòng do lỗi hệ thống. Vui lòng thử lại sau.', 'error');
+        setAddingRoom(false);
+      }
+    } finally {
+      setRoomSubmitting(false);
+    }
+  };
   const names = { AVAILABLE: 'Sẵn sàng', OCCUPIED: 'Đang có khách', CLEANING: 'Đang dọn', MAINTENANCE: 'Bảo trì' };
   const visibleRooms = role === 'HOUSEKEEPER' ? rooms.filter((room) => room.status === 'CLEANING') : rooms;
   const legendEntries = role === 'HOUSEKEEPER' ? [['CLEANING', names.CLEANING]] : Object.entries(names);
@@ -137,16 +247,106 @@ function RoomStatusPanel({ role }: { role: Role }) {
     (groups[roomTypeName] ||= []).push(room);
     return groups;
   }, {});
+  if (addingRoom && role === 'ADMIN') {
+    return <div className="room-status-panel">
+      <div className="room-management-heading">
+        <div><h3>Thêm phòng</h3><p>Phòng mới sẽ được khởi tạo ở trạng thái AVAILABLE.</p></div>
+      </div>
+      <form className="add-room-form" onSubmit={(event) => void submitAddRoom(event)} noValidate>
+        <div className="add-room-form-grid">
+          <label className="add-room-field">
+            <span>Số phòng <b aria-hidden="true">*</b></span>
+            <input
+              type="text"
+              name="room_number"
+              value={roomForm.room_number}
+              maxLength={10}
+              required
+              autoComplete="off"
+              aria-invalid={Boolean(roomFormErrors.room_number)}
+              aria-describedby={roomFormErrors.room_number ? 'add-room-number-error' : undefined}
+              onChange={(event) => {
+                setRoomForm({ ...roomForm, room_number: event.target.value });
+                setRoomFormErrors((current) => ({ ...current, room_number: '' }));
+              }}
+            />
+            {roomFormErrors.room_number && <small id="add-room-number-error" className="add-room-field-error">{roomFormErrors.room_number}</small>}
+          </label>
+          <label className="add-room-field">
+            <span>Loại phòng <b aria-hidden="true">*</b></span>
+            <select
+              name="room_type_id"
+              value={roomForm.room_type_id}
+              required
+              disabled={roomTypesLoading || roomSubmitting}
+              aria-invalid={Boolean(roomFormErrors.room_type_id)}
+              aria-describedby={roomFormErrors.room_type_id ? 'add-room-type-error' : undefined}
+              onChange={(event) => {
+                setRoomForm({ ...roomForm, room_type_id: event.target.value });
+                setRoomFormErrors((current) => ({ ...current, room_type_id: '' }));
+              }}
+            >
+              <option value="">{roomTypesLoading ? 'Đang tải loại phòng...' : 'Chọn loại phòng'}</option>
+              {roomTypes.map((roomType) => <option key={roomType.id} value={roomType.id}>{roomType.name}</option>)}
+            </select>
+            {roomFormErrors.room_type_id && <small id="add-room-type-error" className="add-room-field-error">{roomFormErrors.room_type_id}</small>}
+            {!roomTypesLoading && roomTypes.length === 0 && <button type="button" className="btn btn-outline btn-sm add-room-retry" onClick={() => void loadRoomTypes()}>Tải lại loại phòng</button>}
+          </label>
+          <label className="add-room-field">
+            <span>Tầng <b aria-hidden="true">*</b></span>
+            <input
+              type="number"
+              name="floor"
+              value={roomForm.floor}
+              min={0}
+              max={255}
+              step={1}
+              required
+              aria-invalid={Boolean(roomFormErrors.floor)}
+              aria-describedby={roomFormErrors.floor ? 'add-room-floor-error' : undefined}
+              onChange={(event) => {
+                setRoomForm({ ...roomForm, floor: event.target.value });
+                setRoomFormErrors((current) => ({ ...current, floor: '' }));
+              }}
+            />
+            {roomFormErrors.floor && <small id="add-room-floor-error" className="add-room-field-error">{roomFormErrors.floor}</small>}
+          </label>
+        </div>
+        {roomFormMessage && <p className="add-room-form-error" role="alert">{roomFormMessage}</p>}
+        <div className="add-room-form-actions">
+          <button type="button" className="btn btn-outline" onClick={cancelAddRoom} disabled={roomSubmitting}>Hủy</button>
+          <button type="submit" className="btn btn-primary" disabled={roomSubmitting || roomTypesLoading}>
+            {roomSubmitting ? 'Đang lưu...' : 'Lưu phòng'}
+          </button>
+        </div>
+      </form>
+    </div>;
+  }
   return <div className="room-status-panel">
     <div className="room-status-legend">
       {legendEntries.map(([status, name]) => <span key={status} className={`room-status-badge room-status-${status.toLowerCase()}`}>{status} · {name}</span>)}
-      {role === 'HOUSEKEEPER' && <button className="btn btn-outline btn-sm" type="button" onClick={() => void reload()}>Làm mới</button>}
+      {role === 'HOUSEKEEPER' && <button className="btn btn-outline btn-sm" type="button" onClick={() => void reload()} disabled={roomsLoading}>{roomsLoading ? 'Đang tải...' : 'Làm mới'}</button>}
     </div>
-    {role === 'HOUSEKEEPER' && visibleRooms.length === 0 && <p>Hiện không có phòng cần dọn.</p>}
-    <div className="room-status-type-groups">{Object.entries(roomsByType).map(([roomTypeName, typeRooms]) => <section className="room-status-type-group" key={roomTypeName}>
+    {role !== 'HOUSEKEEPER' && <div className="room-list-toolbar">
+      {!roomsLoading && !roomLoadError && <span className="room-assignment-count">{rooms.length} phòng</span>}
+      <div className="room-list-toolbar-actions">
+        <button className="btn btn-outline btn-sm" type="button" onClick={() => void reload()} disabled={roomsLoading}>
+          {roomsLoading ? 'Đang tải...' : 'Làm mới'}
+        </button>
+        {role === 'ADMIN' && <button className="btn btn-primary btn-sm" type="button" onClick={openAddRoomForm} disabled={roomsLoading}>+ Thêm phòng</button>}
+      </div>
+    </div>}
+    {roomsLoading && rooms.length === 0 && <p className="room-list-state" role="status">Đang tải danh sách phòng...</p>}
+    {!roomsLoading && roomLoadError && rooms.length === 0 && <div className="room-list-state room-list-error" role="alert">
+      <p>Không thể tải danh sách phòng.</p>
+      <button className="btn btn-outline btn-sm" type="button" onClick={() => void reload()}>Thử lại</button>
+    </div>}
+    {!roomsLoading && !roomLoadError && role !== 'HOUSEKEEPER' && rooms.length === 0 && <p className="room-list-state">Chưa có phòng nào trong hệ thống.</p>}
+    {!roomsLoading && !roomLoadError && role === 'HOUSEKEEPER' && visibleRooms.length === 0 && <p className="room-list-state">Hiện không có phòng cần dọn.</p>}
+    {rooms.length > 0 && <div className="room-status-type-groups">{Object.entries(roomsByType).map(([roomTypeName, typeRooms]) => <section className="room-status-type-group" key={roomTypeName}>
       <div className="room-status-type-heading"><h4>{roomTypeName}</h4><span>{typeRooms.length} phòng</span></div>
       <div className="room-status-grid">{typeRooms.map((room) => <article className="room-status-card" key={room.id}>
-        <div><strong>Phòng {room.room_number}</strong><span>{roomTypeName} · Tầng {room.floor}</span></div>
+        <div><strong>Phòng {room.room_number}</strong><span>{roomTypeName} · Tầng {room.floor ?? '—'}</span></div>
         <div className="room-status-card-badges">
           <span className={`room-status-badge room-status-${room.status.toLowerCase()}`}>{names[room.status]}</span>
           {room.has_open_maintenance_report && <span className="room-status-badge room-status-maintenance">Đã báo bảo trì</span>}
@@ -158,7 +358,12 @@ function RoomStatusPanel({ role }: { role: Role }) {
         {role === 'ADMIN' && room.status === 'AVAILABLE' && <button className="btn btn-outline btn-sm" onClick={() => void updateStatus(room, 'MAINTENANCE')}>Đánh dấu bảo trì</button>}
         {role === 'ADMIN' && room.status === 'MAINTENANCE' && <button className="btn btn-primary btn-sm" onClick={() => void updateStatus(room, 'AVAILABLE')}>Đã bảo trì xong</button>}
       </article>)}</div>
-    </section>)}</div>
+    </section>)}</div>}
+    {roomsLoading && rooms.length > 0 && <p className="room-list-state" role="status">Đang cập nhật danh sách phòng...</p>}
+    {!roomsLoading && roomLoadError && rooms.length > 0 && <div className="room-list-state room-list-error" role="alert">
+      <p>Không thể tải danh sách phòng mới nhất. Đang giữ dữ liệu đã tải trước đó.</p>
+      <button className="btn btn-outline btn-sm" type="button" onClick={() => void reload()}>Thử lại</button>
+    </div>}
     {role === 'ADMIN' && <section className="room-status-section">
       <div className="room-management-heading"><div><h3>Báo cáo bảo trì đang mở</h3><p>Báo cáo không tự hoàn tất việc dọn phòng.</p></div><span className="room-assignment-count">{maintenanceReports.length} báo cáo</span></div>
       {maintenanceReports.length ? <div className="room-assignment-list">{maintenanceReports.map((report) => <article className="room-assignment-card" key={report.id}>
@@ -220,7 +425,7 @@ function ReceptionRoomManagement() {
     <section className="room-status-section">
       <div className="room-management-heading"><div><h3>Trạng thái phòng</h3><p>Kiểm tra tình trạng thực tế trước khi xếp phòng cho khách.</p></div><button className="btn btn-outline btn-sm" onClick={() => void reload()}>Làm mới</button></div>
       <div className="room-status-legend">{Object.entries(names).map(([status, label]) => <span key={status} className={`room-status-badge room-status-${status.toLowerCase()}`}>{status} · {label}</span>)}</div>
-      <div className="room-status-grid">{rooms.map((room) => <article className="room-status-card" key={room.id}><div><strong>Phòng {room.room_number}</strong><span>{room.room_type_name} · Tầng {room.floor}</span></div><span className={`room-status-badge room-status-${room.status.toLowerCase()}`}>{names[room.status]}</span></article>)}</div>
+      <div className="room-status-grid">{rooms.map((room) => <article className="room-status-card" key={room.id}><div><strong>Phòng {room.room_number}</strong><span>{room.room_type_name} · Tầng {room.floor ?? '—'}</span></div><span className={`room-status-badge room-status-${room.status.toLowerCase()}`}>{names[room.status]}</span></article>)}</div>
     </section>
     <section className="room-status-section">
       <div className="room-management-heading"><div><h3>Booking chờ gán hoặc cần đổi phòng</h3><p>Booking giữ chỗ theo loại phòng; lễ tân chủ động chọn số phòng sau khi xem trạng thái.</p></div><span className="room-assignment-count">{waitingBookings.length} booking</span></div>
@@ -232,7 +437,7 @@ function ReceptionRoomManagement() {
             const selectableRooms = slot.rooms.filter((room) => !usedByOtherSlot.has(String(room.id)) || selectedRoomIds[slot.booking_room_id] === String(room.id));
             return <label className="room-assignment-slot" key={slot.booking_room_id}><span>{slot.room_type_name} · Phòng {index + 1}</span><select aria-label={`Chọn phòng ${index + 1} cho ${slot.room_type_name}`} value={selectedRoomIds[slot.booking_room_id] || ''} onChange={(event) => setSelectedRoomIds({ ...selectedRoomIds, [slot.booking_room_id]: event.target.value })} disabled={loading || !selectableRooms.length}>
               <option value="">{loading ? 'Đang tải phòng...' : selectableRooms.length ? 'Chọn phòng phù hợp' : 'Không có phòng phù hợp'}</option>
-              {selectableRooms.map((room) => <option key={room.id} value={room.id}>P.{room.room_number} · {names[room.status]} · tầng {room.floor}</option>)}
+              {selectableRooms.map((room) => <option key={room.id} value={room.id}>P.{room.room_number} · {names[room.status]} · tầng {room.floor ?? '—'}</option>)}
             </select></label>;
           })}
           <button className="btn btn-primary btn-sm" onClick={() => void saveAssignment()} disabled={loading || !roomSlots.length || roomSlots.some((slot) => !selectedRoomIds[slot.booking_room_id])}>Gán tất cả phòng</button>
@@ -547,6 +752,8 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
           ) : currentRole === 'HOUSEKEEPER' && activeItem.label === 'Phòng cần dọn' ? (
             <RoomStatusPanel role={currentRole} />
           ) : currentRole === 'ADMIN' && activeItem.label === 'Quản lý phòng' ? (
+            <RoomStatusPanel role={currentRole} />
+          ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Quản lý phòng' ? (
             <RoomStatusPanel role={currentRole} />
           ) : currentRole === 'ADMIN' && activeItem.label === 'Dịch vụ' ? (
             <ServiceListPage role={currentRole} />
