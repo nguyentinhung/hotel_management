@@ -160,6 +160,7 @@ export interface RecentBooking {
   special_request?: string;
   room_type_name?: string;
   room_number?: string;
+  room_selections?: { room_type_id: number; room_type_name: string; quantity: number; price_per_night: number; image_url?: string | null }[];
   room_status?: 'AVAILABLE' | 'OCCUPIED' | 'CLEANING' | 'MAINTENANCE';
   room_type_id?: number;
   assigned_room_id?: number | null;

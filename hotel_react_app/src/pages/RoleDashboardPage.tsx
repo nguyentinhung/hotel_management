@@ -5,12 +5,16 @@ import RoomTypesPage from './RoomTypesPage';
 import ServiceListPage from './ServiceListPage';
 import BookingServicePanel from '../components/BookingServicePanel';
 import type { Role } from '../types';
-import { assignRoomToBooking, cancelBooking, finishRoomCleaning, getActiveBookings, getAssignableRooms, getBookingHistory, getRoomStatuses, getRoomMaintenanceReports, reportRoomMaintenance, resolveRoomMaintenanceReport, updateBooking, type RoomMaintenanceReport, type RoomStatusRecord } from '../services/roomService';
-import type { RecentBooking } from '../types';
+import { cancelBooking, checkRoomAvailability, finishRoomCleaning, getBookingHistory, getRoomStatuses, getRoomMaintenanceReports, reportRoomMaintenance, resolveRoomMaintenanceReport, updateBooking, type RoomMaintenanceReport, type RoomStatusRecord } from '../services/roomService';
+import type { RecentBooking, RoomAvailabilityItem } from '../types';
+import BookingRoomSelectionEditor, { type BookingRoomSelection } from '../components/BookingRoomSelectionEditor';
 import PaymentList from '../components/PaymentList';
 import { logout } from '../services/authService';
 import { resolveRole } from '../utils/role';
 import { useToast } from '../components/ToastProvider';
+import dashboardSidebarImage from '../assets/lumiere-dashboard-sidebar.png';
+import dashboardBannerImage from '../assets/lumiere-hero.png';
+import lotusLogo from '../assets/lumiere-lotus.png';
 
 /**
  * ============================================================================
@@ -48,8 +52,6 @@ const dashboardConfig: Record<
       { label: 'Booking Management', description: 'Kiểm tra phòng trống (Check Room Availability) và tạo booking trực tiếp tại quầy.' },
       { label: 'Check-in', description: 'Xem và xác nhận các booking đã đặt đến làm thủ tục nhận phòng.' },
       { label: 'Check-out', description: 'Xem khách đang lưu trú và thực hiện thủ tục trả phòng, thanh toán.' },
-      { label: 'Assign Room to Booking', description: 'Theo dõi trạng thái phòng và gán phòng cụ thể cho booking đã xác nhận.' },
-      { label: 'Lịch sử booking', description: 'Xem toàn bộ booking, bao gồm booking đã checkout hoặc đã hủy.' },
       { label: 'Thanh toán', description: 'Theo dõi trạng thái thanh toán và xác nhận giao dịch tại quầy.' },
       { label: 'Loại phòng', description: 'Tra cứu giá, sức chứa và tiện nghi của từng loại phòng.' },
       { label: 'Dịch vụ', description: 'Xem danh sách và chi tiết dịch vụ khách sạn.' },
@@ -68,10 +70,23 @@ const dashboardConfig: Record<
     subtitle: 'Xem và quản lý thông tin đặt phòng của bạn',
     accent: 'Customer',
     nav: [
-      { label: 'Bookings', description: 'Xem, cập nhật hoặc hủy booking của tài khoản.' },
+      { label: 'Lịch sử đặt phòng', description: 'Xem và quản lý toàn bộ lịch sử đặt phòng tại Hotel Lumière.' },
       { label: 'Thanh toán', description: 'Thanh toán khoản còn lại của booking tại quầy.' },
     ],
   },
+};
+
+const receptionistNavIcons: Record<string, string> = {
+  'Booking Management': '▦',
+  'Check-in': '⇥',
+  'Check-out': '⇤',
+  'Thanh toán': '▣',
+  'Loại phòng': '⌂',
+  'Dịch vụ': '♧',
+};
+const customerNavIcons: Record<string, string> = {
+  'Lịch sử đặt phòng': '▦',
+  'Thanh toán': '▤',
 };
 
 const nextDate = (date: string) => {
@@ -171,87 +186,16 @@ function RoomStatusPanel({ role }: { role: Role }) {
   </div>;
 }
 
-function ReceptionRoomManagement() {
-  const { showToast } = useToast();
-  const [rooms, setRooms] = useState<RoomStatusRecord[]>([]);
-  const [bookings, setBookings] = useState<RecentBooking[]>([]);
-  const [selectedBooking, setSelectedBooking] = useState<RecentBooking | null>(null);
-  const [roomSlots, setRoomSlots] = useState<{ booking_room_id: number; room_type_id: number; room_type_name: string; assigned_room_id: number | null; rooms: RoomStatusRecord[] }[]>([]);
-  const [selectedRoomIds, setSelectedRoomIds] = useState<Record<number, string>>({});
-  const [loading, setLoading] = useState(false);
-  const token = () => localStorage.getItem('accessToken') || '';
-  const reload = async () => {
-    const accessToken = token();
-    if (!accessToken) return;
-    try {
-      const [roomResult, bookingResult] = await Promise.all([getRoomStatuses(accessToken), getActiveBookings(accessToken)]);
-      setRooms(roomResult.rooms);
-      setBookings(bookingResult.bookings);
-    } catch (error) { showToast(error instanceof Error ? error.message : 'Không tải được dữ liệu phòng.', 'error'); }
-  };
-  useEffect(() => { void reload(); }, []);
-  const selectBooking = async (booking: RecentBooking) => {
-    setLoading(true);
-    setSelectedBooking(booking);
-    setSelectedRoomIds({});
-    setRoomSlots([]);
-    try {
-      const result = await getAssignableRooms(booking.id, token());
-      if (!Array.isArray(result.room_slots)) throw new Error('Backend chưa hỗ trợ gán nhiều phòng. Hãy khởi động lại hotel_backend rồi thử lại.');
-      setRoomSlots(result.room_slots);
-      setSelectedRoomIds(Object.fromEntries(result.room_slots.filter((slot) => slot.assigned_room_id && slot.rooms.some((room) => room.id === slot.assigned_room_id)).map((slot) => [slot.booking_room_id, String(slot.assigned_room_id)])));
-      showToast(`Đã tải ${result.room_slots.length} phòng cần gán. Chọn số phòng cho từng dòng.`, 'info');
-    } catch (error) { showToast(error instanceof Error ? error.message : 'Không tải được danh sách phòng phù hợp.', 'error'); }
-    finally { setLoading(false); }
-  };
-  const saveAssignment = async () => {
-    if (!selectedBooking || !roomSlots.length || roomSlots.some((slot) => !selectedRoomIds[slot.booking_room_id])) return;
-    setLoading(true);
-    try {
-      const result = await assignRoomToBooking(selectedBooking.id, roomSlots.map((slot) => ({ booking_room_id: slot.booking_room_id, room_id: Number(selectedRoomIds[slot.booking_room_id]) })), token());
-      showToast(result.message, 'success');
-      setSelectedBooking(null);
-      setRoomSlots([]);
-      await reload();
-    } catch (error) { showToast(error instanceof Error ? error.message : 'Không gán được phòng. Hãy tải lại danh sách.', 'error'); }
-    finally { setLoading(false); }
-  };
-  const names = { AVAILABLE: 'Sẵn sàng', OCCUPIED: 'Đang có khách', CLEANING: 'Đang dọn', MAINTENANCE: 'Bảo trì' };
-  const waitingBookings = bookings.filter((booking) => booking.status === 'CONFIRMED');
-  return <div className="room-management-page">
-    <section className="room-status-section">
-      <div className="room-management-heading"><div><h3>Trạng thái phòng</h3><p>Kiểm tra tình trạng thực tế trước khi xếp phòng cho khách.</p></div><button className="btn btn-outline btn-sm" onClick={() => void reload()}>Làm mới</button></div>
-      <div className="room-status-legend">{Object.entries(names).map(([status, label]) => <span key={status} className={`room-status-badge room-status-${status.toLowerCase()}`}>{status} · {label}</span>)}</div>
-      <div className="room-status-grid">{rooms.map((room) => <article className="room-status-card" key={room.id}><div><strong>Phòng {room.room_number}</strong><span>{room.room_type_name} · Tầng {room.floor}</span></div><span className={`room-status-badge room-status-${room.status.toLowerCase()}`}>{names[room.status]}</span></article>)}</div>
-    </section>
-    <section className="room-status-section">
-      <div className="room-management-heading"><div><h3>Booking chờ gán hoặc cần đổi phòng</h3><p>Booking giữ chỗ theo loại phòng; lễ tân chủ động chọn số phòng sau khi xem trạng thái.</p></div><span className="room-assignment-count">{waitingBookings.length} booking</span></div>
-      {waitingBookings.length ? <div className="room-assignment-list">{waitingBookings.map((booking) => <article className="room-assignment-card" key={booking.id}>
-        <div className="room-assignment-details"><strong>{booking.booking_code} · {booking.guest_full_name}</strong><span>{booking.room_type_name} · {String(booking.check_in_date).slice(0, 10)} → {String(booking.check_out_date).slice(0, 10)}</span><span>Ngày tạo: {booking.created_at ? new Date(booking.created_at).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : '—'}</span><span>{booking.guest_phone}</span><span>{booking.room_number ? `Đang gán phòng ${booking.room_number} · ${booking.room_status || 'chưa rõ trạng thái'}` : 'Chưa gán số phòng'}</span></div>
-        {selectedBooking?.id === booking.id ? <div className="room-assignment-controls room-assignment-multi-controls">
-          {roomSlots.map((slot, index) => {
-            const usedByOtherSlot = new Set(Object.entries(selectedRoomIds).filter(([slotId]) => Number(slotId) !== slot.booking_room_id).map(([, roomId]) => roomId));
-            const selectableRooms = slot.rooms.filter((room) => !usedByOtherSlot.has(String(room.id)) || selectedRoomIds[slot.booking_room_id] === String(room.id));
-            return <label className="room-assignment-slot" key={slot.booking_room_id}><span>{slot.room_type_name} · Phòng {index + 1}</span><select aria-label={`Chọn phòng ${index + 1} cho ${slot.room_type_name}`} value={selectedRoomIds[slot.booking_room_id] || ''} onChange={(event) => setSelectedRoomIds({ ...selectedRoomIds, [slot.booking_room_id]: event.target.value })} disabled={loading || !selectableRooms.length}>
-              <option value="">{loading ? 'Đang tải phòng...' : selectableRooms.length ? 'Chọn phòng phù hợp' : 'Không có phòng phù hợp'}</option>
-              {selectableRooms.map((room) => <option key={room.id} value={room.id}>P.{room.room_number} · {names[room.status]} · tầng {room.floor}</option>)}
-            </select></label>;
-          })}
-          <button className="btn btn-primary btn-sm" onClick={() => void saveAssignment()} disabled={loading || !roomSlots.length || roomSlots.some((slot) => !selectedRoomIds[slot.booking_room_id])}>Gán tất cả phòng</button>
-          <button className="btn btn-outline btn-sm" onClick={() => setSelectedBooking(null)}>Hủy</button>
-        </div> : <button className="btn btn-secondary btn-sm" onClick={() => void selectBooking(booking)}>{booking.assigned_room_id ? 'Xem / đổi phòng' : 'Xem phòng phù hợp'}</button>}
-      </article>)}</div> : <p className="room-empty-state">Hiện không có booking online nào chờ gán phòng.</p>}
-    </section>
-  </div>;
-}
-
 function ReceptionBookingHistory({ customerMode = false }: { customerMode?: boolean }) {
   const { showToast } = useToast();
   const [bookings, setBookings] = useState<RecentBooking[]>([]);
   const [selectedBooking, setSelectedBooking] = useState<RecentBooking | null>(null);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [draft, setDraft] = useState({ check_in_date: '', check_out_date: '', guest_full_name: '', guest_phone: '', guest_email: '', adults: 1, children: 0, special_request: '' });
+  const [draft, setDraft] = useState({ check_in_date: '', check_out_date: '', guest_full_name: '', guest_phone: '', guest_email: '', adults: 1, children: 0, special_request: '', room_selections: [] as BookingRoomSelection[] });
+  const [roomOptions, setRoomOptions] = useState<RoomAvailabilityItem[]>([]);
+  const [checkingRoomAvailability, setCheckingRoomAvailability] = useState(false);
+  const [roomAvailabilityError, setRoomAvailabilityError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [createdFrom, setCreatedFrom] = useState('');
   const [createdTo, setCreatedTo] = useState('');
@@ -281,16 +225,48 @@ function ReceptionBookingHistory({ customerMode = false }: { customerMode?: bool
       adults: booking.adults,
       children: booking.children,
       special_request: booking.special_request || '',
+      room_selections: booking.room_selections?.map(({ room_type_id, quantity }) => ({ room_type_id, quantity }))
+        || (booking.room_type_id ? [{ room_type_id: booking.room_type_id, quantity: 1 }] : []),
     });
   };
+  const bookingRoomSelections = (booking: RecentBooking): BookingRoomSelection[] =>
+    booking.room_selections?.map(({ room_type_id, quantity }) => ({ room_type_id, quantity }))
+    || (booking.room_type_id ? [{ room_type_id: booking.room_type_id, quantity: 1 }] : []);
+  const originalRoomCount = selectedBooking ? bookingRoomSelections(selectedBooking).reduce((sum, selection) => sum + selection.quantity, 0) : 0;
+  useEffect(() => {
+    if (!editing || !selectedBooking) return;
+    let cancelled = false;
+    setCheckingRoomAvailability(true);
+    setRoomAvailabilityError(null);
+    void checkRoomAvailability({
+      check_in_date: draft.check_in_date,
+      check_out_date: draft.check_out_date,
+      adults: draft.adults,
+      children: draft.children,
+      exclude_booking_id: selectedBooking.id,
+    }).then((result) => {
+      if (!cancelled) setRoomOptions(result.data);
+    }).catch((error: unknown) => {
+      if (!cancelled) setRoomAvailabilityError(error instanceof Error ? error.message : 'Không thể kiểm tra phòng trống.');
+    }).finally(() => {
+      if (!cancelled) setCheckingRoomAvailability(false);
+    });
+    return () => { cancelled = true; };
+  }, [editing, selectedBooking, draft.check_in_date, draft.check_out_date, draft.adults, draft.children]);
   const saveChanges = async (event: FormEvent) => {
     event.preventDefault();
     if (!selectedBooking) return;
+    if (draft.room_selections.reduce((sum, selection) => sum + selection.quantity, 0) < originalRoomCount) {
+      return showToast(`Booking cần có ít nhất ${originalRoomCount} phòng.`, 'error');
+    }
     const accessToken = localStorage.getItem('accessToken');
     if (!accessToken) return showToast('Vui lòng đăng nhập lại.', 'error');
     try {
       setSaving(true);
-      await updateBooking(selectedBooking.id, draft, accessToken);
+      await updateBooking(selectedBooking.id, {
+        ...draft,
+        guest_email: draft.guest_email || undefined,
+      }, accessToken);
       await load();
       setSelectedBooking(null);
       showToast('Đã cập nhật booking.', 'success');
@@ -356,7 +332,29 @@ function ReceptionBookingHistory({ customerMode = false }: { customerMode?: bool
   });
   const now = new Date();
   const localToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  return <div className="reception-recent-bookings-card booking-history-card">
+  const customerUpdateDeadline = selectedBooking
+    ? Date.parse(`${String(selectedBooking.check_in_date).slice(0, 10)}T14:00:00+07:00`) - 24 * 60 * 60 * 1000
+    : Number.POSITIVE_INFINITY;
+  const canEditSelectedBooking = !!selectedBooking
+    && selectedBooking.status === 'CONFIRMED'
+    && (!customerMode || Date.now() <= customerUpdateDeadline);
+  const canCancelSelectedBooking = !!selectedBooking
+    && selectedBooking.status === 'CONFIRMED'
+    && (!customerMode || String(selectedBooking.check_in_date).slice(0, 10) > localToday);
+  const selectedAdultsCapacity = draft.room_selections.reduce((sum, selection) =>
+    sum + (roomOptions.find((option) => option.id === selection.room_type_id)?.max_adults || 0) * selection.quantity, 0);
+  const selectedChildrenCapacity = draft.room_selections.reduce((sum, selection) =>
+    sum + (roomOptions.find((option) => option.id === selection.room_type_id)?.max_children || 0) * selection.quantity, 0);
+  const selectedBookingReservedSelections = selectedBooking
+    && Number(selectedBooking.deposit_amount) >= Number(selectedBooking.required_deposit_amount || 0)
+    ? bookingRoomSelections(selectedBooking)
+    : [];
+  const getBookingRoomImage = (booking: RecentBooking) => booking.room_selections?.find((selection) => selection.image_url)?.image_url || null;
+  const getBookingStatusLabel = (status: string) => ({
+    CONFIRMED: 'Đã xác nhận', CHECKED_IN: 'Đang lưu trú', CHECKED_OUT: 'Đã hoàn thành', CANCELLED: 'Đã hủy',
+  }[status] || status);
+  const formatMoney = (amount: number) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(amount);
+  return <div className={`reception-recent-bookings-card booking-history-card${customerMode ? ' booking-history-customer' : ''}`}>
     <div className="recent-card-header">
       <div><h3>{customerMode ? 'Booking của tôi' : 'Lịch sử booking'}</h3><p>{filtered.length}/{bookings.length} booking{customerMode ? ' thuộc tài khoản của bạn.' : ', bao gồm booking đang hoạt động, đã checkout và đã hủy.'}</p></div>
       <button className="btn btn-secondary btn-sm" onClick={() => void load()}>Làm mới</button>
@@ -377,6 +375,22 @@ function ReceptionBookingHistory({ customerMode = false }: { customerMode?: bool
       </div></div>
       {(query || createdFrom || createdTo || checkInFrom || checkInTo || checkOutFrom || checkOutTo) && <button className="btn btn-outline btn-sm" onClick={() => { setQuery(''); setCreatedFrom(''); setCreatedTo(''); setCheckInFrom(''); setCheckInTo(''); setCheckOutFrom(''); setCheckOutTo(''); }}>Xóa bộ lọc</button>}
     </div>
+    {customerMode && !message && <div className="customer-booking-cards">{filtered.map((booking) => {
+      const nights = Math.max(1, Math.ceil((new Date(String(booking.check_out_date).slice(0, 10)).getTime() - new Date(String(booking.check_in_date).slice(0, 10)).getTime()) / 86400000));
+      const remaining = Math.max(0, Number(booking.balance_due ?? (Number(booking.total_amount || 0) - Number(booking.deposit_amount || 0) - Number(booking.final_paid_amount || 0))));
+      return <article className="customer-booking-card" key={booking.id}>
+        {getBookingRoomImage(booking) ? <img src={getBookingRoomImage(booking) || ''} alt={`Phòng ${booking.room_type_name || ''}`} /> : <div className="customer-booking-image-placeholder">Chưa có ảnh</div>}
+        <div className="customer-booking-primary">
+          <strong className="customer-booking-code">#{booking.booking_code}</strong>
+          <span>{booking.room_type_name || 'Phòng khách sạn'}</span>
+          <div className="customer-booking-meta"><span>▦ {String(booking.check_in_date).slice(0, 10)} <b>→</b> {String(booking.check_out_date).slice(0, 10)}</span><span>◷ {nights} đêm</span><span>♙ {booking.adults} người lớn, {booking.children} trẻ em</span></div>
+          <span className="customer-booking-room">▣ Số phòng: {booking.room_number || 'Chưa gán'}</span>
+        </div>
+        <div className="customer-booking-status"><span className={`status-badge ${booking.status === 'CONFIRMED' ? 'status-confirmed' : booking.status === 'CHECKED_IN' ? 'status-checked-in' : booking.status === 'CHECKED_OUT' ? 'status-checked-out' : booking.status === 'CANCELLED' ? 'status-cancelled' : 'status-pending'}`}>{getBookingStatusLabel(booking.status)}</span></div>
+        <div className="customer-booking-payment"><span>Tổng tiền</span><strong>{formatMoney(Number(booking.total_amount || 0))}</strong>{booking.status === 'CANCELLED' ? <small>Booking đã hủy</small> : <><small>Đã thanh toán: {formatMoney(Number(booking.deposit_amount || 0) + Number(booking.final_paid_amount || 0))}</small><small>{remaining > 0 ? `Còn lại: ${formatMoney(remaining)}` : 'Thanh toán đầy đủ'}</small></>}</div>
+        <button type="button" className="btn btn-outline btn-sm customer-booking-details" onClick={() => openBooking(booking)}>Chi tiết</button>
+      </article>;
+    })}{filtered.length === 0 && <p className="room-empty-state">Không tìm thấy booking phù hợp.</p>}</div>}
     {message ? <p className="room-empty-state">{message}</p> : <div className="table-wrap"><table className="reception-table booking-history-table"><thead><tr><th>Mã booking</th><th>Khách hàng</th><th>Số điện thoại</th><th>Loại phòng</th><th>Số phòng</th><th>Ngày lưu trú</th><th>Ngày tạo booking</th><th>Trạng thái booking</th><th>Tổng tiền</th></tr></thead>
       <tbody>{filtered.map((booking) => <tr key={booking.id} className="booking-history-row" onClick={() => openBooking(booking)} title="Nhấn để xem chi tiết booking">
         <td><strong className="booking-code-text">{booking.booking_code}</strong></td><td>{booking.guest_full_name}</td><td>{booking.guest_phone}</td><td>{booking.room_type_name || '—'}</td><td>{booking.room_number ? `P.${booking.room_number}` : 'Chưa gán'}</td>
@@ -389,19 +403,29 @@ function ReceptionBookingHistory({ customerMode = false }: { customerMode?: bool
           <label>Họ tên khách<input required maxLength={150} value={draft.guest_full_name} onChange={(event) => setDraft({ ...draft, guest_full_name: event.target.value })} /></label>
           <label>Số điện thoại<input required maxLength={20} value={draft.guest_phone} onChange={(event) => setDraft({ ...draft, guest_phone: event.target.value })} /></label>
           <label>Email<input type="email" value={draft.guest_email} onChange={(event) => setDraft({ ...draft, guest_email: event.target.value })} /></label>
-          <label>Ngày nhận phòng<input type="date" required min={nextDate(localToday)} value={draft.check_in_date} onChange={(event) => setDraft({ ...draft, check_in_date: event.target.value, check_out_date: event.target.value >= draft.check_out_date ? nextDate(event.target.value) : draft.check_out_date })} /></label>
+          <label>Ngày nhận phòng<input type="date" required min={customerMode ? nextDate(localToday) : undefined} value={draft.check_in_date} onChange={(event) => setDraft({ ...draft, check_in_date: event.target.value, check_out_date: event.target.value >= draft.check_out_date ? nextDate(event.target.value) : draft.check_out_date })} /></label>
           <label>Ngày trả phòng<input type="date" required min={nextDate(draft.check_in_date) || undefined} value={draft.check_out_date} onChange={(event) => setDraft({ ...draft, check_out_date: event.target.value })} /></label>
-          <label>Người lớn<input type="number" required min={1} max={20} value={draft.adults} onChange={(event) => setDraft({ ...draft, adults: Number(event.target.value) })} /></label>
-          <label>Trẻ em<input type="number" required min={0} max={20} value={draft.children} onChange={(event) => setDraft({ ...draft, children: Number(event.target.value) })} /></label>
+          <label>Người lớn<input type="number" required min={1} max={selectedAdultsCapacity || 20} value={draft.adults} onChange={(event) => setDraft({ ...draft, adults: Number(event.target.value) })} /></label>
+          <label>Trẻ em<input type="number" required min={0} max={selectedChildrenCapacity || 20} value={draft.children} onChange={(event) => setDraft({ ...draft, children: Number(event.target.value) })} /></label>
           <label className="booking-edit-wide">Yêu cầu đặc biệt<textarea maxLength={500} rows={3} value={draft.special_request} onChange={(event) => setDraft({ ...draft, special_request: event.target.value })} /></label>
-          <div className="booking-detail-actions booking-edit-wide"><button className="btn btn-primary" type="submit" disabled={saving}>{saving ? 'Đang lưu...' : 'Lưu thay đổi'}</button><button className="btn btn-outline" type="button" onClick={() => setEditing(false)}>Quay lại</button></div>
+          {roomAvailabilityError && <div className="reception-alert alert-error booking-edit-wide">{roomAvailabilityError}</div>}
+          <BookingRoomSelectionEditor
+            options={roomOptions}
+            selections={draft.room_selections}
+            originalSelections={selectedBooking ? bookingRoomSelections(selectedBooking) : []}
+            reservedSelections={selectedBookingReservedSelections}
+            totalRooms={originalRoomCount}
+            loading={checkingRoomAvailability}
+            onChange={(room_selections) => setDraft({ ...draft, room_selections })}
+          />
+          <div className="booking-detail-actions booking-edit-wide"><button className="btn btn-primary" type="submit" disabled={saving || checkingRoomAvailability || !!roomAvailabilityError || draft.adults > selectedAdultsCapacity || draft.children > selectedChildrenCapacity || draft.room_selections.reduce((sum, selection) => sum + selection.quantity, 0) < originalRoomCount}>{saving ? 'Đang lưu...' : 'Lưu thay đổi'}</button><button className="btn btn-outline" type="button" onClick={() => setEditing(false)} disabled={saving}>Quay lại</button></div>
         </form> : <>
           <dl className="booking-detail-grid"><div><dt>Khách hàng</dt><dd>{selectedBooking.guest_full_name}</dd></div><div><dt>Điện thoại</dt><dd>{selectedBooking.guest_phone}</dd></div><div><dt>Email</dt><dd>{selectedBooking.guest_email || '—'}</dd></div><div><dt>Loại phòng / phòng</dt><dd>{selectedBooking.room_type_name || '—'}{selectedBooking.room_number ? ` · P.${selectedBooking.room_number}` : ' · Chưa gán'}</dd></div><div><dt>Nhận phòng</dt><dd>{String(selectedBooking.check_in_date).slice(0, 10)}</dd></div><div><dt>Trả phòng</dt><dd>{String(selectedBooking.check_out_date).slice(0, 10)}</dd></div><div><dt>Số khách</dt><dd>{selectedBooking.adults} người lớn, {selectedBooking.children} trẻ em</dd></div><div><dt>Trạng thái</dt><dd>{selectedBooking.status}</dd></div><div><dt>Tổng tiền</dt><dd>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(selectedBooking.total_amount)}</dd></div><div><dt>Đã cọc</dt><dd>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(selectedBooking.deposit_amount)}</dd></div><div className="booking-detail-wide"><dt>Yêu cầu đặc biệt</dt><dd>{selectedBooking.special_request || 'Không có'}</dd></div></dl>
           <BookingServicePanel bookingId={selectedBooking.id} canAddServices={selectedBooking.status === 'CHECKED_IN' || (selectedBooking.status === 'CONFIRMED' && String(selectedBooking.check_in_date).slice(0, 10) <= localToday && String(selectedBooking.check_out_date).slice(0, 10) > localToday)} onTotalChange={(total) => {
             setSelectedBooking((current) => current ? { ...current, total_amount: total } : current);
             setBookings((current) => current.map((booking) => String(booking.id) === String(selectedBooking.id) ? { ...booking, total_amount: total } : booking));
           }} />
-          <div className="booking-detail-actions">{selectedBooking.status === 'CONFIRMED' && String(selectedBooking.check_in_date).slice(0, 10) > localToday ? <><button type="button" className="btn btn-primary" onClick={() => setEditing(true)}>Cập nhật booking</button><button type="button" className="btn btn-outline" onClick={() => void cancelSelectedBooking()} disabled={saving}>Hủy booking</button></> : selectedBooking.status === 'CONFIRMED' ? <p className="booking-manage-note">Chỉ có thể cập nhật hoặc hủy trước ngày nhận phòng. Nếu chưa check-in sau 18:00, lễ tân sẽ liên hệ để xử lý booking.</p> : null}<button type="button" className="btn btn-outline" onClick={() => setSelectedBooking(null)}>Đóng</button></div>
+          <div className="booking-detail-actions">{canEditSelectedBooking && <button type="button" className="btn btn-primary" onClick={() => setEditing(true)}>Cập nhật booking</button>}{canCancelSelectedBooking && <button type="button" className="btn btn-outline" onClick={() => void cancelSelectedBooking()} disabled={saving}>Hủy booking</button>}{selectedBooking.status === 'CONFIRMED' && customerMode && !canEditSelectedBooking && <p className="booking-manage-note">Bạn chỉ có thể cập nhật booking trước thời điểm nhận phòng ít nhất 24 giờ.</p>}<button type="button" className="btn btn-outline" onClick={() => setSelectedBooking(null)}>Đóng</button></div>
         </>}
       </section>
     </div>}
@@ -456,7 +480,10 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
     });
   }, [config]);
 
-  const activeItem = config.nav.find((item) => item.label === activeModule) ?? config.nav[0];
+  const activeItem = config.nav.find((item) => item.label === activeModule)
+    ?? (currentRole === 'RECEPTIONIST' && activeModule === 'Lịch sử booking'
+      ? { label: 'Lịch sử booking', description: 'Xem toàn bộ booking, bao gồm booking đã checkout hoặc đã hủy.' }
+      : config.nav[0]);
 
   const handleLogout = async () => {
     const refreshToken = localStorage.getItem('refreshToken');
@@ -473,10 +500,17 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
   };
 
   return (
-    <div className="dashboard-shell container">
-      <aside className="dashboard-sidebar">
+    <div className={`dashboard-shell container${currentRole === 'RECEPTIONIST' ? ' dashboard-shell-receptionist' : currentRole === 'CUSTOMER' ? ' dashboard-shell-customer' : ''}`}>
+      <aside
+        className="dashboard-sidebar"
+        style={currentRole === 'RECEPTIONIST' || currentRole === 'CUSTOMER' ? {
+          backgroundImage: `linear-gradient(180deg, rgba(3, 48, 46, .96) 0%, rgba(3, 48, 46, .88) 55%, rgba(3, 48, 46, .32) 100%), url(${dashboardSidebarImage})`,
+        } : undefined}
+      >
         <div className="sidebar-brand">
-          <div className="brand-badge">H</div>
+          <div className="brand-badge">
+            {currentRole === 'RECEPTIONIST' || currentRole === 'CUSTOMER' ? <img src={lotusLogo} alt="" /> : 'H'}
+          </div>
           <div>
             <strong>Hotel Lumière</strong>
             <small>{config.accent}</small>
@@ -491,30 +525,39 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
               className={item.label === activeItem.label ? 'nav-item active' : 'nav-item'}
               onClick={() => setActiveModule(item.label)}
             >
-              {item.label}
+              {(currentRole === 'RECEPTIONIST' || currentRole === 'CUSTOMER') && (
+                <span className="reception-nav-icon" aria-hidden="true">
+                  {(currentRole === 'CUSTOMER' ? customerNavIcons : receptionistNavIcons)[item.label] ?? '•'}
+                </span>
+              )}
+              <span>{item.label}</span>
             </button>
           ))}
         </nav>
 
-        {currentRole !== 'HOUSEKEEPER' && currentRole !== 'ADMIN' && (
+        {currentRole === 'RECEPTIONIST' && (
           <div className="sidebar-card">
             <span className="muted-label">Tổng quan</span>
             <strong>{config.title}</strong>
             <p>{config.subtitle}</p>
           </div>
         )}
-        {currentRole !== 'CUSTOMER' && (
-          <button className="sidebar-logout" type="button" onClick={() => void handleLogout()}>
-            Đăng xuất
-          </button>
-        )}
+        <button className="sidebar-logout" type="button" onClick={() => void handleLogout()}>
+          Đăng xuất
+        </button>
       </aside>
 
       <main className="dashboard-main">
-        <header className="dashboard-header">
+        <header
+          className="dashboard-header"
+          style={currentRole === 'RECEPTIONIST' || currentRole === 'CUSTOMER' ? {
+            backgroundImage: `linear-gradient(90deg, rgba(255, 250, 242, .96) 0%, rgba(255, 250, 242, .82) 42%, rgba(255, 250, 242, .1) 100%), url(${dashboardBannerImage})`,
+          } : undefined}
+        >
           <div>
             <p className="eyebrow eyebrow-soft">{config.title}</p>
             <h1 id="dashboard-page-title">{activeItem.label}</h1>
+            {(currentRole === 'RECEPTIONIST' || currentRole === 'CUSTOMER') && <p className="dashboard-header-subtitle">{activeItem.description}</p>}
           </div>
           <div className="dashboard-header-actions">
             <a href="/" className="btn btn-outline btn-sm">
@@ -534,17 +577,15 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
             <div className="module-content">
               <RoomTypesPage readOnly={currentRole === 'RECEPTIONIST'} />
             </div>
+          ) : currentRole === 'RECEPTIONIST' && activeModule === 'Lịch sử booking' ? (
+            <ReceptionBookingHistory />
           ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Booking Management' ? (
-            <ReceptionRoomBooking mode="management" />
+            <ReceptionRoomBooking mode="management" onViewBookingHistory={() => setActiveModule('Lịch sử booking')} />
           ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Check-in' ? (
             <ReceptionRoomBooking mode="checkin" />
           ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Check-out' ? (
             <ReceptionRoomBooking mode="checkout" />
-          ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Assign Room to Booking' ? (
-            <ReceptionRoomManagement />
-          ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Lịch sử booking' ? (
-            <ReceptionBookingHistory />
-          ) : currentRole === 'CUSTOMER' && activeItem.label === 'Bookings' ? (
+          ) : currentRole === 'CUSTOMER' && activeItem.label === 'Lịch sử đặt phòng' ? (
             <ReceptionBookingHistory customerMode />
           ) : activeItem.label === 'Thanh toán' && currentRole === 'CUSTOMER' ? (
             <div className="module-content"><PaymentList customerOnly /></div>

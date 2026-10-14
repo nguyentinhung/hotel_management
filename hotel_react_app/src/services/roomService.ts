@@ -13,6 +13,7 @@ export interface CheckAvailabilityParams {
   check_out_date: string;
   adults: number;
   children: number;
+  exclude_booking_id?: string | number;
 }
 
 export const checkRoomAvailability = async (
@@ -24,6 +25,7 @@ export const checkRoomAvailability = async (
     adults: String(params.adults),
     children: String(params.children),
   });
+  if (params.exclude_booking_id != null) query.set('exclude_booking_id', String(params.exclude_booking_id));
 
   return api.get<{ success: boolean; data: RoomAvailabilityItem[] }>(`/api/rooms/availability?${query.toString()}`);
 };
@@ -122,10 +124,15 @@ export interface UpdateBookingPayload {
   adults: number;
   children: number;
   special_request?: string;
+  room_selections?: { room_type_id: number; quantity: number }[];
 }
 
 export const updateBooking = (bookingId: string | number, payload: UpdateBookingPayload, accessToken: string) =>
-  api.patch<{ success: boolean; message: string }>(`/api/bookings/${bookingId}`, payload, accessToken);
+  api.patch<{
+    success: boolean;
+    message: string;
+    booking: { booking_id: string | number; check_in_date: string; check_out_date: string; total_amount: number; deposit_amount: number };
+  }>(`/api/bookings/${bookingId}`, payload, accessToken);
 
 export const cancelBooking = (bookingId: string | number, accessToken: string) =>
   api.post<{ success: boolean; message: string }>(`/api/bookings/${bookingId}/cancel`, {}, accessToken);

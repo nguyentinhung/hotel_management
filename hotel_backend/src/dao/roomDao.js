@@ -27,7 +27,7 @@ function activeReservationPredicate(alias) {
  * @param {number} [params.children] - Số trẻ em
  * @returns {Promise<Array>} Danh sách loại phòng kèm tình trạng phòng trống
  */
-async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, children = 0 }) {
+async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, children = 0, excludeBookingId = null }) {
   const pool = await getPool();
 
   // 1. Truy vấn thông tin cơ bản của tất cả các loại phòng
@@ -75,6 +75,7 @@ async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, ch
   const roomsResult = await pool.request()
     .input('checkIn', sql.Date, checkInDate)
     .input('checkOut', sql.Date, checkOutDate)
+    .input('excludeBookingId', sql.BigInt, excludeBookingId == null ? null : Number(excludeBookingId))
     .query(`
       SELECT
         r.id,
@@ -93,6 +94,7 @@ async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, ch
         JOIN bookings b ON b.id = br.booking_id
         WHERE br.room_id IS NOT NULL
           AND ${activeReservationPredicate('b')}
+          AND (@excludeBookingId IS NULL OR b.id <> @excludeBookingId)
           AND b.check_in_date < @checkOut
           AND b.check_out_date > @checkIn
       ) bk ON bk.room_id = r.id
@@ -106,6 +108,7 @@ async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, ch
   const unassignedBookingsResult = await pool.request()
     .input('checkIn', sql.Date, checkInDate)
     .input('checkOut', sql.Date, checkOutDate)
+    .input('excludeBookingId', sql.BigInt, excludeBookingId == null ? null : Number(excludeBookingId))
     .query(`
       SELECT
         br.room_type_id,
@@ -114,6 +117,7 @@ async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, ch
       JOIN bookings b ON b.id = br.booking_id
       WHERE br.room_id IS NULL
         AND ${activeReservationPredicate('b')}
+        AND (@excludeBookingId IS NULL OR b.id <> @excludeBookingId)
         AND b.check_in_date < @checkOut
         AND b.check_out_date > @checkIn
       GROUP BY br.room_type_id;

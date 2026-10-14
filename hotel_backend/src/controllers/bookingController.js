@@ -315,7 +315,7 @@ async function updateBookingHandler(req, res) {
   }
   const customer = isCustomerClaims(claims);
   if (!customer && !hasRole(claims, 'RECEPTIONIST', 'ADMIN')) return res.status(403).json({ success: false, message: 'Bạn không có quyền cập nhật booking.' });
-  const { check_in_date, check_out_date, guest_full_name, guest_phone, guest_email, adults, children, special_request } = req.body || {};
+  const { check_in_date, check_out_date, guest_full_name, guest_phone, guest_email, adults, children, special_request, room_selections } = req.body || {};
   const datePattern = /^\d{4}-\d{2}-\d{2}$/;
   const isRealDate = (value) => {
     if (!datePattern.test(value || '')) return false;
@@ -327,6 +327,19 @@ async function updateBookingHandler(req, res) {
   }
   if (!Number.isInteger(Number(adults)) || Number(adults) < 1 || !Number.isInteger(Number(children)) || Number(children) < 0) {
     return res.status(400).json({ success: false, message: 'Sá»‘ lÆ°á»£ng khÃ¡ch khÃ´ng há»£p lá»‡.' });
+  }
+  if (room_selections !== undefined && (
+    !Array.isArray(room_selections)
+    || room_selections.length === 0
+    || room_selections.length > 20
+    || room_selections.some((selection) =>
+      !Number.isSafeInteger(Number(selection?.room_type_id))
+      || Number(selection.room_type_id) < 1
+      || !Number.isInteger(Number(selection.quantity))
+      || Number(selection.quantity) < 1
+    )
+  )) {
+    return res.status(400).json({ success: false, message: 'Danh sách loại phòng hoặc số lượng phòng không hợp lệ.' });
   }
   if (String(special_request || '').length > 500) return res.status(400).json({ success: false, message: 'Yêu cầu thêm không được vượt quá 500 ký tự.' });
   try {
@@ -341,11 +354,15 @@ async function updateBookingHandler(req, res) {
       adults: Number(adults),
       children: Number(children),
       specialRequest: special_request,
+      roomSelections: room_selections?.map((selection) => ({
+        roomTypeId: Number(selection.room_type_id),
+        quantity: Number(selection.quantity),
+      })),
     });
     return res.json({ success: true, message: 'Đã cập nhật booking.', booking });
   } catch (error) {
     const message = error.message;
-    const status = /not found/i.test(message) ? 404 : /cannot be updated|capacity|available|check-in date/i.test(message) ? 409 : 400;
+    const status = /not found/i.test(message) ? 404 : /cannot be updated|capacity|available|check-in date|24 hours|past|quantities cannot be fewer/i.test(message) ? 409 : 400;
     return res.status(status).json({ success: false, message });
   }
 }

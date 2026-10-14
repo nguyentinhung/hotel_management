@@ -2,8 +2,11 @@
 import deluxeCityView from '../assets/deluxe-city-view.jpg';
 import executiveGarden from '../assets/executive-garden.webp';
 import familySuite from '../assets/family-suite.jpg';
+import heroImage from '../assets/lumiere-hero.png';
+import lotusLogo from '../assets/lumiere-lotus.png';
 import presidentialVilla from '../assets/presidential-villa.jpg';
 import skyLounge from '../assets/sky-lounge.jpg';
+import sunsetImage from '../assets/lumiere-sunset.png';
 import {
   getActivePromotions,
   getCurrentRoleFromQuery,
@@ -314,7 +317,9 @@ export default function HomePage() {
       <header className="topbar">
         <div className="container nav-shell">
           <div className="brand-wrap">
-            <div className="brand-badge">H</div>
+            <div className="brand-badge">
+              <img src={lotusLogo} alt="" />
+            </div>
             <div>
               <div className="brand-name">Hotel Lumière</div>
               <small>Stay in comfort</small>
@@ -359,7 +364,10 @@ export default function HomePage() {
       </header>
 
       <main>
-        <section className="hero-section">
+        <section
+          className="hero-section"
+          style={{ backgroundImage: `linear-gradient(90deg, rgba(255, 250, 239, .58) 0%, rgba(255, 250, 239, .36) 40%, rgba(255, 250, 239, .04) 78%), url(${heroImage})` }}
+        >
           <div className="container hero-grid">
             <div className="hero-copy">
               <span className="eyebrow">Khách sạn nghỉ dưỡng và lưu trú</span>
@@ -368,11 +376,7 @@ export default function HomePage() {
                 Tận hưởng không gian nghỉ dưỡng lý tưởng cho các chuyến đi công tác, nghỉ dưỡng
                 và gia đình với dịch vụ tận tâm ngay trong trung tâm thành phố.
               </p>
-              <div className="benefits">
-                <div>Đặt phòng trực tuyến nhanh chóng</div>
-                <div>Nhận mã xác nhận ngay sau khi đặt</div>
-                <div>Thanh toán tại quầy lễ tân khi nhận phòng</div>
-              </div>
+              <a className="btn btn-hero" href="#rooms">Khám phá phòng <span aria-hidden="true">→</span></a>
             </div>
 
             <div className="booking-box" aria-label="Tìm phòng">
@@ -454,6 +458,15 @@ export default function HomePage() {
           </div>
         </section>
 
+        <section className="feature-strip" aria-label="Điểm nổi bật">
+          <div className="container feature-strip-inner">
+            <div><span aria-hidden="true">⌖</span><p><strong>Vị trí tuyệt đẹp</strong><small>Gần thiên nhiên, yên bình</small></p></div>
+            <div><span aria-hidden="true">▱</span><p><strong>Phòng nghỉ sang trọng</strong><small>Thiết kế tinh tế, tiện nghi</small></p></div>
+            <div><span aria-hidden="true">♧</span><p><strong>Dịch vụ tận tâm</strong><small>Đội ngũ chuyên nghiệp</small></p></div>
+            <div><span aria-hidden="true">◇</span><p><strong>Đặt phòng an toàn</strong><small>Thanh toán linh hoạt</small></p></div>
+          </div>
+        </section>
+
         <section id="rooms" className="container section-block">
           <div className="section-heading">
             <div>
@@ -466,7 +479,7 @@ export default function HomePage() {
               </button>
             )}
             <a className="btn btn-primary" href={`/booking?${new URLSearchParams({ check_in_date: search.check_in_date, check_out_date: search.check_out_date, adults: String(search.adults), children: String(search.children) }).toString()}`}>
-              Booking Now
+              Xem tất cả phòng
             </a>
           </div>
 
@@ -588,8 +601,13 @@ export default function HomePage() {
 
           {promotions.length === 0 ? null : (
             <div className="promotion-grid">
-              {promotions.map((promotion) => (
+              {promotions.map((promotion, index) => (
                 <article key={promotion.id} className="promo-card">
+                  <img
+                    className="promo-image"
+                    src={index % 2 === 0 ? sunsetImage : heroImage}
+                    alt=""
+                  />
                   <div className="promo-head">
                     <span className="promo-code">{promotion.code}</span>
                     <button className="copy-btn" onClick={() => void copyCode(promotion.code)}>
@@ -685,6 +703,15 @@ export default function HomePage() {
                 </div>
               </article>
             ))}
+          </div>
+        </section>
+
+        <section className="special-offer" style={{ backgroundImage: `url(${sunsetImage})` }}>
+          <div className="container">
+            <span className="eyebrow">Ưu đãi đặc biệt</span>
+            <h2>Kỳ nghỉ hoàn hảo<br />đang chờ bạn</h2>
+            <p>Khám phá các gói ưu đãi hấp dẫn dành riêng cho kỳ nghỉ tiếp theo.</p>
+            <a className="btn btn-light" href="#promotions">Xem ưu đãi <span aria-hidden="true">→</span></a>
           </div>
         </section>
       </main>
