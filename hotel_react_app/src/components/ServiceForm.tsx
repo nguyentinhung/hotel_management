@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ServiceRequest } from '../types/Service';
+import { useToast } from './ToastProvider';
 
 interface ServiceFormProps {
     initialData?: ServiceRequest;
@@ -13,7 +14,8 @@ const emptyData: ServiceRequest = {
     description: '',
     price: 0,
     unit: '',
-    is_active: true
+    is_active: true,
+    booking_policy: 'ON_DEMAND'
 };
 
 export default function ServiceForm({
@@ -22,6 +24,7 @@ export default function ServiceForm({
     onSubmit,
     onCancel
 }: ServiceFormProps) {
+    const { showToast } = useToast();
     const [formData, setFormData] = useState<ServiceRequest>(initialData || emptyData);
     // Giá được giữ dạng chuỗi để người dùng gõ trực tiếp bằng bàn phím
     const [priceText, setPriceText] = useState<string>(
@@ -56,23 +59,23 @@ export default function ServiceForm({
         event.preventDefault();
 
         if (!formData.name.trim()) {
-            alert('Service name is required.');
+            showToast('Vui lòng nhập tên dịch vụ.', 'error');
             return;
         }
 
         if (priceText === '') {
-            alert('Price is required.');
+            showToast('Vui lòng nhập giá dịch vụ.', 'error');
             return;
         }
 
         const price = Number(priceText);
         if (!Number.isFinite(price) || price < 0) {
-            alert('Price must be a valid number and cannot be negative.');
+            showToast('Giá dịch vụ phải là số hợp lệ và không được âm.', 'error');
             return;
         }
 
         if (!formData.unit.trim()) {
-            alert('Unit is required.');
+            showToast('Vui lòng nhập đơn vị tính.', 'error');
             return;
         }
 
@@ -134,6 +137,18 @@ export default function ServiceForm({
                 >
                     <option value="true">Active</option>
                     <option value="false">Inactive</option>
+                </select>
+            </div>
+
+            <div className="form-group">
+                <label>Cách cung cấp dịch vụ</label>
+                <select
+                    name="booking_policy"
+                    value={formData.booking_policy}
+                    onChange={handleChange}
+                >
+                    <option value="PREBOOK">Đặt trước khi đặt phòng</option>
+                    <option value="ON_DEMAND">Ghi nhận khi khách yêu cầu</option>
                 </select>
             </div>
 

@@ -1,9 +1,19 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Route, Routes } from 'react-router-dom';
+
 import HomePage from './pages/HomePage';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import CustomerBookingPage from './pages/CustomerBookingPage';
 import RoleDashboardPage from './pages/RoleDashboardPage';
+import VerifyEmailPage from './pages/VerifyEmailPage';
+
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
+import PaymentPage from './pages/PaymentPage';
+import PromotionListPage from './pages/PromotionListPage';
+import PromotionCreatePage from './pages/PromotionCreatePage';
+import PromotionDetailsPage from './pages/PromotionDetailsPage';
+import PromotionEditPage from './pages/PromotionEditPage';
 
 export default function App() {
   return (
@@ -13,7 +23,14 @@ export default function App() {
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/booking" element={<CustomerBookingPage />} />
-        <Route path="/verify-email" element={<Navigate to="/login" replace />} />
+        <Route path="/verify-email" element={<VerifyEmailPage />} />
+        <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
+        <Route path="/make-payment" element={<PaymentPage />} />
+        <Route path="/promotions" element={<PromotionListPage />} />
+        <Route path="/promotions/new" element={<PromotionCreatePage />} />
+        <Route path="/promotions/:id" element={<PromotionDetailsPage />} />
+        <Route path="/promotions/:id/edit" element={<PromotionEditPage />} />
         <Route path="/admin" element={<RoleDashboardPage role="ADMIN" />} />
         <Route path="/reception" element={<RoleDashboardPage role="RECEPTIONIST" />} />
         <Route path="/housekeeping" element={<RoleDashboardPage role="HOUSEKEEPER" />} />

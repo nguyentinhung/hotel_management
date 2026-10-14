@@ -8,6 +8,7 @@ import {
     deleteService
 } from '../services/serviceService';
 import ServiceForm from '../components/ServiceForm';
+import { useToast } from '../components/ToastProvider';
 // import './service-management.css';
 
 interface ServiceListPageProps {
@@ -38,8 +39,10 @@ const tdStyle: React.CSSProperties = {
 };
 
 export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps) {
+    const { showToast } = useToast();
     const [services, setServices] = useState<Service[]>([]);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState('');
     const [view, setView] = useState<'list' | 'create' | 'details' | 'edit'>('list');
     const [selectedService, setSelectedService] = useState<Service | null>(null);
 
@@ -48,12 +51,14 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
 
     const loadServices = async () => {
         setLoading(true);
+        setLoadError('');
         try {
-            const data = await getServices();
+            const data = await getServices(role);
             setServices(data);
         } catch (error) {
             console.error(error);
-            alert('Không thể tải danh sách dịch vụ.');
+            setServices([]);
+            setLoadError(error instanceof Error ? error.message : 'Không thể tải danh sách dịch vụ.');
         } finally {
             setLoading(false);
         }
@@ -61,7 +66,7 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
 
     useEffect(() => {
         void loadServices();
-    }, []);
+    }, [role]);
 
     const handleOpenCreate = () => {
         setSelectedService(null);
@@ -70,35 +75,35 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
 
     const handleOpenDetails = async (id: number) => {
         try {
-            const data = await getServiceById(id);
+            const data = await getServiceById(id, role);
             setSelectedService(data);
             setView('details');
         } catch (error) {
             console.error(error);
-            alert('Không thể tải chi tiết dịch vụ.');
+            showToast('Không thể tải chi tiết dịch vụ.', 'error');
         }
     };
 
     const handleOpenEdit = async (id: number) => {
         try {
-            const data = await getServiceById(id);
+            const data = await getServiceById(id, role);
             setSelectedService(data);
             setView('edit');
         } catch (error) {
             console.error(error);
-            alert('Không thể tải dịch vụ.');
+            showToast('Không thể tải dịch vụ.', 'error');
         }
     };
 
     const handleCreateSubmit = async (data: ServiceRequest) => {
         try {
             await createService(data);
-            alert('Thêm dịch vụ thành công.');
+            showToast('Thêm dịch vụ thành công.', 'success');
             setView('list');
             await loadServices();
         } catch (error) {
             console.error(error);
-            alert(error instanceof Error ? error.message : 'Không thể tạo dịch vụ.');
+            showToast(error instanceof Error ? error.message : 'Không thể tạo dịch vụ.', 'error');
         }
     };
 
@@ -106,12 +111,12 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
         if (!selectedService) return;
         try {
             await updateService(selectedService.id, data);
-            alert('Cập nhật dịch vụ thành công.');
+            showToast('Cập nhật dịch vụ thành công.', 'success');
             setView('list');
             await loadServices();
         } catch (error) {
             console.error(error);
-            alert(error instanceof Error ? error.message : 'Không thể cập nhật dịch vụ.');
+            showToast(error instanceof Error ? error.message : 'Không thể cập nhật dịch vụ.', 'error');
         }
     };
 
@@ -125,10 +130,10 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
             await deleteService(id);
             // Xóa thành công ở backend -> loại khỏi danh sách đang hiển thị ngay
             setServices((prev) => prev.filter((service) => service.id !== id));
-            alert('Xóa dịch vụ thành công.');
+            showToast('Xóa dịch vụ thành công.', 'success');
         } catch (error) {
             console.error(error);
-            alert(error instanceof Error ? error.message : 'Không thể xóa dịch vụ.');
+            showToast(error instanceof Error ? error.message : 'Không thể xóa dịch vụ.', 'error');
         }
     };
 
@@ -157,7 +162,8 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
             description: selectedService.description,
             price: selectedService.price,
             unit: selectedService.unit,
-            is_active: selectedService.is_active
+            is_active: selectedService.is_active,
+            booking_policy: selectedService.booking_policy
         };
 
         return (
@@ -178,42 +184,36 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
         return (
             <div className="service-page">
                 <div className="service-header">
-                    <h1>Service Details</h1>
+                    <h3>Chi tiết dịch vụ</h3>
                     <button
                         type="button"
                         className="btn btn-outline btn-sm"
                         onClick={() => setView('list')}
                     >
-                        Back
+                        Quay lại
                     </button>
                 </div>
 
-                <div className="service-details">
-                    <div>
-                        <strong>ID</strong>
-                        <span>{selectedService.id}</span>
+                <article className="service-detail-card">
+                    <div className="service-detail-heading">
+                        <div>
+                            <span className="muted-label">Dịch vụ #{selectedService.id}</span>
+                            <h4>{selectedService.name}</h4>
+                        </div>
+                        <span className={`status-badge ${selectedService.is_active ? 'active' : 'inactive'}`}>
+                            {selectedService.is_active ? 'Đang hoạt động' : 'Đang tắt'}
+                        </span>
                     </div>
-                    <div>
-                        <strong>Service Name</strong>
-                        <span>{selectedService.name}</span>
+                    <p className="service-detail-description">
+                        {selectedService.description || 'Dịch vụ chưa có mô tả.'}
+                    </p>
+                    <div className="service-detail-facts">
+                        <div><span>Giá dịch vụ</span><strong>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(selectedService.price)}</strong></div>
+                        <div><span>Đơn vị tính</span><strong>{selectedService.unit}</strong></div>
+                        <div><span>Cách cung cấp</span><strong>{selectedService.booking_policy === 'PREBOOK' ? 'Đặt trước khi đặt phòng' : 'Ghi nhận khi khách yêu cầu'}</strong></div>
+                        <div><span>Mã dịch vụ</span><strong>#{selectedService.id}</strong></div>
                     </div>
-                    <div>
-                        <strong>Description</strong>
-                        <span>{selectedService.description || '—'}</span>
-                    </div>
-                    <div>
-                        <strong>Price</strong>
-                        <span>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(selectedService.price)}</span>
-                    </div>
-                    <div>
-                        <strong>Unit</strong>
-                        <span>{selectedService.unit}</span>
-                    </div>
-                    <div>
-                        <strong>Status</strong>
-                        <span>{selectedService.is_active ? 'Active' : 'Inactive'}</span>
-                    </div>
-                </div>
+                </article>
             </div>
         );
     }
@@ -234,7 +234,14 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
                 )}
             </div>
 
-            {services.length === 0 ? (
+            {loadError ? (
+                <div className="error-text" role="alert">
+                    <p>{loadError}</p>
+                    <button className="btn btn-outline btn-sm" type="button" onClick={() => void loadServices()}>
+                        Tải lại danh sách
+                    </button>
+                </div>
+            ) : services.length === 0 ? (
                 <p>Không có dịch vụ nào.</p>
             ) : (
                 <div style={cardStyle}>
@@ -245,12 +252,13 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
                         <thead>
                             <tr>
                                 <th style={thStyle}>ID</th>
-                                <th style={thStyle}>Service</th>
-                                <th style={thStyle}>Description</th>
-                                <th style={thStyle}>Price</th>
-                                <th style={thStyle}>Unit</th>
-                                <th style={thStyle}>Status</th>
-                                <th style={thStyle}>Actions</th>
+                                <th style={thStyle}>Dịch vụ</th>
+                                <th style={thStyle}>Mô tả</th>
+                                <th style={thStyle}>Giá</th>
+                                <th style={thStyle}>Đơn vị</th>
+                                <th style={thStyle}>Cách cung cấp</th>
+                                <th style={thStyle}>Trạng thái</th>
+                                <th style={thStyle}>Thao tác</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -272,40 +280,20 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
                                     </td>
                                     <td style={tdStyle}>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(service.price)}</td>
                                     <td style={tdStyle}>{service.unit}</td>
+                                    <td style={tdStyle}>{service.booking_policy === 'PREBOOK' ? 'Đặt trước' : 'Khi khách yêu cầu'}</td>
                                     <td style={tdStyle}>
                                         <span className={`status-badge ${service.is_active ? 'active' : 'inactive'}`}>
                                             {service.is_active ? 'Active' : 'Inactive'}
                                         </span>
                                     </td>
-                                    <td style={{ ...tdStyle, whiteSpace: 'nowrap' }} className="service-actions">
-                                        <button
-                                            type="button"
-                                            className="btn btn-outline btn-sm"
-                                            onClick={() => void handleOpenDetails(service.id)}
-                                            style={{ marginRight: '6px' }}
-                                        >
-                                            View
-                                        </button>
-
-                                        {isAdmin && (
-                                            <>
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-secondary btn-sm"
-                                                    onClick={() => void handleOpenEdit(service.id)}
-                                                    style={{ marginRight: '6px' }}
-                                                >
-                                                    Edit
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    className="btn btn-danger btn-sm"
-                                                    onClick={() => void handleDelete(service.id)}
-                                                >
-                                                    Delete
-                                                </button>
-                                            </>
-                                        )}
+                                    <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>
+                                        <div className="room-type-action-buttons">
+                                            {isAdmin && <>
+                                                <button className="room-type-delete-button" type="button" aria-label={`Xóa ${service.name}`} title="Xóa dịch vụ" onClick={() => void handleDelete(service.id)}>×</button>
+                                                <button className="room-type-edit-button" type="button" aria-label={`Sửa ${service.name}`} title="Sửa dịch vụ" onClick={() => void handleOpenEdit(service.id)}>✎</button>
+                                            </>}
+                                            <button className="room-type-details-button" type="button" aria-label={`Xem chi tiết ${service.name}`} title="Xem chi tiết" onClick={() => void handleOpenDetails(service.id)}>i</button>
+                                        </div>
                                     </td>
                                 </tr>
                             ))}

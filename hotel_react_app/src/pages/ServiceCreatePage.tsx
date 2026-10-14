@@ -2,19 +2,21 @@ import { useNavigate } from 'react-router-dom';
 import ServiceForm from '../components/ServiceForm';
 import type { ServiceRequest } from '../types/Service';
 import { createService } from '../services/serviceService';
+import { useToast } from '../components/ToastProvider';
 import './service-management.css';
 
 export default function ServiceCreatePage() {
     const navigate = useNavigate();
+    const { showToast } = useToast();
 
     const handleSubmit = async (data: ServiceRequest) => {
         try {
             await createService(data);
-            alert('Service created successfully.');
+            showToast('Thêm dịch vụ thành công.', 'success');
             navigate('/services');
         } catch (error) {
             console.error(error);
-            alert(error instanceof Error ? error.message : 'Cannot create service.');
+            showToast(error instanceof Error ? error.message : 'Không thể tạo dịch vụ.', 'error');
         }
     };
 

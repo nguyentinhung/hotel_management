@@ -5,6 +5,7 @@ export interface Service {
     price: number;
     unit: string;
     is_active: boolean;
+    booking_policy: 'PREBOOK' | 'ON_DEMAND';
 }
 
 export interface ServiceRequest {
@@ -13,4 +14,5 @@ export interface ServiceRequest {
     price: number;
     unit: string;
     is_active: boolean;
+    booking_policy: 'PREBOOK' | 'ON_DEMAND';
 }

@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import type { Service } from '../types/Service';
 import { getServiceById } from '../services/serviceService';
 import './service-management.css';
+import { useToast } from '../components/ToastProvider';
 
 interface ServiceDetailsPageProps {
     role?: string;
@@ -10,6 +11,7 @@ interface ServiceDetailsPageProps {
 
 // Trang xem chi tiết chỉ để xem, không có nút Edit
 export default function ServiceDetailsPage(_props: ServiceDetailsPageProps) {
+    const { showToast } = useToast();
     const { id } = useParams();
     const [service, setService] = useState<Service | null>(null);
     const [loading, setLoading] = useState(true);
@@ -22,7 +24,7 @@ export default function ServiceDetailsPage(_props: ServiceDetailsPageProps) {
                 setService(data);
             } catch (error) {
                 console.error(error);
-                alert('Không thể tải dịch vụ.');
+                showToast('Không thể tải dịch vụ.', 'error');
             } finally {
                 setLoading(false);
             }

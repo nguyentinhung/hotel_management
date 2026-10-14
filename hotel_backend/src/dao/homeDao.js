@@ -1,4 +1,4 @@
-const { getPool } = require('../config/db');
+const { sql, getPool } = require('../config/db');
 
 async function getRoomTypes() {
   const pool = await getPool();
@@ -23,6 +23,12 @@ async function getRoomTypes() {
         WHERE rta.room_type_id = rt.id
       ) AS amenities,
       (
+        SELECT STRING_AGG(CONVERT(varchar(20), a.id), ',')
+        FROM room_type_amenities rta
+        JOIN amenities a ON a.id = rta.amenity_id
+        WHERE rta.room_type_id = rt.id
+      ) AS amenity_ids,
+      (
         SELECT AVG(r.rating)
         FROM reviews r
         WHERE r.room_type_id = rt.id AND r.is_hidden = 0
@@ -37,6 +43,79 @@ async function getRoomTypes() {
   `);
 
   return result.recordset;
+}
+
+async function getRoomTypeById(roomTypeId) {
+  const pool = await getPool();
+  const roomTypeResult = await pool.request()
+    .input('roomTypeId', sql.Int, roomTypeId)
+    .query(`
+      SELECT
+        rt.id,
+        rt.name,
+        rt.description,
+        rt.base_price,
+        rt.max_adults,
+        rt.max_children,
+        (
+          SELECT STRING_AGG(a.name, ', ')
+          FROM room_type_amenities rta
+          JOIN amenities a ON a.id = rta.amenity_id
+          WHERE rta.room_type_id = rt.id
+        ) AS amenities,
+        (
+          SELECT STRING_AGG(CONVERT(varchar(20), a.id), ',')
+          FROM room_type_amenities rta
+          JOIN amenities a ON a.id = rta.amenity_id
+          WHERE rta.room_type_id = rt.id
+        ) AS amenity_ids,
+        (
+          SELECT AVG(CAST(r.rating AS DECIMAL(4, 2)))
+          FROM reviews r
+          WHERE r.room_type_id = rt.id AND r.is_hidden = 0
+        ) AS average_rating,
+        (
+          SELECT COUNT(*)
+          FROM reviews r
+          WHERE r.room_type_id = rt.id AND r.is_hidden = 0
+        ) AS review_count
+      FROM room_types rt
+      WHERE rt.id = @roomTypeId;
+    `);
+
+  if (!roomTypeResult.recordset.length) return null;
+
+  const [imagesResult, reviewsResult] = await Promise.all([
+    pool.request()
+      .input('roomTypeId', sql.Int, roomTypeId)
+      .query(`
+        SELECT image_url, is_primary
+        FROM room_type_images
+        WHERE room_type_id = @roomTypeId
+        ORDER BY is_primary DESC, id;
+      `),
+    pool.request()
+      .input('roomTypeId', sql.Int, roomTypeId)
+      .query(`
+        SELECT TOP (10) u.full_name AS customer_name, r.rating, r.comment
+        FROM reviews r
+        JOIN users u ON u.id = r.customer_id
+        WHERE r.room_type_id = @roomTypeId AND r.is_hidden = 0
+        ORDER BY r.id DESC;
+      `),
+  ]);
+
+  const roomType = roomTypeResult.recordset[0];
+  return {
+    ...roomType,
+    base_price: Number(roomType.base_price ?? 0),
+    average_rating: roomType.average_rating == null ? null : Number(roomType.average_rating),
+    review_count: Number(roomType.review_count ?? 0),
+    amenities: String(roomType.amenities || '').split(',').map((item) => item.trim()).filter(Boolean),
+    amenity_ids: String(roomType.amenity_ids || '').split(',').map(Number).filter(Number.isInteger),
+    images: imagesResult.recordset,
+    reviews: reviewsResult.recordset,
+  };
 }
 
 async function getPromotions() {
@@ -56,18 +135,26 @@ async function getServices(activeOnly = true) {
   const pool = await getPool();
   const request = pool.request();
   let query = `
-    SELECT id, name, description, price, unit, is_active
+    SELECT id, name, description, price, unit, is_active, booking_policy
     FROM services
   `;
 
   if (activeOnly) {
-    query += ` WHERE is_active = 1 `;
+    query += ` WHERE is_active = 1 AND is_deleted = 0 `;
   }
 
   query += ` ORDER BY id;`;
 
   const result = await request.query(query);
   return result.recordset;
+}
+
+async function getActiveServiceById(id) {
+  const pool = await getPool();
+  const result = await pool.request()
+    .input('id', sql.Int, id)
+    .query(`SELECT id, name, description, price, unit, is_active, booking_policy FROM services WHERE id = @id AND is_active = 1 AND is_deleted = 0;`);
+  return result.recordset[0] || null;
 }
 
 async function getReviews() {
@@ -93,7 +180,9 @@ async function getReviews() {
 
 module.exports = {
   getRoomTypes,
+  getRoomTypeById,
   getPromotions,
   getServices,
+  getActiveServiceById,
   getReviews,
 };

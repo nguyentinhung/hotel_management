@@ -1,7 +1,7 @@
 const serviceDao = require('../dao/serviceDao');
 
 function validateService(data) {
-    if (!data.name || !data.name.trim()) {
+    if (!data || typeof data.name !== 'string' || !data.name.trim()) {
         throw new Error('Service name is required.');
     }
     if (data.price === undefined || data.price === null || data.price === '') {
@@ -13,8 +13,17 @@ function validateService(data) {
     if (Number(data.price) < 0) {
         throw new Error('Service price cannot be negative.');
     }
-    if (!data.unit || !data.unit.trim()) {
+    if (typeof data.unit !== 'string' || !data.unit.trim()) {
         throw new Error('Service unit is required.');
+    }
+    if (data.description != null && typeof data.description !== 'string') {
+        throw new Error('Service description must be text.');
+    }
+    if (data.is_active != null && typeof data.is_active !== 'boolean') {
+        throw new Error('Service status must be active or inactive.');
+    }
+    if (data.booking_policy != null && !['PREBOOK', 'ON_DEMAND'].includes(data.booking_policy)) {
+        throw new Error('Service booking policy must be PREBOOK or ON_DEMAND.');
     }
 }
 
@@ -41,7 +50,8 @@ async function createService(data) {
         description: data.description ? data.description.trim() : '',
         price: Number(data.price),
         unit: data.unit.trim(),
-        is_active: data.is_active !== false
+        is_active: data.is_active !== false,
+        booking_policy: data.booking_policy || 'ON_DEMAND'
     });
 }
 
@@ -56,7 +66,8 @@ async function updateService(id, data) {
         description: data.description ? data.description.trim() : '',
         price: Number(data.price),
         unit: data.unit.trim(),
-        is_active: data.is_active !== false
+        is_active: data.is_active !== false,
+        booking_policy: data.booking_policy || existing.booking_policy || 'ON_DEMAND'
     });
 }
 

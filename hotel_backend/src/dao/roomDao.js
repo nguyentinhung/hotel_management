@@ -1,5 +1,11 @@
 const { sql, getPool } = require('../config/db');
 
+function activeReservationPredicate(alias) {
+  return `(${alias}.status = 'CHECKED_IN' OR (${alias}.status = 'CONFIRMED' AND (
+    COALESCE(${alias}.deposit_amount, 0) >= CEILING(COALESCE((SELECT SUM(dbr.price_per_night) FROM dbo.booking_rooms dbr WHERE dbr.booking_id = ${alias}.id), 0) * DATEDIFF(day, ${alias}.check_in_date, ${alias}.check_out_date) * 0.30)
+  )))`;
+}
+
 /**
  * ============================================================================
  * CHỨC NĂNG: KIỂM TRA PHÒNG TRỐNG (CHECK ROOM AVAILABILITY) - DAO
@@ -86,7 +92,7 @@ async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, ch
         FROM booking_rooms br
         JOIN bookings b ON b.id = br.booking_id
         WHERE br.room_id IS NOT NULL
-          AND b.status NOT IN ('CANCELLED')
+          AND ${activeReservationPredicate('b')}
           AND b.check_in_date < @checkOut
           AND b.check_out_date > @checkIn
       ) bk ON bk.room_id = r.id
@@ -107,7 +113,7 @@ async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, ch
       FROM booking_rooms br
       JOIN bookings b ON b.id = br.booking_id
       WHERE br.room_id IS NULL
-        AND b.status NOT IN ('CANCELLED')
+        AND ${activeReservationPredicate('b')}
         AND b.check_in_date < @checkOut
         AND b.check_out_date > @checkIn
       GROUP BY br.room_type_id;
@@ -206,7 +212,7 @@ async function getAvailableRoomsForType({ roomTypeId, checkInDate, checkOutDate 
           FROM booking_rooms br
           JOIN bookings b ON b.id = br.booking_id
           WHERE br.room_id IS NOT NULL
-            AND b.status NOT IN ('CANCELLED')
+            AND ${activeReservationPredicate('b')}
             AND b.check_in_date < @checkOut
             AND b.check_out_date > @checkIn
         )

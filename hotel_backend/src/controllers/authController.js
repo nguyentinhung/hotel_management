@@ -5,13 +5,50 @@ const nodemailer = require('nodemailer');
 const { sql, getPool } = require('../config/db');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
-const DEFAULT_CUSTOMER_ROLE = 1;
 
 const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
 
 const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
 
 const isValidPhone = (phone) => /^\+?[0-9\s\-()]{9,20}$/.test(String(phone || '').trim());
+
+function createMailTransporter() {
+  const user = process.env.SMTP_USER?.trim();
+  const pass = process.env.SMTP_PASS?.trim();
+  if (!user || !pass) {
+    const error = new Error('Email chưa được cấu hình. Hãy đặt SMTP_USER và SMTP_PASS trong hotel_backend/.env rồi khởi động lại backend.');
+    error.code = 'SMTP_NOT_CONFIGURED';
+    throw error;
+  }
+
+  const port = Number(process.env.SMTP_PORT || 587);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    const error = new Error('SMTP_PORT không hợp lệ.');
+    error.code = 'SMTP_CONFIG_INVALID';
+    throw error;
+  }
+
+  const secureSetting = process.env.SMTP_SECURE?.trim().toLowerCase();
+  if (secureSetting && secureSetting !== 'true' && secureSetting !== 'false') {
+    const error = new Error('SMTP_SECURE chỉ nhận giá trị true hoặc false.');
+    error.code = 'SMTP_CONFIG_INVALID';
+    throw error;
+  }
+
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port,
+    secure: secureSetting ? secureSetting === 'true' : port === 465,
+    auth: { user, pass },
+  });
+}
+
+function sendEmail(message, transporter = createMailTransporter()) {
+  return transporter.sendMail({
+    from: process.env.SMTP_FROM || process.env.SMTP_USER,
+    ...message,
+  });
+}
 
 const buildUserResponse = (user) => ({
   id: user.id,
@@ -20,47 +57,53 @@ const buildUserResponse = (user) => ({
   phone: user.phone,
   status: String(user.status || '').toUpperCase(),
   role_id: user.role_id,
+  role_code: user.role_code,
   role_name: user.role_name || 'Khách hàng',
 });
 
-async function sendVerificationEmail(user, token) {
-  const baseUrl = process.env.APP_BASE_URL || 'http://localhost:5173';
-  const verificationUrl = `${baseUrl}/verify-email?token=${token}`;
+async function sendVerificationEmail(user, token, transporter) {
+  const baseUrl = process.env.APP_BASE_URL || 'http://localhost:4173';
 
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'localhost',
-    port: Number(process.env.SMTP_PORT || 1025),
-    secure: false,
-    ignoreTLS: true,
-    ...(process.env.SMTP_USER
-      ? {
-          auth: {
-            user: process.env.SMTP_USER,
-            pass: process.env.SMTP_PASS,
-          },
-        }
-      : {}),
-  });
+  const verificationUrl =
+    `${baseUrl}/verify-email?token=${encodeURIComponent(token)}`;
 
-  try {
-    await transporter.sendMail({
-      from: process.env.SMTP_FROM || 'noreply@hotelmanagement.local',
-      to: user.email,
-      subject: 'Xác thực tài khoản Hotel Management',
-      html: `
-        <p>Xin chào ${user.full_name},</p>
-        <p>Vui lòng nhấn vào liên kết bên dưới để xác thực tài khoản:</p>
-        <p><a href="${verificationUrl}">${verificationUrl}</a></p>
-        <p>Liên kết này có hiệu lực trong vòng 24 giờ.</p>
-      `,
-    });
-    return true;
-  } catch (error) {
-    console.warn('Verification email send failed:', error.message);
-    return false;
-  }
+  await sendEmail({
+    // QUAN TRỌNG: gửi tới email người vừa đăng ký
+    to: user.email,
+
+    subject: 'Xác nhận tài khoản Hotel Management',
+
+    html: `
+      <h2>Chào ${user.full_name}</h2>
+
+      <p>Cảm ơn bạn đã đăng ký tài khoản Hotel Management.</p>
+
+      <p>Vui lòng bấm vào nút bên dưới để xác nhận email:</p>
+
+      <p>
+        <a href="${verificationUrl}"
+           style="
+             display:inline-block;
+             padding:10px 20px;
+             background:#007bff;
+             color:white;
+             text-decoration:none;
+             border-radius:5px;
+           ">
+          Xác nhận email
+        </a>
+      </p>
+
+      <p>Liên kết có hiệu lực trong 24 giờ.</p>
+
+      <p>Nếu bạn không đăng ký tài khoản này, hãy bỏ qua email.</p>
+    `,
+  }, transporter);
+
+  console.log(`Verification email sent to: ${user.email}`);
+
+  return true;
 }
-
 // Tạo access token để client dùng cho request tiếp theo trong vòng 1 giờ
 const createAccessToken = (user) => jwt.sign(
   {
@@ -94,6 +137,8 @@ async function register(req, res) {
       return res.status(400).json({ message: 'Số điện thoại không đúng định dạng.' });
     }
 
+    // Validate mail settings before creating an account that cannot be verified.
+    const mailTransporter = createMailTransporter();
     const pool = await getPool();
 
     const existingEmail = await pool.request()
@@ -113,7 +158,8 @@ async function register(req, res) {
     }
 
     const roleQuery = await pool.request().query("SELECT TOP 1 id, code, name FROM roles WHERE code = 'CUSTOMER';");
-    const customerRole = roleQuery.recordset[0] || { id: DEFAULT_CUSTOMER_ROLE, code: 'CUSTOMER', name: 'Khách hàng' };
+    const customerRole = roleQuery.recordset[0];
+    if (!customerRole) throw new Error('Customer role is not configured.');
 
     const passwordHash = await bcrypt.hash(password, 10);
     const insertResult = await pool.request()
@@ -142,18 +188,33 @@ async function register(req, res) {
         VALUES (@user_id, @token, @expires_at, 'email_verification');
       `);
 
-    const emailSent = await sendVerificationEmail(user, verificationToken);
+    try {
+      await sendVerificationEmail(user, verificationToken, mailTransporter);
+    } catch (emailError) {
+      try {
+        await pool.request()
+          .input('token', sql.VarChar(255), verificationToken)
+          .input('userId', sql.BigInt, user.id)
+          .query(`
+            DELETE FROM email_verifications WHERE token = @token;
+            DELETE FROM users WHERE id = @userId AND status = 'LOCKED';
+          `);
+      } catch (cleanupError) {
+        console.error('Registration email cleanup error:', cleanupError);
+      }
+      throw emailError;
+    }
 
     return res.status(201).json({
       message: 'Đăng ký tài khoản thành công. Vui lòng kiểm tra email để xác thực tài khoản.',
       user: buildUserResponse(user),
-      verificationToken: emailSent ? undefined : verificationToken,
     });
   } catch (error) {
     console.error('Register error:', error);
     return res.status(500).json({
-      message: 'Đăng ký thất bại.',
-      error: error.message,
+      message: error.code === 'SMTP_NOT_CONFIGURED' || error.code === 'SMTP_CONFIG_INVALID'
+        ? error.message
+        : 'Đăng ký thất bại. Hãy kiểm tra kết nối cơ sở dữ liệu và email.',
     });
   }
 }
@@ -236,7 +297,7 @@ async function login(req, res) {
 
     const user = result.recordset[0];
     const legacyPasswordMatch = user.password_hash === password;
-    const isMatch = legacyPasswordMatch || (await bcrypt.compare('123456', user.password_hash).catch(() => false)); // đã chuyển đổi đoạn này thành pw
+    const isMatch = legacyPasswordMatch || (await bcrypt.compare(password, user.password_hash).catch(() => false));
 
     if (!isMatch) {
       return res.status(401).json({ message: 'Email hoặc mật khẩu không chính xác.' });
@@ -306,4 +367,242 @@ module.exports = {
   login,
   logout,
   verifyEmail,
+  forgotPassword,
+  resetPassword,
 };
+async function forgotPassword(req, res) {
+  try {
+    const email = normalizeEmail(req.body?.email);
+
+    if (!isValidEmail(email)) {
+      return res.status(400).json({
+        message: 'Email không hợp lệ.',
+      });
+    }
+
+    const mailTransporter = createMailTransporter();
+    const pool = await getPool();
+
+    // Chỉ cho phép tài khoản ACTIVE
+    const userResult = await pool.request()
+      .input('email', sql.VarChar(150), email)
+      .query(`
+        SELECT TOP 1
+          id,
+          email,
+          full_name,
+          status
+        FROM users
+        WHERE email = @email
+          AND status = 'ACTIVE';
+      `);
+
+    // Không tiết lộ email có tồn tại hay không
+    if (!userResult.recordset.length) {
+      return res.json({
+        message: 'Nếu email tồn tại, mã OTP đã được gửi.',
+      });
+    }
+
+    const user = userResult.recordset[0];
+
+    // Vô hiệu hóa OTP cũ
+    await pool.request()
+      .input('userId', sql.BigInt, user.id)
+      .query(`
+        UPDATE password_resets
+        SET is_used = 1
+        WHERE user_id = @userId
+          AND is_used = 0;
+      `);
+
+    // Tạo OTP 6 số
+    const otpCode = String(
+      crypto.randomInt(100000, 1000000)
+    );
+
+    // Tạo password reset record
+    const resetInsert = await pool.request()
+      .input('userId', sql.BigInt, user.id)
+      .input('otpCode', sql.VarChar(10), otpCode)
+      .query(`
+        INSERT INTO password_resets
+        (
+          user_id,
+          otp_code,
+          token,
+          expires_at,
+          is_used,
+          created_at
+        )
+        OUTPUT INSERTED.id
+        VALUES
+        (
+          @userId,
+          @otpCode,
+          NULL,
+          DATEADD(MINUTE, 10, SYSDATETIME()),
+          0,
+          SYSDATETIME()
+        );
+      `);
+
+    // Gửi OTP
+    try {
+      await sendEmail({
+        to: user.email,
+        subject: 'Mã OTP đặt lại mật khẩu',
+        html: `
+        <h2>Đặt lại mật khẩu</h2>
+
+        <p>Xin chào ${user.full_name},</p>
+
+        <p>Mã OTP để đặt lại mật khẩu của bạn là:</p>
+
+        <h1 style="letter-spacing: 5px;">
+          ${otpCode}
+        </h1>
+
+        <p>Mã OTP có hiệu lực trong <b>10 phút</b>.</p>
+
+        <p>Nếu bạn không yêu cầu đặt lại mật khẩu,
+        vui lòng bỏ qua email này.</p>
+        `,
+      }, mailTransporter);
+    } catch (emailError) {
+      await pool.request()
+        .input('resetId', sql.BigInt, resetInsert.recordset[0].id)
+        .query('UPDATE password_resets SET is_used = 1 WHERE id = @resetId;');
+      throw emailError;
+    }
+
+    console.log(`Password reset OTP sent to: ${user.email}`);
+
+    return res.json({
+      message: 'Nếu email tồn tại, mã OTP đã được gửi.',
+    });
+
+  } catch (error) {
+    console.error('Forgot password error:', error);
+
+    return res.status(500).json({
+      message: error.code === 'SMTP_NOT_CONFIGURED' || error.code === 'SMTP_CONFIG_INVALID'
+        ? error.message
+        : 'Không thể gửi mã OTP. Hãy kiểm tra cấu hình email và kết nối SMTP.',
+    });
+  }
+}
+async function resetPassword(req, res) {
+  try {
+    const email = normalizeEmail(req.body?.email);
+    const otp = String(req.body?.otp || '').trim();
+    const newPassword = String(req.body?.newPassword || '');
+
+    if (!isValidEmail(email)) {
+      return res.status(400).json({
+        message: 'Email không hợp lệ.',
+      });
+    }
+
+    if (!/^\d{6}$/.test(otp)) {
+      return res.status(400).json({
+        message: 'OTP phải gồm 6 chữ số.',
+      });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        message: 'Mật khẩu phải có ít nhất 6 ký tự.',
+      });
+    }
+
+    const pool = await getPool();
+
+    // Tìm user
+    const userResult = await pool.request()
+      .input('email', sql.VarChar(150), email)
+      .query(`
+        SELECT TOP 1 id
+        FROM users
+        WHERE email = @email
+          AND status = 'ACTIVE';
+      `);
+
+    if (!userResult.recordset.length) {
+      return res.status(400).json({
+        message: 'OTP hoặc email không hợp lệ.',
+      });
+    }
+
+    const userId = userResult.recordset[0].id;
+
+    // Kiểm tra OTP
+    const otpResult = await pool.request()
+      .input('userId', sql.BigInt, userId)
+      .input('otp', sql.VarChar(10), otp)
+      .query(`
+        SELECT TOP 1
+          id,
+          expires_at,
+          is_used
+        FROM password_resets
+        WHERE user_id = @userId
+          AND otp_code = @otp
+          AND is_used = 0
+          AND expires_at > SYSDATETIME()
+        ORDER BY created_at DESC;
+      `);
+
+    if (!otpResult.recordset.length) {
+      return res.status(400).json({
+        message: 'OTP không hợp lệ hoặc đã hết hạn.',
+      });
+    }
+
+    const resetRecord = otpResult.recordset[0];
+
+    // Hash password mới
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+
+    // Đổi password
+    await pool.request()
+      .input('userId', sql.BigInt, userId)
+      .input('passwordHash', sql.VarChar(255), passwordHash)
+      .query(`
+        UPDATE users
+        SET password_hash = @passwordHash
+        WHERE id = @userId;
+      `);
+
+    // Đánh dấu OTP đã sử dụng
+    await pool.request()
+      .input('resetId', sql.BigInt, resetRecord.id)
+      .query(`
+        UPDATE password_resets
+        SET is_used = 1
+        WHERE id = @resetId;
+      `);
+
+    // Vô hiệu hóa các OTP cũ còn lại
+    await pool.request()
+      .input('userId', sql.BigInt, userId)
+      .query(`
+        UPDATE password_resets
+        SET is_used = 1
+        WHERE user_id = @userId
+          AND is_used = 0;
+      `);
+
+    return res.json({
+      message: 'Đặt lại mật khẩu thành công.',
+    });
+
+  } catch (error) {
+    console.error('Reset password error:', error);
+
+    return res.status(500).json({
+      message: 'Đặt lại mật khẩu thất bại.',
+      error: error.message,
+    });
+  }
+}

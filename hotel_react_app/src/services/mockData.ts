@@ -98,6 +98,7 @@ export const services: ServiceItem[] = [
     price: 350000,
     unit: 'chuyến',
     is_active: true,
+    booking_policy: 'PREBOOK',
   },
   {
     id: 2,
@@ -106,6 +107,7 @@ export const services: ServiceItem[] = [
     price: 120000,
     unit: 'bộ',
     is_active: true,
+    booking_policy: 'ON_DEMAND',
   },
   {
     id: 3,
@@ -114,6 +116,7 @@ export const services: ServiceItem[] = [
     price: 450000,
     unit: 'buổi',
     is_active: false,
+    booking_policy: 'ON_DEMAND',
   },
   {
     id: 4,
@@ -122,6 +125,7 @@ export const services: ServiceItem[] = [
     price: 140000,
     unit: 'người',
     is_active: true,
+    booking_policy: 'PREBOOK',
   },
 ];
 
