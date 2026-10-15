@@ -59,4 +59,8 @@ const requireChangePassword = requireRoles(
   'Bạn không có quyền đổi mật khẩu.'
 );
 
-module.exports = { requireCustomer, requirePaymentStaff, requirePaymentActor, requireChangePassword };
+const requireViewProfile = requireRoles(
+  ['CUSTOMER', 'ADMIN', 'RECEPTIONIST', 'HOUSEKEEPER'],
+  'Bạn không có quyền xem hồ sơ.'
+);
+module.exports = { requireCustomer, requirePaymentStaff, requirePaymentActor, requireChangePassword, requireViewProfile };
