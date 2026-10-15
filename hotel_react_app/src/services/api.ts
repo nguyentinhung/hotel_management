@@ -90,7 +90,7 @@ export const api = {
 
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      throw new Error(payload?.message || `Request failed: ${response.status}`);
+      throw new ApiError(payload?.message || `Request failed: ${response.status}`, response.status);
     }
     return payload as T;
   },

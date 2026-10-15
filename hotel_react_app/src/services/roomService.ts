@@ -17,6 +17,12 @@ export interface AddRoomPayload {
   floor: number;
 }
 
+export interface UpdateRoomPayload {
+  room_number: string;
+  room_type_id: number;
+  floor: number;
+}
+
 export const getRoomTypesForRoomForm = async (): Promise<RoomTypeOption[]> => {
   const roomTypes = await api.get<RoomType[]>('/api/room-types');
   return roomTypes.map(({ id, name }) => ({ id, name }));
@@ -25,6 +31,13 @@ export const getRoomTypesForRoomForm = async (): Promise<RoomTypeOption[]> => {
 export const addRoom = (payload: AddRoomPayload, accessToken: string) =>
   api.postWithAuth<{ success: boolean; message: string; room: RoomStatusRecord }>(
     '/api/rooms',
+    payload,
+    accessToken,
+  );
+
+export const updateRoom = (roomId: number, payload: UpdateRoomPayload, accessToken: string) =>
+  api.putWithAuth<{ success: boolean; message: string; room: RoomStatusRecord }>(
+    `/api/rooms/${roomId}`,
     payload,
     accessToken,
   );

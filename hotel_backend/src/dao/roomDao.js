@@ -301,10 +301,84 @@ async function createRoom({ roomNumber, roomTypeId, floor }) {
   }
 }
 
+async function updateRoom({ roomId, roomNumber, roomTypeId, floor }) {
+  const pool = await getPool();
+  let transaction = new sql.Transaction(pool);
+  await transaction.begin();
+
+  try {
+    const existingRoom = await new sql.Request(transaction)
+      .input('roomId', sql.Int, roomId)
+      .query('SELECT id FROM dbo.rooms WITH (UPDLOCK, HOLDLOCK) WHERE id = @roomId;');
+
+    if (!existingRoom.recordset.length) {
+      await transaction.rollback();
+      transaction = null;
+      return { reason: 'ROOM_NOT_FOUND' };
+    }
+
+    const roomTypeResult = await new sql.Request(transaction)
+      .input('roomTypeId', sql.Int, roomTypeId)
+      .query('SELECT id FROM dbo.room_types WITH (UPDLOCK, HOLDLOCK) WHERE id = @roomTypeId;');
+
+    if (!roomTypeResult.recordset.length) {
+      await transaction.rollback();
+      transaction = null;
+      return { reason: 'ROOM_TYPE_NOT_FOUND' };
+    }
+
+    const duplicateRoom = await new sql.Request(transaction)
+      .input('roomId', sql.Int, roomId)
+      .input('roomNumber', sql.VarChar(10), roomNumber)
+      .query('SELECT id FROM dbo.rooms WITH (UPDLOCK, HOLDLOCK) WHERE room_number = @roomNumber AND id <> @roomId;');
+
+    if (duplicateRoom.recordset.length) {
+      await transaction.rollback();
+      transaction = null;
+      return { reason: 'ROOM_NUMBER_EXISTS' };
+    }
+
+    const result = await new sql.Request(transaction)
+      .input('roomId', sql.Int, roomId)
+      .input('roomNumber', sql.VarChar(10), roomNumber)
+      .input('roomTypeId', sql.Int, roomTypeId)
+      .input('floor', sql.TinyInt, floor)
+      .query(`
+        UPDATE dbo.rooms
+        SET room_number = @roomNumber,
+            room_type_id = @roomTypeId,
+            floor = @floor
+        OUTPUT INSERTED.id, INSERTED.room_number, INSERTED.room_type_id,
+               INSERTED.floor, INSERTED.status
+        WHERE id = @roomId;
+      `);
+
+    if (!result.recordset.length) {
+      await transaction.rollback();
+      transaction = null;
+      return { reason: 'ROOM_NOT_FOUND' };
+    }
+
+    await transaction.commit();
+    transaction = null;
+    return { room: result.recordset[0] };
+  } catch (error) {
+    if (transaction) {
+      try {
+        await transaction.rollback();
+      } catch (rollbackError) {
+        console.error('Update room rollback error:', rollbackError);
+      }
+    }
+    throw error;
+  }
+}
+
 module.exports = {
   checkRoomAvailability,
   getAvailableRoomsForType,
   getRoomList,
   getRoomDetails,
   createRoom,
+  updateRoom,
 };

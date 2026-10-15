@@ -5,7 +5,7 @@ import RoomTypesPage from './RoomTypesPage';
 import ServiceListPage from './ServiceListPage';
 import BookingServicePanel from '../components/BookingServicePanel';
 import type { Role } from '../types';
-import { addRoom, assignRoomToBooking, cancelBooking, finishRoomCleaning, getActiveBookings, getAssignableRooms, getBookingHistory, getRoomDetails, getRoomList, getRoomStatuses, getRoomMaintenanceReports, getRoomTypesForRoomForm, reportRoomMaintenance, resolveRoomMaintenanceReport, updateBooking, type RoomDetails, type RoomMaintenanceReport, type RoomStatusRecord, type RoomTypeOption } from '../services/roomService';
+import { addRoom, assignRoomToBooking, cancelBooking, finishRoomCleaning, getActiveBookings, getAssignableRooms, getBookingHistory, getRoomDetails, getRoomList, getRoomStatuses, getRoomMaintenanceReports, getRoomTypesForRoomForm, reportRoomMaintenance, resolveRoomMaintenanceReport, updateBooking, updateRoom, type RoomDetails, type RoomMaintenanceReport, type RoomStatusRecord, type RoomTypeOption } from '../services/roomService';
 import type { RecentBooking } from '../types';
 import PaymentList from '../components/PaymentList';
 import { logout } from '../services/authService';
@@ -100,6 +100,11 @@ function RoomStatusPanel({ role }: { role: Role }) {
   const [roomDetail, setRoomDetail] = useState<RoomDetails | null>(null);
   const [roomDetailLoading, setRoomDetailLoading] = useState(false);
   const [roomDetailError, setRoomDetailError] = useState('');
+  const [editingRoomId, setEditingRoomId] = useState<number | null>(null);
+  const [editingRoomData, setEditingRoomData] = useState({ room_number: '', room_type_id: '', floor: '' });
+  const [editingRoomErrors, setEditingRoomErrors] = useState<Record<string, string>>({});
+  const [editingRoomMessage, setEditingRoomMessage] = useState('');
+  const [editingRoomSubmitting, setEditingRoomSubmitting] = useState(false);
   const roomsRequestInFlight = useRef(false);
   const roomDetailRequest = useRef(0);
   const { showToast } = useToast();
@@ -227,23 +232,85 @@ function RoomStatusPanel({ role }: { role: Role }) {
     setAddingRoom(true);
     void loadRoomTypes();
   };
+  const openEditRoomForm = (room: RoomStatusRecord) => {
+    setAddingRoom(false);
+    setEditingRoomId(room.id);
+    setEditingRoomData({
+      room_number: room.room_number,
+      room_type_id: String(room.room_type_id),
+      floor: room.floor == null ? '' : String(room.floor),
+    });
+    setEditingRoomErrors({});
+    setEditingRoomMessage('');
+    setEditingRoomSubmitting(false);
+    void loadRoomTypes();
+  };
   const cancelAddRoom = () => {
     if (roomSubmitting) return;
     setAddingRoom(false);
     setRoomFormErrors({});
     setRoomFormMessage('');
   };
+  const cancelEditRoom = () => {
+    if (editingRoomSubmitting) return;
+    setEditingRoomId(null);
+    setEditingRoomData({ room_number: '', room_type_id: '', floor: '' });
+    setEditingRoomErrors({});
+    setEditingRoomMessage('');
+  };
+  useEffect(() => {
+    if (!addingRoom && editingRoomId === null) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !roomSubmitting && !editingRoomSubmitting) {
+        if (addingRoom) {
+          setAddingRoom(false);
+          setRoomFormErrors({});
+          setRoomFormMessage('');
+        } else {
+          setEditingRoomId(null);
+          setEditingRoomData({ room_number: '', room_type_id: '', floor: '' });
+          setEditingRoomErrors({});
+          setEditingRoomMessage('');
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [addingRoom, editingRoomId, roomSubmitting, editingRoomSubmitting]);
+  const getRoomNumberError = (value: string) => {
+    const roomNumber = value.trim();
+    if (!roomNumber) return 'Vui lòng nhập số phòng.';
+    if (roomNumber.length > 10) return 'Số phòng không được vượt quá 10 ký tự.';
+    if (!/^[0-9]+$/.test(roomNumber) || /^0+$/.test(roomNumber)) return 'Số phòng phải là số nguyên dương.';
+    return '';
+  };
+  const getFloorError = (value: string) => {
+    const floorText = value.trim();
+    if (!floorText) return 'Vui lòng nhập số tầng.';
+    if (!/^-?\d+$/.test(floorText)) return 'Số tầng phải là số nguyên.';
+    const floor = Number(floorText);
+    if (floor < 0) return 'Số tầng không được nhỏ hơn 0.';
+    if (floor > 255) return 'Số tầng không được lớn hơn 255.';
+    return '';
+  };
+  const validateRoomPayload = (values: { room_number: string; room_type_id: string; floor: string }) => {
+    const roomNumber = values.room_number.trim();
+    const roomTypeId = Number(values.room_type_id);
+    const floorText = values.floor.trim();
+    const floor = floorText ? Number(floorText) : NaN;
+    const errors: Record<string, string> = {};
+    const roomNumberError = getRoomNumberError(values.room_number);
+    const floorError = getFloorError(values.floor);
+
+    if (roomNumberError) errors.room_number = roomNumberError;
+    if (!Number.isInteger(roomTypeId) || roomTypeId < 1) errors.room_type_id = 'Vui lòng chọn loại phòng.';
+    if (floorError) errors.floor = floorError;
+
+    return { roomNumber, roomTypeId, floor, errors };
+  };
   const submitAddRoom = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const roomNumber = roomForm.room_number.trim();
-    const roomTypeId = Number(roomForm.room_type_id);
-    const floor = roomForm.floor.trim() ? Number(roomForm.floor) : NaN;
-    const errors: Record<string, string> = {};
-
-    if (!roomNumber) errors.room_number = 'Vui lòng nhập số phòng.';
-    else if (roomNumber.length > 10) errors.room_number = 'Số phòng không được vượt quá 10 ký tự.';
-    if (!Number.isInteger(roomTypeId) || roomTypeId < 1) errors.room_type_id = 'Vui lòng chọn loại phòng.';
-    if (!Number.isInteger(floor) || floor < 0 || floor > 255) errors.floor = 'Tầng phải là số nguyên từ 0 đến 255.';
+    const { roomNumber, roomTypeId, floor, errors } = validateRoomPayload(roomForm);
 
     setRoomFormErrors(errors);
     setRoomFormMessage('');
@@ -278,11 +345,63 @@ function RoomStatusPanel({ role }: { role: Role }) {
         }
         showToast(message, 'error');
       } else {
-        showToast('Không thể thêm phòng do lỗi hệ thống. Vui lòng thử lại sau.', 'error');
-        setAddingRoom(false);
+        const message = 'Không thể thêm phòng do lỗi hệ thống. Vui lòng thử lại sau.';
+        setRoomFormMessage(message);
+        showToast(message, 'error');
       }
     } finally {
       setRoomSubmitting(false);
+    }
+  };
+  const submitEditRoom = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (editingRoomId === null) return;
+
+    const { roomNumber, roomTypeId, floor, errors } = validateRoomPayload(editingRoomData);
+    setEditingRoomErrors(errors);
+    setEditingRoomMessage('');
+    if (Object.keys(errors).length) return;
+
+    const accessToken = localStorage.getItem('accessToken');
+    if (!accessToken) {
+      showToast('Vui lòng đăng nhập lại để cập nhật phòng.', 'error');
+      return;
+    }
+
+    setEditingRoomSubmitting(true);
+    try {
+      const result = await updateRoom(editingRoomId, {
+        room_number: roomNumber,
+        room_type_id: roomTypeId,
+        floor,
+      }, accessToken);
+      showToast(result.message, 'success');
+      setEditingRoomId(null);
+      setEditingRoomData({ room_number: '', room_type_id: '', floor: '' });
+      setEditingRoomErrors({});
+      setEditingRoomMessage('');
+      await reload();
+      if (roomDetailId === editingRoomId) {
+        await loadRoomDetails(editingRoomId);
+      }
+    } catch (error) {
+      if (error instanceof ApiError && error.status < 500) {
+        const message = error.message;
+        if (error.status === 409 && /số phòng/i.test(message)) {
+          setEditingRoomErrors({ room_number: message });
+        } else if (error.status === 404 || /loại phòng/i.test(message)) {
+          setEditingRoomErrors({ room_type_id: message });
+        } else {
+          setEditingRoomMessage(message);
+        }
+        showToast(message, 'error');
+      } else {
+        const message = 'Không thể cập nhật phòng do lỗi hệ thống. Vui lòng thử lại sau.';
+        setEditingRoomMessage(message);
+        showToast(message, 'error');
+      }
+    } finally {
+      setEditingRoomSubmitting(false);
     }
   };
   const names = { AVAILABLE: 'Sẵn sàng', OCCUPIED: 'Đang có khách', CLEANING: 'Đang dọn', MAINTENANCE: 'Bảo trì' };
@@ -316,81 +435,6 @@ function RoomStatusPanel({ role }: { role: Role }) {
   });
   for (const [, floorRooms] of sortedFloorGroups) {
     floorRooms.sort((a, b) => a.room_number.localeCompare(b.room_number, undefined, { numeric: true, sensitivity: 'base' }));
-  }
-  if (addingRoom && role === 'ADMIN') {
-    return <div className="room-status-panel">
-      <div className="room-management-heading">
-        <div><h3>Thêm phòng</h3><p>Phòng mới sẽ được khởi tạo ở trạng thái AVAILABLE.</p></div>
-      </div>
-      <form className="add-room-form" onSubmit={(event) => void submitAddRoom(event)} noValidate>
-        <div className="add-room-form-grid">
-          <label className="add-room-field">
-            <span>Số phòng <b aria-hidden="true">*</b></span>
-            <input
-              type="text"
-              name="room_number"
-              value={roomForm.room_number}
-              maxLength={10}
-              required
-              autoComplete="off"
-              aria-invalid={Boolean(roomFormErrors.room_number)}
-              aria-describedby={roomFormErrors.room_number ? 'add-room-number-error' : undefined}
-              onChange={(event) => {
-                setRoomForm({ ...roomForm, room_number: event.target.value });
-                setRoomFormErrors((current) => ({ ...current, room_number: '' }));
-              }}
-            />
-            {roomFormErrors.room_number && <small id="add-room-number-error" className="add-room-field-error">{roomFormErrors.room_number}</small>}
-          </label>
-          <label className="add-room-field">
-            <span>Loại phòng <b aria-hidden="true">*</b></span>
-            <select
-              name="room_type_id"
-              value={roomForm.room_type_id}
-              required
-              disabled={roomTypesLoading || roomSubmitting}
-              aria-invalid={Boolean(roomFormErrors.room_type_id)}
-              aria-describedby={roomFormErrors.room_type_id ? 'add-room-type-error' : undefined}
-              onChange={(event) => {
-                setRoomForm({ ...roomForm, room_type_id: event.target.value });
-                setRoomFormErrors((current) => ({ ...current, room_type_id: '' }));
-              }}
-            >
-              <option value="">{roomTypesLoading ? 'Đang tải loại phòng...' : 'Chọn loại phòng'}</option>
-              {roomTypes.map((roomType) => <option key={roomType.id} value={roomType.id}>{roomType.name}</option>)}
-            </select>
-            {roomFormErrors.room_type_id && <small id="add-room-type-error" className="add-room-field-error">{roomFormErrors.room_type_id}</small>}
-            {!roomTypesLoading && roomTypes.length === 0 && <button type="button" className="btn btn-outline btn-sm add-room-retry" onClick={() => void loadRoomTypes()}>Tải lại loại phòng</button>}
-          </label>
-          <label className="add-room-field">
-            <span>Tầng <b aria-hidden="true">*</b></span>
-            <input
-              type="number"
-              name="floor"
-              value={roomForm.floor}
-              min={0}
-              max={255}
-              step={1}
-              required
-              aria-invalid={Boolean(roomFormErrors.floor)}
-              aria-describedby={roomFormErrors.floor ? 'add-room-floor-error' : undefined}
-              onChange={(event) => {
-                setRoomForm({ ...roomForm, floor: event.target.value });
-                setRoomFormErrors((current) => ({ ...current, floor: '' }));
-              }}
-            />
-            {roomFormErrors.floor && <small id="add-room-floor-error" className="add-room-field-error">{roomFormErrors.floor}</small>}
-          </label>
-        </div>
-        {roomFormMessage && <p className="add-room-form-error" role="alert">{roomFormMessage}</p>}
-        <div className="add-room-form-actions">
-          <button type="button" className="btn btn-outline" onClick={cancelAddRoom} disabled={roomSubmitting}>Hủy</button>
-          <button type="submit" className="btn btn-primary" disabled={roomSubmitting || roomTypesLoading}>
-            {roomSubmitting ? 'Đang lưu...' : 'Lưu phòng'}
-          </button>
-        </div>
-      </form>
-    </div>;
   }
   return <div className="room-status-panel">
     {role !== 'HOUSEKEEPER' && <header className="room-list-header">
@@ -452,7 +496,10 @@ function RoomStatusPanel({ role }: { role: Role }) {
           <span className={`room-status-badge room-status-${room.status.toLowerCase()}`}>{names[room.status]}</span>
           {room.has_open_maintenance_report && <span className="room-status-badge room-status-maintenance">Đã báo bảo trì</span>}
         </div>
-        {role !== 'HOUSEKEEPER' && <button className="btn btn-outline btn-sm room-details-open" type="button" onClick={() => void loadRoomDetails(room.id)}>Xem chi tiết</button>}
+        {role !== 'HOUSEKEEPER' && <div className="room-card-actions">
+          <button className="btn btn-outline btn-sm room-details-open" type="button" onClick={() => void loadRoomDetails(room.id)}>Xem chi tiết</button>
+          {role === 'ADMIN' && <button className="btn btn-primary btn-sm" type="button" onClick={() => openEditRoomForm(room)}>Cập nhật</button>}
+        </div>}
         {role === 'HOUSEKEEPER' && room.status === 'CLEANING' && <>
           <button className="btn btn-primary btn-sm" onClick={() => void updateStatus(room)}>Đã dọn xong</button>
           <button className="btn btn-outline btn-sm" disabled={room.has_open_maintenance_report} onClick={() => void reportMaintenance(room)}>{room.has_open_maintenance_report ? 'Đã báo bảo trì' : 'Báo cần bảo trì'}</button>
@@ -465,6 +512,158 @@ function RoomStatusPanel({ role }: { role: Role }) {
     {!roomsLoading && roomLoadError && rooms.length > 0 && <div className="room-list-state room-list-error" role="alert">
       <p>Không thể tải danh sách phòng mới nhất. Đang giữ dữ liệu đã tải trước đó.</p>
       <button className="btn btn-outline btn-sm" type="button" onClick={() => void reload()}>Thử lại</button>
+    </div>}
+    {role === 'ADMIN' && addingRoom && <div className="room-form-modal-backdrop" role="presentation">
+      <section className="room-form-modal" role="dialog" aria-modal="true" aria-labelledby="add-room-modal-title">
+        <header className="room-form-modal-header">
+          <div><h2 id="add-room-modal-title">Thêm phòng</h2><p>Phòng mới sẽ được khởi tạo ở trạng thái AVAILABLE.</p></div>
+          <button className="room-details-close" type="button" onClick={cancelAddRoom} disabled={roomSubmitting} aria-label="Đóng form thêm phòng">×</button>
+        </header>
+        <form className="add-room-form room-form-modal-form" onSubmit={(event) => void submitAddRoom(event)} noValidate>
+          <div className="add-room-form-grid">
+            <label className="add-room-field">
+              <span>Số phòng <b aria-hidden="true">*</b></span>
+              <input
+                type="text"
+                name="room_number"
+                value={roomForm.room_number}
+                maxLength={10}
+                required
+                autoComplete="off"
+                aria-invalid={Boolean(roomFormErrors.room_number)}
+                aria-describedby={roomFormErrors.room_number ? 'add-room-number-error' : undefined}
+                onChange={(event) => {
+                  const roomNumber = event.target.value;
+                  setRoomForm((current) => ({ ...current, room_number: roomNumber }));
+                  setRoomFormErrors((current) => ({ ...current, room_number: getRoomNumberError(roomNumber) }));
+                }}
+              />
+              {roomFormErrors.room_number && <small id="add-room-number-error" className="add-room-field-error">{roomFormErrors.room_number}</small>}
+            </label>
+            <label className="add-room-field">
+              <span>Loại phòng <b aria-hidden="true">*</b></span>
+              <select
+                name="room_type_id"
+                value={roomForm.room_type_id}
+                required
+                disabled={roomTypesLoading || roomSubmitting}
+                aria-invalid={Boolean(roomFormErrors.room_type_id)}
+                aria-describedby={roomFormErrors.room_type_id ? 'add-room-type-error' : undefined}
+                onChange={(event) => {
+                  setRoomForm({ ...roomForm, room_type_id: event.target.value });
+                  setRoomFormErrors((current) => ({ ...current, room_type_id: '' }));
+                }}
+              >
+                <option value="">{roomTypesLoading ? 'Đang tải loại phòng...' : 'Chọn loại phòng'}</option>
+                {roomTypes.map((roomType) => <option key={roomType.id} value={roomType.id}>{roomType.name}</option>)}
+              </select>
+              {roomFormErrors.room_type_id && <small id="add-room-type-error" className="add-room-field-error">{roomFormErrors.room_type_id}</small>}
+              {!roomTypesLoading && roomTypes.length === 0 && <button type="button" className="btn btn-outline btn-sm add-room-retry" onClick={() => void loadRoomTypes()}>Tải lại loại phòng</button>}
+            </label>
+            <label className="add-room-field">
+              <span>Tầng <b aria-hidden="true">*</b></span>
+              <input
+                type="text"
+                inputMode="decimal"
+                name="floor"
+                value={roomForm.floor}
+                required
+                aria-invalid={Boolean(roomFormErrors.floor)}
+                aria-describedby={roomFormErrors.floor ? 'add-room-floor-error' : undefined}
+                onChange={(event) => {
+                  const floor = event.target.value;
+                  setRoomForm((current) => ({ ...current, floor }));
+                  setRoomFormErrors((current) => ({ ...current, floor: getFloorError(floor) }));
+                }}
+              />
+              {roomFormErrors.floor && <small id="add-room-floor-error" className="add-room-field-error">{roomFormErrors.floor}</small>}
+            </label>
+          </div>
+          {roomFormMessage && <p className="add-room-form-error" role="alert">{roomFormMessage}</p>}
+          <div className="add-room-form-actions">
+            <button type="button" className="btn btn-outline" onClick={cancelAddRoom} disabled={roomSubmitting}>Hủy</button>
+            <button type="submit" className="btn btn-primary" disabled={roomSubmitting || roomTypesLoading}>
+              {roomSubmitting ? 'Đang lưu...' : 'Lưu phòng'}
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>}
+    {role === 'ADMIN' && editingRoomId !== null && <div className="room-form-modal-backdrop" role="presentation">
+      <section className="room-form-modal" role="dialog" aria-modal="true" aria-labelledby="edit-room-modal-title">
+        <header className="room-form-modal-header">
+          <div><h2 id="edit-room-modal-title">Cập nhật phòng</h2><p>Chỉnh sửa thông tin cơ bản của phòng hiện có.</p></div>
+          <button className="room-details-close" type="button" onClick={cancelEditRoom} disabled={editingRoomSubmitting} aria-label="Đóng form cập nhật phòng">×</button>
+        </header>
+        <form className="add-room-form room-form-modal-form" onSubmit={(event) => void submitEditRoom(event)} noValidate>
+          <div className="add-room-form-grid">
+            <label className="add-room-field">
+              <span>Số phòng <b aria-hidden="true">*</b></span>
+              <input
+                type="text"
+                name="room_number"
+                value={editingRoomData.room_number}
+                maxLength={10}
+                required
+                autoComplete="off"
+                aria-invalid={Boolean(editingRoomErrors.room_number)}
+                aria-describedby={editingRoomErrors.room_number ? 'edit-room-number-error' : undefined}
+                onChange={(event) => {
+                  const roomNumber = event.target.value;
+                  setEditingRoomData((current) => ({ ...current, room_number: roomNumber }));
+                  setEditingRoomErrors((current) => ({ ...current, room_number: getRoomNumberError(roomNumber) }));
+                }}
+              />
+              {editingRoomErrors.room_number && <small id="edit-room-number-error" className="add-room-field-error">{editingRoomErrors.room_number}</small>}
+            </label>
+            <label className="add-room-field">
+              <span>Loại phòng <b aria-hidden="true">*</b></span>
+              <select
+                name="room_type_id"
+                value={editingRoomData.room_type_id}
+                required
+                disabled={roomTypesLoading || editingRoomSubmitting}
+                aria-invalid={Boolean(editingRoomErrors.room_type_id)}
+                aria-describedby={editingRoomErrors.room_type_id ? 'edit-room-type-error' : undefined}
+                onChange={(event) => {
+                  setEditingRoomData({ ...editingRoomData, room_type_id: event.target.value });
+                  setEditingRoomErrors((current) => ({ ...current, room_type_id: '' }));
+                }}
+              >
+                <option value="">{roomTypesLoading ? 'Đang tải loại phòng...' : 'Chọn loại phòng'}</option>
+                {roomTypes.map((roomType) => <option key={roomType.id} value={roomType.id}>{roomType.name}</option>)}
+              </select>
+              {editingRoomErrors.room_type_id && <small id="edit-room-type-error" className="add-room-field-error">{editingRoomErrors.room_type_id}</small>}
+              {!roomTypesLoading && roomTypes.length === 0 && <button type="button" className="btn btn-outline btn-sm add-room-retry" onClick={() => void loadRoomTypes()}>Tải lại loại phòng</button>}
+            </label>
+            <label className="add-room-field">
+              <span>Tầng <b aria-hidden="true">*</b></span>
+              <input
+                type="text"
+                inputMode="decimal"
+                name="floor"
+                value={editingRoomData.floor}
+                required
+                aria-invalid={Boolean(editingRoomErrors.floor)}
+                aria-describedby={editingRoomErrors.floor ? 'edit-room-floor-error' : undefined}
+                onChange={(event) => {
+                  const floor = event.target.value;
+                  setEditingRoomData((current) => ({ ...current, floor }));
+                  setEditingRoomErrors((current) => ({ ...current, floor: getFloorError(floor) }));
+                }}
+              />
+              {editingRoomErrors.floor && <small id="edit-room-floor-error" className="add-room-field-error">{editingRoomErrors.floor}</small>}
+            </label>
+          </div>
+          {editingRoomMessage && <p className="add-room-form-error" role="alert">{editingRoomMessage}</p>}
+          <div className="add-room-form-actions">
+            <button type="button" className="btn btn-outline" onClick={cancelEditRoom} disabled={editingRoomSubmitting}>Hủy</button>
+            <button type="submit" className="btn btn-primary" disabled={editingRoomSubmitting || roomTypesLoading}>
+              {editingRoomSubmitting ? 'Đang lưu...' : 'Lưu thay đổi'}
+            </button>
+          </div>
+        </form>
+      </section>
     </div>}
     {roomDetailId !== null && <div className="room-details-backdrop" role="presentation" onMouseDown={(event) => {
       if (event.target === event.currentTarget) closeRoomDetails();

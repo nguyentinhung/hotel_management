@@ -16,7 +16,7 @@ const { getPool, ensureAuthTables, ensureBookingStatusConstraint, ensureGuestIdC
 // Seed data đã được tắt để dùng dữ liệu mẫu bạn insert trực tiếp trong SQL Server.
 const { getHomeData, getRoomTypes, getRoomTypeDetails, getPromotions, getServices, getActiveServiceById, getReviews } = require('./controllers/homeController');
 const { register, login, logout, verifyEmail, forgotPassword, resetPassword } = require('./controllers/authController');
-const { getRoomList: getRoomListHandler, getRoomDetails: getRoomDetailsHandler, createRoom: createRoomHandler, checkAvailability, getAvailableRooms } = require('./controllers/roomController');
+const { getRoomList: getRoomListHandler, getRoomDetails: getRoomDetailsHandler, createRoom: createRoomHandler, updateRoom: updateRoomHandler, checkAvailability, getAvailableRooms } = require('./controllers/roomController');
 const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, updateBookingHandler, cancelBookingHandler, getActiveBookingsHandler, checkOutBookingHandler, finishRoomCleaningHandler, reportRoomMaintenanceHandler, getRoomMaintenanceReportsHandler, resolveRoomMaintenanceReportHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
 const serviceController = require('./controllers/serviceController');
 const { requireCustomer, requirePaymentStaff, requirePaymentActor } = require('./services/customerAuth');
@@ -417,6 +417,7 @@ app.get('/api/reviews', getReviews);
 app.get('/api/rooms/availability', checkAvailability);
 app.get('/api/rooms', requireRoomListAccess, getRoomListHandler);
 app.post('/api/rooms', requireAdmin, createRoomHandler);
+app.put('/api/rooms/:roomId', requireAdmin, updateRoomHandler);
 
 // 2. Lấy danh sách số phòng vật lý còn trống theo từng loại phòng để lễ tân chọn tại quầy
 app.get('/api/rooms/available-list', getAvailableRooms);
