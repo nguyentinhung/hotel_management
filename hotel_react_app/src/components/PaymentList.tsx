@@ -3,8 +3,10 @@ import { confirmPayment, getCustomerPaymentList, getPaymentList } from '../servi
 import type { PaymentListItem } from '../services/paymentService';
 import { resolveRole } from '../utils/role';
 import { useToast } from './ToastProvider';
+import DataTable from './DataTable';
 
-const PAGE_SIZE = 5;
+const CUSTOMER_PAGE_SIZE = 5;
+const MANAGEMENT_PAGE_SIZE = 10;
 
 const formatAmount = (amount: number) =>
   `${new Intl.NumberFormat('vi-VN').format(amount)} đ`;
@@ -43,6 +45,17 @@ const statusLabels: Record<PaymentListItem['status'], string> = {
   CANCELLED: 'Cancelled',
 };
 
+const getPaymentDateKey = (value: string | null) => {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Ho_Chi_Minh', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(({ type, value: part }) => [type, part]));
+  return `${values.year}-${values.month}-${values.day}`;
+};
+
 export default function PaymentList({ customerOnly = false }: { customerOnly?: boolean }) {
   const { showToast } = useToast();
   const [payments, setPayments] = useState<PaymentListItem[]>([]);
@@ -50,6 +63,14 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
   const [error, setError] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState('');
+  const [paymentFromDate, setPaymentFromDate] = useState('');
+  const [paymentToDate, setPaymentToDate] = useState('');
+  const [paymentStatus, setPaymentStatus] = useState<'ALL' | PaymentListItem['status']>('ALL');
+  const [paymentMethod, setPaymentMethod] = useState<'ALL' | PaymentListItem['method']>('ALL');
+  const [paymentType, setPaymentType] = useState<'ALL' | PaymentListItem['payment_type']>('ALL');
+  const [paymentDate, setPaymentDate] = useState('');
+  const [appliedPaymentFilters, setAppliedPaymentFilters] = useState({ fromDate: '', toDate: '', status: 'ALL' as 'ALL' | PaymentListItem['status'] });
+  const [paymentFilterError, setPaymentFilterError] = useState('');
   const [selectedPayment, setSelectedPayment] = useState<PaymentListItem | null>(null);
   const [confirmingCode, setConfirmingCode] = useState<string | null>(null);
   const [canConfirmPayment, setCanConfirmPayment] = useState(false);
@@ -103,16 +124,33 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
 
   const normalizedSearch = searchTerm.trim().toLocaleLowerCase();
   const searchDigits = searchTerm.replace(/\D/g, '');
-  const filteredPayments = customerOnly ? payments : payments.filter((payment) => {
-    if (!normalizedSearch) return true;
-    const textMatch = [payment.booking_code, payment.customer_full_name, payment.guest_full_name]
+  const availablePaymentStatuses = [...new Set(payments.map((payment) => payment.status))].sort();
+  const availablePaymentMethods = [...new Set(payments.map((payment) => payment.method))].sort();
+  const availablePaymentTypes = [...new Set(payments.map((payment) => payment.payment_type))].sort();
+  const filteredPayments = customerOnly ? payments.filter((payment) => {
+    const paymentDate = getPaymentDateKey(payment.paid_at);
+    const matchesFromDate = !appliedPaymentFilters.fromDate || Boolean(paymentDate && paymentDate >= appliedPaymentFilters.fromDate);
+    const matchesToDate = !appliedPaymentFilters.toDate || Boolean(paymentDate && paymentDate <= appliedPaymentFilters.toDate);
+    const matchesStatus = appliedPaymentFilters.status === 'ALL' || payment.status === appliedPaymentFilters.status;
+    return matchesFromDate && matchesToDate && matchesStatus;
+  }) : payments.filter((payment) => {
+    const textMatch = !normalizedSearch || [payment.payment_code, payment.booking_code, payment.customer_full_name, payment.guest_full_name]
       .some((value) => String(value || '').toLocaleLowerCase().includes(normalizedSearch));
     const phone = String(payment.customer_phone || payment.guest_phone || '');
-    return textMatch || (searchDigits.length > 0 && phone.replace(/\D/g, '').includes(searchDigits));
+    const matchesSearch = textMatch || (searchDigits.length > 0 && phone.replace(/\D/g, '').includes(searchDigits));
+    const matchesStatus = paymentStatus === 'ALL' || payment.status === paymentStatus;
+    const matchesMethod = paymentMethod === 'ALL' || payment.method === paymentMethod;
+    const matchesType = paymentType === 'ALL' || payment.payment_type === paymentType;
+    const matchesDate = !paymentDate || getPaymentDateKey(payment.paid_at) === paymentDate;
+    return matchesSearch && matchesStatus && matchesMethod && matchesType && matchesDate;
   });
-  const pageCount = Math.ceil(filteredPayments.length / PAGE_SIZE);
-  const firstPayment = (currentPage - 1) * PAGE_SIZE;
-  const visiblePayments = filteredPayments.slice(firstPayment, firstPayment + PAGE_SIZE);
+  const pageSize = customerOnly ? CUSTOMER_PAGE_SIZE : MANAGEMENT_PAGE_SIZE;
+  const pageCount = Math.max(1, Math.ceil(filteredPayments.length / pageSize));
+  const firstPayment = (currentPage - 1) * pageSize;
+  const visiblePayments = filteredPayments.slice(firstPayment, firstPayment + pageSize);
+  useEffect(() => {
+    if (currentPage > pageCount) setCurrentPage(pageCount);
+  }, [currentPage, pageCount]);
   const bookingRooms = Array.isArray(selectedPayment?.booking_rooms) ? selectedPayment.booking_rooms : [];
   const bookingGuests = Array.isArray(selectedPayment?.booking_guests) ? selectedPayment.booking_guests : [];
   const invoiceItems = Array.isArray(selectedPayment?.invoice_items) ? selectedPayment.invoice_items : [];
@@ -133,7 +171,7 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
     );
   }
 
-  if (payments.length === 0) {
+  if (payments.length === 0 && customerOnly) {
     return (
       <div className="payment-list-state">
         <strong>Chưa có giao dịch thanh toán</strong>
@@ -143,28 +181,94 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
   }
 
   return (
-    <div className="payment-list-wrap">
-      <div className="payment-list-heading">
-        <svg className="payment-list-heading-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.8" />
-          <path d="M3 9h18M7 15h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-        </svg>
-        <h3>{customerOnly ? 'Lịch sử thanh toán' : 'Danh sách thanh toán'}</h3>
-        <span>({customerOnly ? payments.length : filteredPayments.length} giao dịch{customerOnly ? '' : ' thành công'})</span>
-      </div>
+    <div className={`payment-list-wrap${customerOnly ? ' payment-list-wrap-customer' : ''}`}>
       {!customerOnly && (
-        <div className="payment-list-search">
-          <label className="sr-only" htmlFor="payment-list-search">Search payments by booking code, guest name, or phone</label>
-          <input
-            id="payment-list-search"
-            type="search"
-            value={searchTerm}
-            placeholder="Tìm mã đặt phòng, tên khách, số điện thoại"
-            onChange={(event) => { setSearchTerm(event.target.value); setCurrentPage(1); }}
-          />
+        <section className="payment-management-toolbar-card" aria-label="Danh sách thanh toán và bộ lọc">
+        <div className="payment-list-heading">
+          <svg className="payment-list-heading-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M3 9h18M7 15h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+          <div className="payment-list-heading-copy">
+            <div className="payment-list-heading-title">
+              <h3>Danh sách thanh toán</h3>
+              <span>({filteredPayments.length} giao dịch)</span>
+            </div>
+            <p>Xem và quản lý các giao dịch thanh toán trong hệ thống.</p>
+          </div>
+        </div>
+
+        <div className="payment-management-filters">
+          <div className="payment-management-filter-grid" role="search" aria-label="Tìm kiếm và lọc giao dịch">
+            <label className="payment-management-search">
+              <span className="sr-only">Tìm theo mã thanh toán, mã đặt phòng, tên khách hoặc số điện thoại</span>
+              <span className="payment-management-label-spacer" aria-hidden="true" />
+              <span className="payment-management-search-control">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3" stroke="currentColor" strokeWidth="1.8"/><path d="m16 16 4.5 4.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
+                <input
+                  type="search"
+                  value={searchTerm}
+                  placeholder="Tìm theo mã thanh toán, mã đặt phòng, tên khách, SĐT..."
+                  onChange={(event) => { setSearchTerm(event.target.value); setCurrentPage(1); }}
+                />
+              </span>
+            </label>
+            <label className="payment-management-filter">
+              <span>Trạng thái</span>
+              <select value={paymentStatus} onChange={(event) => { setPaymentStatus(event.target.value as typeof paymentStatus); setCurrentPage(1); }}>
+                <option value="ALL">Tất cả</option>
+                {availablePaymentStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
+              </select>
+            </label>
+            <label className="payment-management-filter">
+              <span>Phương thức</span>
+              <select value={paymentMethod} onChange={(event) => { setPaymentMethod(event.target.value as typeof paymentMethod); setCurrentPage(1); }}>
+                <option value="ALL">Tất cả</option>
+                {availablePaymentMethods.map((method) => <option key={method} value={method}>{method}</option>)}
+              </select>
+            </label>
+            <label className="payment-management-filter">
+              <span>Loại thanh toán</span>
+              <select value={paymentType} onChange={(event) => { setPaymentType(event.target.value as typeof paymentType); setCurrentPage(1); }}>
+                <option value="ALL">Tất cả</option>
+                {availablePaymentTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+              </select>
+            </label>
+            <label className="payment-management-filter payment-management-date-filter">
+              <span>Ngày thanh toán</span>
+              <span className="payment-management-date-input">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3.5" y="5" width="17" height="16" rx="2" stroke="currentColor" strokeWidth="1.7"/><path d="M7.5 3v4M16.5 3v4M4 9.5h16" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/></svg>
+                <input lang="en-GB" type="date" placeholder="dd/mm/yyyy" aria-label="Ngày thanh toán" value={paymentDate} onChange={(event) => { setPaymentDate(event.target.value); setCurrentPage(1); }} />
+              </span>
+            </label>
+            <button type="button" className="payment-management-refresh dashboard-refresh-button" onClick={() => {
+              setSearchTerm('');
+              setPaymentStatus('ALL');
+              setPaymentMethod('ALL');
+              setPaymentType('ALL');
+              setPaymentDate('');
+              setCurrentPage(1);
+              void loadPayments();
+            }}>
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.5 9a7 7 0 0 1 11.6-2L20 12M4 12l2.9 5a7 7 0 0 0 11.6-2"/></svg>
+              Làm mới
+            </button>
+          </div>
+        </div>
+        </section>
+      )}
+      {customerOnly && (
+        <div className="customer-search-bar payment-history-filters" role="search" aria-label="Lọc lịch sử thanh toán">
+          <label className="customer-search-field"><span>Từ ngày</span><span className="customer-search-input-wrap"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3.5" y="5" width="17" height="16" rx="2" stroke="currentColor" strokeWidth="1.7"/><path d="M7.5 3v4M16.5 3v4M4 9.5h16" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/></svg><input lang="en-GB" type="date" aria-label="Từ ngày thanh toán" value={paymentFromDate} max={paymentToDate || undefined} onChange={(event) => setPaymentFromDate(event.target.value)} /></span></label>
+          <label className="customer-search-field"><span>Đến ngày</span><span className="customer-search-input-wrap"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3.5" y="5" width="17" height="16" rx="2" stroke="currentColor" strokeWidth="1.7"/><path d="M7.5 3v4M16.5 3v4M4 9.5h16" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/></svg><input lang="en-GB" type="date" aria-label="Đến ngày thanh toán" value={paymentToDate} min={paymentFromDate || undefined} onChange={(event) => setPaymentToDate(event.target.value)} /></span></label>
+          <label className="customer-search-field"><span>Trạng thái</span><span className="customer-search-input-wrap customer-search-select-wrap"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="9" cy="8" r="3.2" stroke="currentColor" strokeWidth="1.7"/><path d="M3.5 19c.4-3.1 2.2-4.7 5.5-4.7 1.3 0 2.3.3 3.2.8M16 11.5l1.7 1.7 3.3-3.6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/></svg><select aria-label="Trạng thái thanh toán" value={paymentStatus} onChange={(event) => setPaymentStatus(event.target.value as typeof paymentStatus)}><option value="ALL">Tất cả</option><option value="PENDING">Pending</option><option value="SUCCESS">Success</option><option value="FAILED">Failed</option><option value="CANCELLED">Cancelled</option></select><svg className="customer-select-chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 9 6 6 6-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg></span></label>
+          <button type="button" className="customer-search-refresh" onClick={() => { setPaymentFromDate(''); setPaymentToDate(''); setPaymentStatus('ALL'); setAppliedPaymentFilters({ fromDate: '', toDate: '', status: 'ALL' }); setPaymentFilterError(''); setCurrentPage(1); }}><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 7v5h-5M4.5 10a7.5 7.5 0 0 1 13-3L20 12M4 17v-5h5m10.5 2a7.5 7.5 0 0 1-13 3L4 12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>Làm mới</button>
+          <button type="button" className="customer-search-submit" onClick={() => { if (paymentFromDate && paymentToDate && paymentFromDate > paymentToDate) { setPaymentFilterError('Ngày bắt đầu phải trước hoặc cùng ngày kết thúc.'); return; } setPaymentFilterError(''); setAppliedPaymentFilters({ fromDate: paymentFromDate, toDate: paymentToDate, status: paymentStatus }); setCurrentPage(1); }}><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8" stroke="currentColor" strokeWidth="2"/><path d="m16 16 4.5 4.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>Tìm kiếm</button>
+          {paymentFilterError && <p className="customer-search-error" role="alert">{paymentFilterError}</p>}
         </div>
       )}
-      <div className="table-wrap">
+      <section className="payment-data-section" aria-label={customerOnly ? 'Lịch sử thanh toán' : 'Danh sách thanh toán'}>
+      <DataTable className="table-wrap">
         <table className="payment-table">
           <thead>
             <tr>
@@ -173,9 +277,7 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
               <th>Mã đặt phòng</th>
               <th>Tên khách hàng</th>
               {!customerOnly && <th>Số điện thoại</th>}
-              <th>Số tiền</th>
-              <th>Loại thanh toán</th>
-              <th>Phương thức</th>
+              {customerOnly ? <><th>Số tiền</th><th>Loại thanh toán</th><th>Phương thức</th></> : <><th>Loại thanh toán</th><th>Phương thức</th><th>Số tiền (₫)</th></>}
               <th>Trạng thái</th>
               <th>Ngày thanh toán</th>
               <th>Mã giao dịch VNPay</th>
@@ -183,7 +285,7 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
           </thead>
           <tbody>
             {visiblePayments.length === 0 ? (
-              <tr><td colSpan={customerOnly ? 10 : 11} className="text-center py-4 text-muted">Không tìm thấy giao dịch phù hợp.</td></tr>
+              <tr><td colSpan={customerOnly ? 10 : 11} className="text-center py-4 text-muted">{payments.length === 0 ? 'Chưa có giao dịch thanh toán.' : 'Không tìm thấy giao dịch phù hợp.'}</td></tr>
             ) : visiblePayments.map((payment, index) => (
               <tr
                 key={payment.payment_code}
@@ -201,22 +303,20 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
                 <td>{firstPayment + index + 1}</td>
                 <td>{payment.payment_code}</td>
                 <td>{payment.booking_code}</td>
-                <td>{payment.guest_full_name}</td>
+                <td>{customerOnly ? payment.guest_full_name : payment.customer_full_name || payment.guest_full_name}</td>
                 {!customerOnly && <td>{payment.customer_phone || payment.guest_phone || '—'}</td>}
-                <td className="payment-amount-cell">{formatAmount(payment.amount)}</td>
-                <td>
-                  <span className={`payment-type payment-type-${payment.payment_type.toLowerCase()}`}>
-                    {payment.payment_type === 'DEPOSIT' ? 'Deposit' : 'Final'}
-                  </span>
-                </td>
-                <td>
-                  <span className={`payment-method payment-method-${payment.method.toLowerCase()}`}>
-                    {payment.vnpay_transaction_no === 'SIMULATED' ? 'Cash (simulated)' : payment.method === 'CASH' ? 'Cash' : 'VNPay'}
-                  </span>
-                </td>
+                {customerOnly ? <>
+                  <td className="payment-amount-cell">{formatAmount(payment.amount)}</td>
+                  <td><span className={`payment-type payment-type-${payment.payment_type.toLowerCase()}`}>{payment.payment_type === 'DEPOSIT' ? 'Deposit' : 'Final'}</span></td>
+                  <td><span className={`payment-method payment-method-${payment.method.toLowerCase()}`}>{payment.vnpay_transaction_no === 'SIMULATED' ? 'Cash (simulated)' : payment.method === 'CASH' ? 'Cash' : 'VNPay'}</span></td>
+                </> : <>
+                  <td><span className={`payment-type payment-type-${payment.payment_type.toLowerCase()}`}>{payment.payment_type}</span></td>
+                  <td><span className={`payment-method payment-method-${payment.method.toLowerCase()}`}>{payment.method}</span></td>
+                  <td className="payment-amount-cell">{formatAmount(payment.amount)}</td>
+                </>}
                 <td>
                   <span className={`payment-status payment-status-${payment.status.toLowerCase()}`}>
-                    {statusLabels[payment.status]}
+                    {customerOnly ? statusLabels[payment.status] : payment.status}
                   </span>
                 </td>
                 <td>{formatDate(payment.paid_at)}</td>
@@ -225,10 +325,10 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
             ))}
           </tbody>
         </table>
-      </div>
+      </DataTable>
       <div className="payment-list-footer">
         <span>
-          Hiển thị {filteredPayments.length === 0 ? 0 : firstPayment + 1} - {Math.min(firstPayment + PAGE_SIZE, filteredPayments.length)} của {filteredPayments.length} giao dịch
+          Hiển thị {filteredPayments.length === 0 ? 0 : firstPayment + 1} - {Math.min(firstPayment + pageSize, filteredPayments.length)} của {filteredPayments.length} giao dịch
         </span>
         <nav className="payment-pagination" aria-label="Phân trang danh sách thanh toán">
           <button
@@ -261,6 +361,7 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
           </button>
         </nav>
       </div>
+      </section>
       {selectedPayment && (
         <div
           className="payment-detail-backdrop"

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { Service } from '../types/Service';
 import { useToast } from './ToastProvider';
+import DataTable from './DataTable';
 
 type ServiceRoom = { booking_room_id: number; room_id: number | null; room_number: string | null };
 type UsedService = { id: number; room_number: string | null; service_name: string; unit: string; quantity: number; unit_price: number; amount: number; used_at: string };
@@ -84,6 +85,6 @@ export default function BookingServicePanel({ bookingId, canAddServices = false,
     {message && <p className="booking-services-message" role="status">{message}</p>}
     {canAddServices && rooms.length === 0 && !message && <p className="booking-services-message">Không tìm thấy phòng thuộc booking trong thời gian lưu trú.</p>}
     {canAddServices && rooms.length > 0 && services.length === 0 && !message && <p className="booking-services-message">Không có dịch vụ nào đang được ghi nhận khi khách yêu cầu.</p>}
-    {usedServices.length > 0 ? <div className="table-wrap"><table className="reception-table"><thead><tr><th>Dịch vụ</th><th>Phòng</th><th>Số lượng</th><th>Đơn giá</th><th>Tổng</th><th>Thời gian</th></tr></thead><tbody>{usedServices.map((item) => <tr key={item.id}><td>{item.service_name}</td><td>{item.room_number || '—'}</td><td>{item.quantity} {item.unit}</td><td>{money(Number(item.unit_price))}</td><td>{money(Number(item.amount))}</td><td>{new Date(item.used_at).toLocaleString('vi-VN')}</td></tr>)}</tbody></table></div> : <p className="booking-services-message">Booking chưa có dịch vụ phát sinh.</p>}
+    {usedServices.length > 0 ? <DataTable className="table-wrap"><table className="reception-table"><thead><tr><th>Dịch vụ</th><th>Phòng</th><th>Số lượng</th><th>Đơn giá</th><th>Tổng</th><th>Thời gian</th></tr></thead><tbody>{usedServices.map((item) => <tr key={item.id}><td>{item.service_name}</td><td>{item.room_number || '—'}</td><td>{item.quantity} {item.unit}</td><td>{money(Number(item.unit_price))}</td><td>{money(Number(item.amount))}</td><td>{new Date(item.used_at).toLocaleString('vi-VN')}</td></tr>)}</tbody></table></DataTable> : <p className="booking-services-message">Booking chưa có dịch vụ phát sinh.</p>}
   </section>;
 }

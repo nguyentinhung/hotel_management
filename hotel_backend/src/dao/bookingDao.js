@@ -664,7 +664,7 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
           FROM dbo.booking_rooms br
           JOIN dbo.room_types rt ON rt.id = br.room_type_id
           WHERE br.booking_id = b.id
-          GROUP BY br.room_type_id, rt.name
+          GROUP BY br.room_type_id, rt.id, rt.name
           FOR JSON PATH
         ) AS room_selections
       ) room_selection_summary

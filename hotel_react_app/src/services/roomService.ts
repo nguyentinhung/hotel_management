@@ -1,4 +1,4 @@
-import api from './api';
+import api, { API_BASE_URL } from './api';
 import type {
   CustomerBookingPayload,
   CustomerBookingResponse,
@@ -67,6 +67,7 @@ export const checkOutBooking = async (bookingId: string | number, accessToken: s
 
 export interface RoomStatusRecord {
   id: number;
+  room_type_id?: number;
   room_number: string;
   floor: number;
   status: 'AVAILABLE' | 'OCCUPIED' | 'CLEANING' | 'MAINTENANCE';
@@ -114,6 +115,9 @@ export const getRecentBookings = async (limit = 10, accessToken?: string): Promi
 
 export const getBookingHistory = (accessToken: string) =>
   api.get<{ success: boolean; count: number; bookings: RecentBooking[] }>('/api/bookings/history', accessToken);
+
+export const getRoomTypeImageUrl = (roomTypeId: number) =>
+  `${API_BASE_URL}/api/room-types/${roomTypeId}/image`;
 
 export interface UpdateBookingPayload {
   check_in_date: string;

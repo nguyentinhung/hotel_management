@@ -21,6 +21,7 @@ import BookingServicePanel from './BookingServicePanel';
 import BookingRoomSelectionEditor, { type BookingRoomSelection } from './BookingRoomSelectionEditor';
 import { createReceptionCheckout } from '../services/paymentService';
 import { useToast } from './ToastProvider';
+import DataTable from './DataTable';
 
 /**
  * ============================================================================
@@ -171,6 +172,10 @@ export default function ReceptionRoomBooking({
 
   // --- STATE DANH SÁCH ĐẶT PHÒNG GẦN ĐÂY ---
   const [recentBookings, setRecentBookings] = useState<RecentBooking[]>([]);
+  const [recentBookingsError, setRecentBookingsError] = useState<string | null>(null);
+  const [checkInFilterDate, setCheckInFilterDate] = useState('');
+  const [checkInFilterQuery, setCheckInFilterQuery] = useState('');
+  const [appliedCheckInFilters, setAppliedCheckInFilters] = useState({ date: '', query: '' });
   const [managementBookings, setManagementBookings] = useState<RecentBooking[]>([]);
   const [managementQuery, setManagementQuery] = useState('');
   const [managementDateFrom, setManagementDateFrom] = useState('');
@@ -284,6 +289,7 @@ export default function ReceptionRoomBooking({
   const fetchRecent = async () => {
     try {
       setIsLoadingBookings(true);
+      setRecentBookingsError(null);
       const accessToken = localStorage.getItem('accessToken') || undefined;
       const res = await getActiveBookings(accessToken || '');
       setRecentBookings(res.bookings || []);
@@ -291,8 +297,9 @@ export default function ReceptionRoomBooking({
         const history = await getBookingHistory(accessToken);
         setManagementBookings(history.bookings || []);
       }
-    } catch (err) {
-      console.error('Không thể tải danh sách đặt phòng:', err);
+    } catch (error) {
+      console.error('Could not load bookings:', error);
+      setRecentBookingsError(error instanceof Error ? error.message : 'Unable to load bookings.');
     } finally {
       setIsLoadingBookings(false);
     }
@@ -829,6 +836,16 @@ export default function ReceptionRoomBooking({
     if (mode === 'checkin') return booking.status === 'CONFIRMED';
     if (mode === 'checkout') return booking.status === 'CHECKED_IN';
     return booking.status === 'CONFIRMED' || booking.status === 'CHECKED_IN';
+  }).filter((booking) => {
+    if (mode !== 'checkin' && mode !== 'checkout') return true;
+    const normalizedQuery = appliedCheckInFilters.query.trim().toLocaleLowerCase();
+    const matchesDate = !appliedCheckInFilters.date
+      || String(booking.check_in_date).slice(0, 10) === appliedCheckInFilters.date;
+    const searchableText = [booking.booking_code, booking.guest_full_name, booking.guest_phone, booking.room_number]
+      .filter(Boolean)
+      .join(' ')
+      .toLocaleLowerCase();
+    return matchesDate && (!normalizedQuery || searchableText.includes(normalizedQuery));
   });
   const bookingTableTitle = mode === 'checkin'
     ? 'Booking chờ check-in'
@@ -842,7 +859,7 @@ export default function ReceptionRoomBooking({
       : 'Booking đã check-in vẫn được giữ tại đây; booking đã checkout nằm trong lịch sử booking.';
 
   return (
-    <div className="reception-booking-module">
+    <div className={`reception-booking-module${mode === 'management' ? ' booking-management-main-container' : ''}`}>
       {mode === 'management' && <>
       <section className="booking-management-toolbar">
         <div>
@@ -1380,24 +1397,20 @@ export default function ReceptionRoomBooking({
           </label>
           <button
             type="button"
-            className="btn btn-outline btn-sm"
-            onClick={() => {
-              setManagementQuery('');
-              setManagementDateFrom('');
-              setManagementDateTo('');
-              setManagementStatus('ALL');
-              setManagementPaymentStatus('ALL');
-              setManagementPage(1);
-            }}
+            className="btn btn-primary btn-sm booking-management-search-submit"
+            onClick={() => setManagementPage(1)}
           >
-            Xóa bộ lọc
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.5 4.5"/></svg>
+            Search
           </button>
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => void fetchRecent()} disabled={isLoadingBookings}>
+          <button type="button" className="btn btn-sm dashboard-refresh-button" onClick={() => void fetchRecent()} disabled={isLoadingBookings}>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.5 9a7 7 0 0 1 11.6-2L20 12M4 12l2.9 5a7 7 0 0 0 11.6-2"/></svg>
             {isLoadingBookings ? 'Đang tải...' : 'Làm mới'}
           </button>
         </div>
 
-        <div className="booking-management-table-wrap">
+        <section className="booking-management-data-card" aria-label="Danh sách booking">
+        <DataTable className="booking-management-table-wrap">
           <table className="booking-management-table">
             <thead>
               <tr>
@@ -1453,7 +1466,7 @@ export default function ReceptionRoomBooking({
               ))}
             </tbody>
           </table>
-        </div>
+        </DataTable>
         <footer className="booking-management-pagination">
           <span>
             Hiển thị {filteredManagementBookings.length ? (managementPage - 1) * managementPageSize + 1 : 0}–
@@ -1465,6 +1478,7 @@ export default function ReceptionRoomBooking({
             <button type="button" aria-label="Trang sau" disabled={managementPage >= managementPageCount} onClick={() => setManagementPage((page) => Math.min(managementPageCount, page + 1))}>›</button>
           </div>
         </footer>
+        </section>
       </section>}
 
       <div className={`reception-recent-bookings-card${mode === 'management' ? ' booking-management-legacy' : ''}`}>
@@ -1538,7 +1552,63 @@ export default function ReceptionRoomBooking({
           )}
         </section>}
 
-        <div className="table-wrap">
+        {recentBookingsError && <div className="reception-alert alert-error" role="alert">
+          {recentBookingsError}
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => void fetchRecent()}>Retry</button>
+        </div>}
+
+        {mode !== 'management' && <form
+          className="checkin-booking-filter"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setAppliedCheckInFilters({ date: checkInFilterDate, query: checkInFilterQuery });
+          }}
+        >
+          <label className="checkin-booking-filter-date">
+            <span className="checkin-booking-filter-label">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>
+              {mode === 'checkout' ? 'Check-out Date' : 'Check-in Date'}
+            </span>
+            <input
+              type="date"
+              lang="en-GB"
+              value={checkInFilterDate}
+              onChange={(event) => setCheckInFilterDate(event.target.value)}
+              aria-label={mode === 'checkout' ? 'Check-out Date' : 'Check-in Date'}
+            />
+          </label>
+          <label className="checkin-booking-filter-search">
+            <span className="sr-only">Search bookings</span>
+            <svg className="checkin-booking-filter-search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.5 4.5"/></svg>
+            <input
+              type="search"
+              value={checkInFilterQuery}
+              onChange={(event) => setCheckInFilterQuery(event.target.value)}
+              placeholder="Search by booking code, guest name, room number, phone..."
+              aria-label="Search by booking code, guest name, room number, phone"
+            />
+          </label>
+          <button type="submit" className="checkin-booking-filter-submit">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.5 4.5"/></svg>
+            Search
+          </button>
+          <button
+            type="button"
+            className="checkin-booking-filter-refresh"
+            disabled={isLoadingBookings}
+            onClick={() => {
+              setCheckInFilterDate('');
+              setCheckInFilterQuery('');
+              setAppliedCheckInFilters({ date: '', query: '' });
+              void fetchRecent();
+            }}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.5 9a7 7 0 0 1 11.6-2L20 12M4 12l2.9 5a7 7 0 0 0 11.6-2"/></svg>
+            Làm mới
+          </button>
+        </form>}
+
+        <DataTable className="table-wrap">
           <table className="reception-table">
             <thead>
               <tr>
@@ -1557,7 +1627,11 @@ export default function ReceptionRoomBooking({
               </tr>
             </thead>
             <tbody>
-              {visibleBookings.length === 0 ? (
+              {isLoadingBookings && recentBookings.length === 0 ? (
+                <tr>
+                  <td colSpan={mode === 'management' ? 11 : 12} className="text-center py-4 text-muted">Loading bookings...</td>
+                </tr>
+              ) : visibleBookings.length === 0 ? (
                 <tr>
                   <td colSpan={mode === 'management' ? 11 : 12} className="text-center py-4 text-muted">
                     {mode === 'checkin'
@@ -1606,14 +1680,14 @@ export default function ReceptionRoomBooking({
                         b.requires_deposit_payment && Number(b.deposit_amount) < Number(b.required_deposit_amount || 0) ? (
                           <button type="button" disabled title="Khách cần thanh toán đủ cọc tối thiểu 30% trước khi check-in.">Chưa đủ cọc</button>
                         ) : (
-                          <button type="button" onClick={() => {
+                          <button type="button" className="reception-booking-action" onClick={() => {
                             void openCheckInPage(b);
                           }}>Xác nhận check-in</button>
                         )
                       ) : mode === 'checkout' && b.has_pending_final_payment ? (
                         <button type="button" disabled>Đang chờ thanh toán</button>
                       ) : mode === 'checkout' && b.status === 'CHECKED_IN' ? (
-                        <button type="button" disabled={String(isCheckingOut) === String(b.id)} onClick={() => void handleCheckOut(b)}>
+                        <button type="button" className="reception-booking-action" disabled={String(isCheckingOut) === String(b.id)} onClick={() => void handleCheckOut(b)}>
                           {String(isCheckingOut) === String(b.id) ? 'Đang xử lý…' : 'Checkout & thanh toán'}
                         </button>
                       ) : '—'}
@@ -1624,7 +1698,7 @@ export default function ReceptionRoomBooking({
               )}
             </tbody>
           </table>
-        </div>
+        </DataTable>
         {selectedBookingDetail && <div className={`booking-detail-backdrop${mode === 'management' ? ' booking-management-detail-backdrop' : ''}`} onMouseDown={(event) => { if (event.target === event.currentTarget && !isUpdatingSelectedBooking && !isCancellingSelectedBooking) { setSelectedBookingDetail(null); setIsEditingSelectedBooking(false); } }}>
           <section className="booking-detail-modal" role="dialog" aria-modal="true" aria-labelledby="reception-booking-detail-title">
             <header className="booking-detail-header"><div><span>Chi tiết booking</span><h3 id="reception-booking-detail-title">{selectedBookingDetail.booking_code}</h3></div><button type="button" aria-label="Đóng" disabled={isUpdatingSelectedBooking || isCancellingSelectedBooking} onClick={() => { setSelectedBookingDetail(null); setIsEditingSelectedBooking(false); }}>×</button></header>

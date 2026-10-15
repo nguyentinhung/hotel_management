@@ -46,6 +46,11 @@ const addDays = (date: string, amount: number) => {
 const formatCurrency = (value: number) =>
   new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(value);
 
+const formatPromotionDate = (value: string) => {
+  const [year, month, day] = value.slice(0, 10).split('-');
+  return year && month && day ? `${day}/${month}/${year}` : value;
+};
+
 const renderStars = (rating: number) => {
   const full = Math.round(rating);
   return '★'.repeat(full) + '☆'.repeat(5 - full);
@@ -89,6 +94,7 @@ export default function HomePage() {
   const [filteredRoomTypes, setFilteredRoomTypes] = useState<RoomAvailabilityItem[]>([]);
   const [isFiltered, setIsFiltered] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [selectedRoomDetails, setSelectedRoomDetails] = useState<RoomTypeDetails | null>(null);
   const [isRoomDetailsOpen, setIsRoomDetailsOpen] = useState(false);
   const [isRoomDetailsLoading, setIsRoomDetailsLoading] = useState(false);
@@ -331,6 +337,7 @@ export default function HomePage() {
             <a href="#promotions" onClick={() => setMenuOpen(false)}>Ưu đãi</a>
             <a href="#services" onClick={() => setMenuOpen(false)}>Dịch vụ</a>
             <a href="#reviews" onClick={() => setMenuOpen(false)}>Đánh giá</a>
+            <a href="#rooms" onClick={() => setMenuOpen(false)}>Khám phá</a>
             <a href="#contact" onClick={() => setMenuOpen(false)}>Liên hệ</a>
           </nav>
 
@@ -346,13 +353,39 @@ export default function HomePage() {
               </>
             ) : (
               <>
-                <span className="welcome-text">Xin chào, {user.full_name}</span>
-                <a className="btn btn-outline" href={getRolePath(user.role)}>
-                  {dashboardLabel[user.role]}
-                </a>
-                <button type="button" className="btn btn-primary" onClick={() => void handleLogout()}>
-                  Đăng xuất
-                </button>
+                <div className="user-menu-wrap">
+                  <button
+                    type="button"
+                    className="user-menu-trigger"
+                    aria-expanded={userMenuOpen}
+                    aria-haspopup="menu"
+                    onClick={() => setUserMenuOpen((open) => !open)}
+                  >
+                    <span className="user-avatar" aria-hidden="true">{user.full_name.trim().charAt(0).toLocaleUpperCase() || 'U'}</span>
+                    <span className="user-greeting">Xin chào, {user.full_name}</span>
+                    <svg className="user-menu-chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      {userMenuOpen
+                        ? <path d="m6 15 6-6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        : <path d="m6 9 6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />}
+                    </svg>
+                  </button>
+                  {userMenuOpen && (
+                    <div className="user-menu-panel" role="menu">
+                      <div className="user-menu-identity">
+                        <span className="user-avatar" aria-hidden="true">{user.full_name.trim().charAt(0).toLocaleUpperCase() || 'U'}</span>
+                        <span><strong>{user.full_name}</strong><small>{user.role === 'CUSTOMER' ? 'Khách hàng' : user.role}</small></span>
+                      </div>
+                      <a href={getRolePath(user.role)} role="menuitem" className="user-menu-account" onClick={() => setUserMenuOpen(false)}>
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.8" /><path d="M4.5 21c.5-4.2 3-6.3 7.5-6.3s7 2.1 7.5 6.3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+                        <span>{user.role === 'CUSTOMER' ? 'Tài khoản của tôi' : dashboardLabel[user.role]}</span><span className="account-arrow" aria-hidden="true">›</span>
+                      </a>
+                      <button type="button" role="menuitem" className="user-menu-logout" onClick={() => void handleLogout()}>
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M10 17l5-5-5-5M15 12H3m9-8h7a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                        <span>Đăng xuất</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
               </>
             )}
           </div>
@@ -601,13 +634,8 @@ export default function HomePage() {
 
           {promotions.length === 0 ? null : (
             <div className="promotion-grid">
-              {promotions.map((promotion, index) => (
+              {promotions.map((promotion) => (
                 <article key={promotion.id} className="promo-card">
-                  <img
-                    className="promo-image"
-                    src={index % 2 === 0 ? sunsetImage : heroImage}
-                    alt=""
-                  />
                   <div className="promo-head">
                     <span className="promo-code">{promotion.code}</span>
                     <button className="copy-btn" onClick={() => void copyCode(promotion.code)}>
@@ -622,7 +650,7 @@ export default function HomePage() {
                       : `Giảm ${formatCurrency(promotion.discount_value)}`}
                   </div>
                   <small>
-                    Hạn dùng: {promotion.valid_from} đến {promotion.valid_to}
+                    Hạn dùng: {formatPromotionDate(promotion.valid_from)} đến {formatPromotionDate(promotion.valid_to)}
                   </small>
                 </article>
               ))}
@@ -707,7 +735,7 @@ export default function HomePage() {
         </section>
 
         <section className="special-offer" style={{ backgroundImage: `url(${sunsetImage})` }}>
-          <div className="container">
+          <div className="container special-offer-content">
             <span className="eyebrow">Ưu đãi đặc biệt</span>
             <h2>Kỳ nghỉ hoàn hảo<br />đang chờ bạn</h2>
             <p>Khám phá các gói ưu đãi hấp dẫn dành riêng cho kỳ nghỉ tiếp theo.</p>

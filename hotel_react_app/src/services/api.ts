@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://localhost:5000';
+export const API_BASE_URL = 'http://localhost:5000';
 
 export const api = {
   get: async <T>(url: string, token?: string): Promise<T> => {
