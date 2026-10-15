@@ -361,14 +361,6 @@ async function logout(req, res) {
   }
 }
 
-module.exports = {
-  register,
-  login,
-  logout,
-  verifyEmail,
-  forgotPassword,
-  resetPassword,
-};
 async function forgotPassword(req, res) {
   try {
     const email = normalizeEmail(req.body?.email);
@@ -705,5 +697,5 @@ module.exports = {
   verifyEmail,
   forgotPassword,
   resetPassword,
-  changePassword
+  changePassword,
 };
