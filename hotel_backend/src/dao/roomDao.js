@@ -1,5 +1,9 @@
 const { sql, getPool } = require('../config/db');
 
+function quoteSqlIdentifier(identifier) {
+  return `[${String(identifier).replace(/]/g, ']]')}]`;
+}
+
 function activeReservationPredicate(alias) {
   return `(${alias}.status = 'CHECKED_IN' OR (${alias}.status = 'CONFIRMED' AND (
     COALESCE(${alias}.deposit_amount, 0) >= CEILING(COALESCE((SELECT SUM(dbr.price_per_night) FROM dbo.booking_rooms dbr WHERE dbr.booking_id = ${alias}.id), 0) * DATEDIFF(day, ${alias}.check_in_date, ${alias}.check_out_date) * 0.30)
@@ -374,6 +378,92 @@ async function updateRoom({ roomId, roomNumber, roomTypeId, floor }) {
   }
 }
 
+async function deleteRoom(roomId) {
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+  await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+
+  try {
+    const room = await transaction.request()
+      .input('roomId', sql.Int, roomId)
+      .query('SELECT id FROM dbo.rooms WITH (UPDLOCK, HOLDLOCK) WHERE id = @roomId;');
+
+    if (!room.recordset.length) {
+      await transaction.rollback();
+      return { reason: 'ROOM_NOT_FOUND' };
+    }
+
+    const foreignKeys = await transaction.request().query(`
+      SELECT DISTINCT schema_info.name AS schema_name, table_info.name AS table_name, column_info.name AS column_name
+      FROM sys.foreign_keys foreign_key
+      INNER JOIN sys.foreign_key_columns foreign_key_column
+        ON foreign_key_column.constraint_object_id = foreign_key.object_id
+      INNER JOIN sys.tables table_info
+        ON table_info.object_id = foreign_key_column.parent_object_id
+      INNER JOIN sys.schemas schema_info
+        ON schema_info.schema_id = table_info.schema_id
+      INNER JOIN sys.columns column_info
+        ON column_info.object_id = table_info.object_id
+        AND column_info.column_id = foreign_key_column.parent_column_id
+      WHERE foreign_key.referenced_object_id = OBJECT_ID(N'dbo.rooms')
+        AND foreign_key_column.referenced_column_id = (
+          SELECT column_id
+          FROM sys.columns
+          WHERE object_id = OBJECT_ID(N'dbo.rooms') AND name = N'id'
+        );
+    `);
+    let hasForeignKeyReferences = false;
+    for (const foreignKey of foreignKeys.recordset) {
+      const schemaName = quoteSqlIdentifier(foreignKey.schema_name);
+      const tableName = quoteSqlIdentifier(foreignKey.table_name);
+      const columnName = quoteSqlIdentifier(foreignKey.column_name);
+      const reference = await transaction.request()
+        .input('roomId', sql.Int, roomId)
+        .query(`SELECT TOP (1) 1 AS is_referenced FROM ${schemaName}.${tableName} WITH (UPDLOCK, HOLDLOCK) WHERE ${columnName} = @roomId;`);
+      if (reference.recordset.length) {
+        hasForeignKeyReferences = true;
+        break;
+      }
+    }
+
+    const references = await transaction.request()
+      .input('roomId', sql.Int, roomId)
+      .query(`
+        SELECT
+          (SELECT COUNT_BIG(*) FROM dbo.booking_rooms WITH (UPDLOCK, HOLDLOCK) WHERE room_id = @roomId) AS booking_count,
+          (SELECT COUNT_BIG(*) FROM dbo.room_problem_reports WITH (UPDLOCK, HOLDLOCK) WHERE room_id = @roomId) AS maintenance_report_count;
+      `);
+    const referenceCounts = references.recordset[0];
+    if (
+      hasForeignKeyReferences
+      || Number(referenceCounts.booking_count) > 0
+      || Number(referenceCounts.maintenance_report_count) > 0
+    ) {
+      await transaction.rollback();
+      return { reason: 'ROOM_REFERENCED' };
+    }
+
+    const result = await transaction.request()
+      .input('roomId', sql.Int, roomId)
+      .query('DELETE FROM dbo.rooms OUTPUT DELETED.id WHERE id = @roomId;');
+
+    if (!result.recordset.length) {
+      await transaction.rollback();
+      return { reason: 'ROOM_NOT_FOUND' };
+    }
+
+    await transaction.commit();
+    return { roomId: result.recordset[0].id };
+  } catch (error) {
+    try {
+      await transaction.rollback();
+    } catch (rollbackError) {
+      console.error('Delete room rollback error:', rollbackError);
+    }
+    throw error;
+  }
+}
+
 module.exports = {
   checkRoomAvailability,
   getAvailableRoomsForType,
@@ -381,4 +471,5 @@ module.exports = {
   getRoomDetails,
   createRoom,
   updateRoom,
+  deleteRoom,
 };

@@ -42,6 +42,9 @@ export const updateRoom = (roomId: number, payload: UpdateRoomPayload, accessTok
     accessToken,
   );
 
+export const deleteRoom = (roomId: number, accessToken: string) =>
+  api.deleteWithAuth<{ success: boolean; message: string }>(`/api/rooms/${roomId}`, accessToken);
+
 export interface CheckAvailabilityParams {
   check_in_date: string;
   check_out_date: string;
@@ -129,8 +132,12 @@ export const getAssignableRooms = (bookingId: string | number, accessToken: stri
 export const assignRoomToBooking = (bookingId: string | number, roomAssignments: { booking_room_id: number; room_id: number }[], accessToken: string) =>
   api.post<{ success: boolean; message: string }>(`/api/bookings/${bookingId}/assign-room`, { room_assignments: roomAssignments }, accessToken);
 
-export const finishRoomCleaning = (roomId: number, accessToken: string, currentStatus: 'AVAILABLE' | 'OCCUPIED' | 'CLEANING' | 'MAINTENANCE' = 'CLEANING', status: 'AVAILABLE' | 'MAINTENANCE' = 'AVAILABLE') =>
-  api.post<{ success: boolean; message: string }>(`/api/rooms/${roomId}/cleaning-complete`, { status, current_status: currentStatus }, accessToken);
+export const finishRoomCleaning = (roomId: number, accessToken: string, currentStatus: RoomStatusRecord['status'] = 'CLEANING', status: 'AVAILABLE' | 'MAINTENANCE' = 'AVAILABLE') =>
+  api.post<{ success: boolean; message: string; room: { room_id: number; status: RoomStatusRecord['status'] } }>(
+    `/api/rooms/${roomId}/cleaning-complete`,
+    { status, current_status: currentStatus },
+    accessToken,
+  );
 
 export interface RoomMaintenanceReport {
   id: number;

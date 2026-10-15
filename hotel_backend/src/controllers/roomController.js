@@ -1,4 +1,4 @@
-const { checkRoomAvailability, createRoom: saveRoom, updateRoom: updateExistingRoom, getAvailableRoomsForType, getRoomList: fetchRoomList, getRoomDetails: fetchRoomDetails } = require('../dao/roomDao');
+const { checkRoomAvailability, createRoom: saveRoom, updateRoom: updateExistingRoom, deleteRoom: deleteExistingRoom, getAvailableRoomsForType, getRoomList: fetchRoomList, getRoomDetails: fetchRoomDetails } = require('../dao/roomDao');
 
 function validateRoomNumber(value) {
   if (value != null && typeof value !== 'string') {
@@ -166,6 +166,36 @@ async function updateRoom(req, res) {
   }
 }
 
+async function deleteRoom(req, res) {
+  const roomId = Number(req.params.roomId);
+  if (!Number.isInteger(roomId) || roomId < 1) {
+    return res.status(400).json({ success: false, message: 'Mã phòng không hợp lệ.' });
+  }
+
+  try {
+    const result = await deleteExistingRoom(roomId);
+    if (result.reason === 'ROOM_NOT_FOUND') {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy phòng cần xóa.' });
+    }
+    if (result.reason === 'ROOM_REFERENCED') {
+      return res.status(409).json({
+        success: false,
+        message: 'Không thể xóa phòng vì phòng đang được booking hoặc báo cáo bảo trì tham chiếu.',
+      });
+    }
+    return res.json({ success: true, message: 'Đã xóa phòng thành công.' });
+  } catch (error) {
+    if (error.number === 547) {
+      return res.status(409).json({
+        success: false,
+        message: 'Không thể xóa phòng vì phòng đang được dữ liệu khác sử dụng.',
+      });
+    }
+    console.error('Delete room error:', error);
+    return res.status(500).json({ success: false, message: 'Không thể xóa phòng.' });
+  }
+}
+
 /**
  * API GET /api/rooms/availability
  * Kiểm tra danh sách loại phòng và tình trạng phòng trống theo ngày
@@ -280,6 +310,7 @@ module.exports = {
   getRoomDetails,
   createRoom,
   updateRoom,
+  deleteRoom,
   checkAvailability,
   getAvailableRooms,
 };

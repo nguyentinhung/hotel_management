@@ -418,6 +418,11 @@ async function finishRoomCleaningHandler(req, res) {
   try {
     const targetStatus = String(req.body?.status || 'AVAILABLE').toUpperCase();
     const currentStatus = String(req.body?.current_status || 'CLEANING').toUpperCase();
+    const isAdminMaintenanceTransition = (currentStatus === 'AVAILABLE' && targetStatus === 'MAINTENANCE')
+      || (currentStatus === 'MAINTENANCE' && targetStatus === 'AVAILABLE');
+    if (isAdminMaintenanceTransition && !hasRole(claims, 'ADMIN')) {
+      return res.status(403).json({ success: false, message: 'Chỉ quản trị viên mới được cập nhật trạng thái bảo trì phòng.' });
+    }
     const validTransition = (currentStatus === 'CLEANING' && ['AVAILABLE', 'MAINTENANCE'].includes(targetStatus))
       || (hasRole(claims, 'ADMIN') && currentStatus === 'AVAILABLE' && targetStatus === 'MAINTENANCE')
       || (hasRole(claims, 'ADMIN') && currentStatus === 'MAINTENANCE' && targetStatus === 'AVAILABLE');
@@ -432,8 +437,12 @@ async function finishRoomCleaningHandler(req, res) {
         ? 'Đã hoàn tất dọn phòng. Phòng sẵn sàng cho thuê.'
         : 'Đã hoàn tất bảo trì. Phòng sẵn sàng cho thuê.';
     return res.json({ success: true, message, room });
-  } catch {
-    return res.status(409).json({ success: false, message: 'Phòng không ở trạng thái đang dọn.' });
+  } catch (error) {
+    if (/not waiting for cleaning completion/i.test(error.message)) {
+      return res.status(409).json({ success: false, message: 'Trạng thái phòng đã thay đổi hoặc không còn phù hợp với thao tác này.' });
+    }
+    console.error('Update room status error:', error);
+    return res.status(500).json({ success: false, message: 'Không thể cập nhật trạng thái phòng.' });
   }
 }
 

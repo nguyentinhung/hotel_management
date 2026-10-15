@@ -5,7 +5,7 @@ import RoomTypesPage from './RoomTypesPage';
 import ServiceListPage from './ServiceListPage';
 import BookingServicePanel from '../components/BookingServicePanel';
 import type { Role } from '../types';
-import { addRoom, assignRoomToBooking, cancelBooking, finishRoomCleaning, getActiveBookings, getAssignableRooms, getBookingHistory, getRoomDetails, getRoomList, getRoomStatuses, getRoomMaintenanceReports, getRoomTypesForRoomForm, reportRoomMaintenance, resolveRoomMaintenanceReport, updateBooking, updateRoom, type RoomDetails, type RoomMaintenanceReport, type RoomStatusRecord, type RoomTypeOption } from '../services/roomService';
+import { addRoom, assignRoomToBooking, cancelBooking, deleteRoom, finishRoomCleaning, getActiveBookings, getAssignableRooms, getBookingHistory, getRoomDetails, getRoomList, getRoomStatuses, getRoomMaintenanceReports, getRoomTypesForRoomForm, reportRoomMaintenance, resolveRoomMaintenanceReport, updateBooking, updateRoom, type RoomDetails, type RoomMaintenanceReport, type RoomStatusRecord, type RoomTypeOption } from '../services/roomService';
 import type { RecentBooking } from '../types';
 import PaymentList from '../components/PaymentList';
 import { logout } from '../services/authService';
@@ -105,7 +105,14 @@ function RoomStatusPanel({ role }: { role: Role }) {
   const [editingRoomErrors, setEditingRoomErrors] = useState<Record<string, string>>({});
   const [editingRoomMessage, setEditingRoomMessage] = useState('');
   const [editingRoomSubmitting, setEditingRoomSubmitting] = useState(false);
+  const [roomPendingDelete, setRoomPendingDelete] = useState<Pick<RoomStatusRecord, 'id' | 'room_number'> | null>(null);
+  const [deletingRoom, setDeletingRoom] = useState(false);
+  const [deleteRoomError, setDeleteRoomError] = useState('');
+  const [roomStatusConfirmation, setRoomStatusConfirmation] = useState<Pick<RoomStatusRecord, 'id' | 'room_number' | 'status'> | null>(null);
+  const [roomStatusChangeError, setRoomStatusChangeError] = useState('');
   const roomsRequestInFlight = useRef(false);
+  const roomStatusRequests = useRef(new Set<number>());
+  const [updatingRoomIds, setUpdatingRoomIds] = useState<Set<number>>(() => new Set());
   const roomDetailRequest = useRef(0);
   const { showToast } = useToast();
   const reload = async () => {
@@ -143,13 +150,49 @@ function RoomStatusPanel({ role }: { role: Role }) {
   };
   useEffect(() => { void reload(); }, []);
   const updateStatus = async (room: RoomStatusRecord, status: 'AVAILABLE' | 'MAINTENANCE' = 'AVAILABLE') => {
+    if (roomStatusRequests.current.has(room.id)) return false;
     const token = localStorage.getItem('accessToken');
-    if (!token) return;
+    if (!token) {
+      showToast('Vui lòng đăng nhập lại để cập nhật trạng thái phòng.', 'error');
+      return false;
+    }
+    roomStatusRequests.current.add(room.id);
+    setUpdatingRoomIds((current) => new Set(current).add(room.id));
     try {
       const result = await finishRoomCleaning(room.id, token, room.status, status);
+      setRooms((current) => current.map((item) => item.id === room.id ? { ...item, status: result.room.status } : item));
+      setRoomDetail((current) => current?.id === room.id ? { ...current, status: result.room.status } : current);
       showToast(result.message, 'success');
-      await reload();
-    } catch (error) { showToast(error instanceof Error ? error.message : 'Không cập nhật được trạng thái phòng.', 'error'); }
+      return true;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Không cập nhật được trạng thái phòng.', 'error');
+      return false;
+    }
+    finally {
+      roomStatusRequests.current.delete(room.id);
+      setUpdatingRoomIds((current) => {
+        const next = new Set(current);
+        next.delete(room.id);
+        return next;
+      });
+    }
+  };
+  const requestRoomStatusChange = (room: RoomStatusRecord) => {
+    if (role !== 'ADMIN' || !['AVAILABLE', 'MAINTENANCE'].includes(room.status)) return;
+    setRoomStatusChangeError('');
+    setRoomStatusConfirmation({ id: room.id, room_number: room.room_number, status: room.status });
+  };
+  const confirmRoomStatusChange = async () => {
+    if (!roomStatusConfirmation || updatingRoomIds.has(roomStatusConfirmation.id)) return;
+    const pending = roomStatusConfirmation;
+    const currentRoom = rooms.find((room) => room.id === pending.id);
+    if (!currentRoom || currentRoom.status !== pending.status) {
+      setRoomStatusChangeError('Trạng thái phòng đã thay đổi. Hãy đóng hộp thoại và kiểm tra lại danh sách.');
+      return;
+    }
+    const targetStatus = pending.status === 'AVAILABLE' ? 'MAINTENANCE' : 'AVAILABLE';
+    setRoomStatusChangeError('');
+    if (await updateStatus(currentRoom, targetStatus)) setRoomStatusConfirmation(null);
   };
   const reportMaintenance = async (room: RoomStatusRecord) => {
     const token = localStorage.getItem('accessToken');
@@ -193,6 +236,50 @@ function RoomStatusPanel({ role }: { role: Role }) {
     setRoomDetail(null);
     setRoomDetailError('');
     setRoomDetailLoading(false);
+  };
+  const requestRoomDeletion = () => {
+    if (!roomDetail || role !== 'ADMIN') return;
+    setRoomPendingDelete({ id: roomDetail.id, room_number: roomDetail.room_number });
+    setDeleteRoomError('');
+  };
+  const cancelRoomDeletion = () => {
+    if (deletingRoom) return;
+    setRoomPendingDelete(null);
+    setDeleteRoomError('');
+  };
+  const confirmRoomDeletion = async () => {
+    if (!roomPendingDelete || deletingRoom) return;
+    const roomToDelete = roomPendingDelete;
+    const token = localStorage.getItem('accessToken');
+    if (!token) {
+      setDeleteRoomError('Vui lòng đăng nhập lại để xóa phòng.');
+      return;
+    }
+
+    setDeletingRoom(true);
+    setDeleteRoomError('');
+    try {
+      const result = await deleteRoom(roomToDelete.id, token);
+      setRoomPendingDelete(null);
+      closeRoomDetails();
+      setRooms((current) => current.filter((room) => room.id !== roomToDelete.id));
+      showToast(result.message, 'success');
+      await reload();
+      setRooms((current) => current.filter((room) => room.id !== roomToDelete.id));
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        setRoomPendingDelete(null);
+        closeRoomDetails();
+        setRooms((current) => current.filter((room) => room.id !== roomToDelete.id));
+        await reload();
+        setRooms((current) => current.filter((room) => room.id !== roomToDelete.id));
+      }
+      const message = error instanceof Error ? error.message : 'Không thể xóa phòng.';
+      setDeleteRoomError(message);
+      showToast(message, 'error');
+    } finally {
+      setDeletingRoom(false);
+    }
   };
   const loadRoomDetails = async (roomId: number) => {
     const requestId = ++roomDetailRequest.current;
@@ -277,6 +364,14 @@ function RoomStatusPanel({ role }: { role: Role }) {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [addingRoom, editingRoomId, roomSubmitting, editingRoomSubmitting]);
+  useEffect(() => {
+    if (!roomPendingDelete || deletingRoom) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') cancelRoomDeletion();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [roomPendingDelete, deletingRoom]);
   const getRoomNumberError = (value: string) => {
     const roomNumber = value.trim();
     if (!roomNumber) return 'Vui lòng nhập số phòng.';
@@ -490,23 +585,89 @@ function RoomStatusPanel({ role }: { role: Role }) {
       <div className="room-status-floor-heading">
         <div><h3>{floorKey === 'unknown' ? 'Chưa xác định tầng' : `Tầng ${floorKey}`}</h3><span>{floorRooms.length} phòng</span></div>
       </div>
-      <div className="room-status-grid">{floorRooms.map((room) => <article className="room-status-card" key={room.id}>
+      {role === 'HOUSEKEEPER'
+        ? <div className="room-status-grid">{floorRooms.map((room) => <article className="room-status-card" key={room.id}>
         <div><strong>Phòng {room.room_number}</strong><span>{room.room_type_name} · Tầng {room.floor ?? '—'}</span></div>
         <div className="room-status-card-badges">
           <span className={`room-status-badge room-status-${room.status.toLowerCase()}`}>{names[room.status]}</span>
           {room.has_open_maintenance_report && <span className="room-status-badge room-status-maintenance">Đã báo bảo trì</span>}
         </div>
-        {role !== 'HOUSEKEEPER' && <div className="room-card-actions">
-          <button className="btn btn-outline btn-sm room-details-open" type="button" onClick={() => void loadRoomDetails(room.id)}>Xem chi tiết</button>
-          {role === 'ADMIN' && <button className="btn btn-primary btn-sm" type="button" onClick={() => openEditRoomForm(room)}>Cập nhật</button>}
-        </div>}
-        {role === 'HOUSEKEEPER' && room.status === 'CLEANING' && <>
+        {room.status === 'CLEANING' && <>
           <button className="btn btn-primary btn-sm" onClick={() => void updateStatus(room)}>Đã dọn xong</button>
           <button className="btn btn-outline btn-sm" disabled={room.has_open_maintenance_report} onClick={() => void reportMaintenance(room)}>{room.has_open_maintenance_report ? 'Đã báo bảo trì' : 'Báo cần bảo trì'}</button>
         </>}
-        {role === 'ADMIN' && room.status === 'AVAILABLE' && <button className="btn btn-outline btn-sm" onClick={() => void updateStatus(room, 'MAINTENANCE')}>Đánh dấu bảo trì</button>}
-        {role === 'ADMIN' && room.status === 'MAINTENANCE' && <button className="btn btn-primary btn-sm" onClick={() => void updateStatus(room, 'AVAILABLE')}>Đã bảo trì xong</button>}
       </article>)}</div>
+        : <div className="room-types-table-wrap room-list-table-wrap">
+          <table className="room-types-table room-list-table">
+            <thead>
+              <tr><th>Số phòng</th><th>Loại phòng</th><th>Tầng</th><th>Trạng thái</th><th>Actions</th></tr>
+            </thead>
+            <tbody>{floorRooms.map((room) => <tr key={room.id}>
+              <td><strong>{room.room_number}</strong></td>
+              <td>{room.room_type_name}</td>
+              <td>{room.floor ?? '—'}</td>
+              <td>
+                <div className="room-list-status-cell">
+                  <span className={`room-status-badge room-status-${room.status.toLowerCase()}`}>{names[room.status]}</span>
+                  {room.has_open_maintenance_report && <span className="room-status-badge room-status-maintenance">Đã báo bảo trì</span>}
+                </div>
+              </td>
+              <td>
+                <div className="room-type-action-buttons room-list-actions">
+                  {role === 'ADMIN' && <button
+                    className="room-type-delete-button"
+                    type="button"
+                    aria-label={`Xóa phòng ${room.room_number}`}
+                    title="Xóa phòng"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setDeleteRoomError('');
+                      setRoomPendingDelete({ id: room.id, room_number: room.room_number });
+                    }}
+                  >×</button>}
+                  {role === 'ADMIN' && <button
+                    className="room-type-edit-button"
+                    type="button"
+                    aria-label={`Cập nhật phòng ${room.room_number}`}
+                    title="Cập nhật phòng"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openEditRoomForm(room);
+                    }}
+                  >✎</button>}
+                  <button
+                    className="room-type-details-button"
+                    type="button"
+                    aria-label={`Xem chi tiết phòng ${room.room_number}`}
+                    title="Xem chi tiết"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void loadRoomDetails(room.id);
+                    }}
+                  >i</button>
+                  {role === 'ADMIN' && (room.status === 'AVAILABLE' || room.status === 'MAINTENANCE') && <button
+                    className={`room-type-edit-button room-list-maintenance-button${updatingRoomIds.has(room.id) ? ' is-updating' : ''}`}
+                    type="button"
+                    aria-label={room.status === 'AVAILABLE' ? 'Đánh dấu bảo trì' : 'Đánh dấu bảo trì hoàn tất'}
+                    aria-busy={updatingRoomIds.has(room.id)}
+                    title={room.status === 'AVAILABLE' ? 'Đánh dấu bảo trì' : 'Đánh dấu bảo trì hoàn tất'}
+                    disabled={updatingRoomIds.has(room.id)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      requestRoomStatusChange(room);
+                    }}
+                  >
+                    <svg aria-hidden="true" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      {room.status === 'AVAILABLE'
+                        ? <path d="M14.7 6.3a5 5 0 0 0-6.8 6.8L3 18l3 3 4.9-4.9a5 5 0 0 0 6.8-6.8l-3.2 3.2-3-3 3.2-3.2Z" />
+                        : <path d="m5 12 4 4L19 6" />}
+                    </svg>
+                  </button>}
+                </div>
+              </td>
+            </tr>)}</tbody>
+          </table>
+        </div>}
     </section>)}</div>}
     {roomsLoading && rooms.length > 0 && <p className="room-list-state" role="status">Đang cập nhật danh sách phòng...</p>}
     {!roomsLoading && roomLoadError && rooms.length > 0 && <div className="room-list-state room-list-error" role="alert">
@@ -695,9 +856,83 @@ function RoomStatusPanel({ role }: { role: Role }) {
             {roomDetail.room_type_description && <div className="room-details-wide"><dt>Mô tả loại phòng</dt><dd>{roomDetail.room_type_description}</dd></div>}
           </dl>
           <footer className="room-details-footer">
+            {role === 'ADMIN' && <button className="btn room-type-confirm-delete" type="button" onClick={requestRoomDeletion}>Xóa phòng</button>}
             <button className="btn btn-outline" type="button" onClick={closeRoomDetails}>Đóng</button>
           </footer>
         </div>}
+      </section>
+    </div>}
+    {role === 'ADMIN' && roomPendingDelete && <div className="room-delete-backdrop" role="presentation">
+      <section className="room-delete-dialog" role="alertdialog" aria-modal="true" aria-labelledby="room-delete-title" aria-describedby="room-delete-description">
+        <header className="room-form-modal-header">
+          <div>
+            <h2 id="room-delete-title">Xóa phòng?</h2>
+            <p id="room-delete-description">Bạn có chắc chắn muốn xóa phòng {roomPendingDelete.room_number} không? Thao tác này có thể không hoàn tác được.</p>
+          </div>
+          <button className="room-details-close" type="button" onClick={cancelRoomDeletion} disabled={deletingRoom} aria-label="Đóng xác nhận xóa">×</button>
+        </header>
+        {deleteRoomError && <p className="add-room-form-error" role="alert">{deleteRoomError}</p>}
+        <footer className="room-delete-actions">
+          <button className="btn btn-outline" type="button" onClick={cancelRoomDeletion} disabled={deletingRoom}>Cancel</button>
+          <button className="btn room-type-confirm-delete" type="button" onClick={() => void confirmRoomDeletion()} disabled={deletingRoom}>
+            {deletingRoom ? 'Đang xóa...' : 'Delete'}
+          </button>
+        </footer>
+      </section>
+    </div>}
+    {role === 'ADMIN' && roomStatusConfirmation && <div
+      className="room-delete-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !updatingRoomIds.has(roomStatusConfirmation.id)) {
+          setRoomStatusConfirmation(null);
+          setRoomStatusChangeError('');
+        }
+      }}
+    >
+      <section className="room-delete-dialog" role="alertdialog" aria-modal="true" aria-labelledby="room-status-confirm-title" aria-describedby="room-status-confirm-description">
+        <header className="room-form-modal-header">
+          <div>
+            <h2 id="room-status-confirm-title">
+              {roomStatusConfirmation.status === 'AVAILABLE' ? 'Đưa phòng vào bảo trì?' : 'Hoàn tất bảo trì phòng?'}
+            </h2>
+            <p id="room-status-confirm-description">
+              {roomStatusConfirmation.status === 'AVAILABLE'
+                ? `Bạn có chắc chắn muốn chuyển phòng ${roomStatusConfirmation.room_number} sang trạng thái bảo trì không?`
+                : `Xác nhận phòng ${roomStatusConfirmation.room_number} đã bảo trì xong và chuyển về trạng thái sẵn sàng?`}
+            </p>
+          </div>
+          <button
+            className="room-details-close"
+            type="button"
+            onClick={() => {
+              setRoomStatusConfirmation(null);
+              setRoomStatusChangeError('');
+            }}
+            disabled={updatingRoomIds.has(roomStatusConfirmation.id)}
+            aria-label="Đóng xác nhận cập nhật trạng thái"
+          >×</button>
+        </header>
+        {roomStatusChangeError && <p className="add-room-form-error" role="alert">{roomStatusChangeError}</p>}
+        <footer className="room-delete-actions">
+          <button
+            className="btn btn-outline"
+            type="button"
+            onClick={() => {
+              setRoomStatusConfirmation(null);
+              setRoomStatusChangeError('');
+            }}
+            disabled={updatingRoomIds.has(roomStatusConfirmation.id)}
+          >Hủy</button>
+          <button
+            className="btn btn-primary"
+            type="button"
+            onClick={() => void confirmRoomStatusChange()}
+            disabled={updatingRoomIds.has(roomStatusConfirmation.id)}
+          >
+            {updatingRoomIds.has(roomStatusConfirmation.id) ? 'Đang cập nhật...' : 'Xác nhận'}
+          </button>
+        </footer>
       </section>
     </div>}
     {role === 'ADMIN' && <section className="room-status-section">
