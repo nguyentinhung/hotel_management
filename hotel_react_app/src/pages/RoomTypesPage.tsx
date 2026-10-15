@@ -1,4 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import api from '../services/api';
 import { useToast } from '../components/ToastProvider';
 
@@ -46,6 +47,12 @@ const formatPrice = (price: number) => new Intl.NumberFormat('vi-VN', {
 
 export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean }) {
   const { showToast } = useToast();
+  const canCreateReview = (() => {
+    try {
+      const user = JSON.parse(localStorage.getItem('user') || '{}') as { role?: string; role_code?: string; role_name?: string; role_id?: number };
+      return Boolean(localStorage.getItem('accessToken')) && ['CUSTOMER', '1'].includes(String(user.role_code || user.role || user.role_id || '').toUpperCase());
+    } catch { return false; }
+  })();
   const [roomTypes, setRoomTypes] = useState<RoomType[]>([]);
   const [amenities, setAmenities] = useState<Amenity[]>([]);
   const [isAmenitiesLoading, setIsAmenitiesLoading] = useState(false);
@@ -458,6 +465,7 @@ export default function RoomTypesPage({ readOnly = false }: { readOnly?: boolean
                       ))}
                     </div>
                   ) : <p>Chưa có đánh giá cho loại phòng này.</p>}
+                  {canCreateReview && <Link className="btn btn-primary btn-sm" to="/reviews/new">Viết đánh giá</Link>}
                 </div>
               </div>
             ) : null}

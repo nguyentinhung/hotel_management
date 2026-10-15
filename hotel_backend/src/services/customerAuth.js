@@ -54,4 +54,9 @@ const requirePaymentActor = requireRoles(
   'Bạn không có quyền kiểm tra trạng thái giao dịch này.',
 );
 
-module.exports = { requireCustomer, requirePaymentStaff, requirePaymentActor };
+const requireReviewStaff = requireRoles(
+  ['RECEPTIONIST', 'ADMIN'],
+  'Review Management is restricted to receptionists and administrators.',
+);
+
+module.exports = { requireCustomer, requirePaymentStaff, requirePaymentActor, requireReviewStaff };

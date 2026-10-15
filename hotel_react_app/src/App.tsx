@@ -14,6 +14,8 @@ import PromotionListPage from './pages/PromotionListPage';
 import PromotionCreatePage from './pages/PromotionCreatePage';
 import PromotionDetailsPage from './pages/PromotionDetailsPage';
 import PromotionEditPage from './pages/PromotionEditPage';
+import ReviewCreatePage from './pages/ReviewCreatePage';
+import ReviewUpdatePage from './pages/ReviewUpdatePage';
 
 export default function App() {
   return (
@@ -31,6 +33,8 @@ export default function App() {
         <Route path="/promotions/new" element={<PromotionCreatePage />} />
         <Route path="/promotions/:id" element={<PromotionDetailsPage />} />
         <Route path="/promotions/:id/edit" element={<PromotionEditPage />} />
+        <Route path="/reviews/new" element={<ReviewCreatePage />} />
+        <Route path="/reviews/:reviewId/edit" element={<ReviewUpdatePage />} />
         <Route path="/admin" element={<RoleDashboardPage role="ADMIN" />} />
         <Route path="/reception" element={<RoleDashboardPage role="RECEPTIONIST" />} />
         <Route path="/housekeeping" element={<RoleDashboardPage role="HOUSEKEEPER" />} />

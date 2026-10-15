@@ -19,11 +19,12 @@ const { register, login, logout, verifyEmail, forgotPassword, resetPassword } = 
 const { checkAvailability, getAvailableRooms } = require('./controllers/roomController');
 const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, updateBookingHandler, cancelBookingHandler, getActiveBookingsHandler, checkOutBookingHandler, finishRoomCleaningHandler, reportRoomMaintenanceHandler, getRoomMaintenanceReportsHandler, resolveRoomMaintenanceReportHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
 const serviceController = require('./controllers/serviceController');
-const promotionController = require('./controllers/promotionController');
-const { requireCustomer, requirePaymentStaff, requirePaymentActor } = require('./services/customerAuth');
+const { requireCustomer, requirePaymentStaff, requirePaymentActor, requireReviewStaff } = require('./services/customerAuth');
+const reviewController = require('./controllers/reviewController');
 const { createPayment, getPaymentList, getCustomerPaymentList, getPaymentStatusRequest, confirmPaymentRequest, simulateDepositPaymentRequest } = require('./controllers/paymentController');
 const { handleVnpayReturn, handleVnpayIpn } = require('./controllers/vnpayController');
 const bookingServiceController = require('./controllers/bookingServiceController');
+const promotionController = require('./controllers/promotionController');
 const app = express();
 const PORT = 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
@@ -382,6 +383,11 @@ app.delete('/api/room-types/:roomTypeId', async (req, res) => {
 app.get('/api/promotions/active', getPromotions);
 app.get('/api/promotions', promotionController.getActivePromotions);
 app.get('/api/promotions/:id', promotionController.getPromotionById);
+app.get('/api/admin/promotions', promotionController.requireAdmin, promotionController.getPromotions);
+app.get('/api/admin/promotions/:id', promotionController.requireAdmin, promotionController.getPromotionById);
+app.post('/api/admin/promotions', promotionController.requireAdmin, promotionController.createPromotion);
+app.put('/api/admin/promotions/:id', promotionController.requireAdmin, promotionController.updatePromotion);
+app.delete('/api/admin/promotions/:id', promotionController.requireAdmin, promotionController.deletePromotion);
 // Lấy danh sách dịch vụ khách sạn
 app.get('/api/services', getServices);
 app.get('/api/services/:id', getActiveServiceById);
@@ -390,12 +396,12 @@ app.get('/api/admin/services/:id', serviceController.requireAdmin, serviceContro
 app.post('/api/admin/services', serviceController.requireAdmin, serviceController.createService);
 app.put('/api/admin/services/:id', serviceController.requireAdmin, serviceController.updateService);
 app.delete('/api/admin/services/:id', serviceController.requireAdmin, serviceController.deleteService);
-app.get('/api/admin/promotions', promotionController.requireAdmin, promotionController.getPromotions);
-app.get('/api/admin/promotions/:id', promotionController.requireAdmin, promotionController.getPromotionById);
-app.post('/api/admin/promotions', promotionController.requireAdmin, promotionController.createPromotion);
-app.put('/api/admin/promotions/:id', promotionController.requireAdmin, promotionController.updatePromotion);
-app.delete('/api/admin/promotions/:id', promotionController.requireAdmin, promotionController.deletePromotion);
 // Lấy đánh giá từ khách hàng
+app.get('/api/reviews/dashboard', requireReviewStaff, reviewController.getDashboardReviews);
+app.get('/api/reviews/my-bookings', requireCustomer, reviewController.getCustomerBookings);
+app.get('/api/reviews/mine/:reviewId', requireCustomer, reviewController.getMyReview);
+app.post('/api/reviews', requireCustomer, reviewController.createReview);
+app.put('/api/reviews/mine/:reviewId', requireCustomer, reviewController.updateReview);
 app.get('/api/reviews', getReviews);
 
 // ============================================================================

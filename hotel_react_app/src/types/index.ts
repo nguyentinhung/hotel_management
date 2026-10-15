@@ -38,12 +38,26 @@ export interface ServiceItem {
 
 export interface Review {
   id: number;
-  room_type_id: number;
+  booking_id?: number;
+  customer_id?: number;
+  room_type_id: number | null;
   customer_name: string;
   rating: number;
   comment: string;
-  is_hidden: boolean;
-  room_type_name?: string;
+  is_hidden?: boolean;
+  room_type_name?: string | null;
+}
+
+export interface ReviewBooking {
+  booking_id: number;
+  booking_code: string;
+  status: string;
+  check_in_date: string;
+  check_out_date: string;
+  room_type_count: number;
+  room_type_id: number | null;
+  room_type_name: string | null;
+  review: { id: number; rating: number; comment: string } | null;
 }
 
 export interface AppUser {
@@ -160,6 +174,7 @@ export interface RecentBooking {
   special_request?: string;
   room_type_name?: string;
   room_number?: string;
+  room_selections?: { room_type_id: number; room_type_name: string; quantity: number; price_per_night: number; image_url?: string | null }[];
   room_status?: 'AVAILABLE' | 'OCCUPIED' | 'CLEANING' | 'MAINTENANCE';
   room_type_id?: number;
   assigned_room_id?: number | null;

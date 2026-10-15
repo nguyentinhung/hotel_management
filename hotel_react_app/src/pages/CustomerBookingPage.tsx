@@ -291,14 +291,14 @@ export default function CustomerBookingPage() {
               </div>
             ) : <p>Hiện chưa có dịch vụ nào đang hoạt động.</p>}
           </div>
-             <div>
-               <label htmlFor="">Promotion</label>
-                <input type="text"
-                  step="Áp cái mã giảm giá dô đây"
-                
-                />
+                <div>
+                    <h3>Áp mã khuyến mãi</h3>
+                      <input type="text"
+                       step="không bắt buoc"
+                      />
 
-             </div>
+
+                </div>
           <div className="booking-room-summary">
             <h3>Thông tin khách đặt</h3>
             <p>{localUser.full_name || 'Khách hàng'} · {localUser.email || ''} · {localUser.phone || 'Chưa có số điện thoại trong tài khoản'}</p>

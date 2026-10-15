@@ -34,6 +34,10 @@ async function checkAvailability(req, res) {
     const checkOutDate = req.query.check_out_date || formatDate(tomorrow);
     const adults = Math.max(1, parseInt(req.query.adults, 10) || 1);
     const children = Math.max(0, parseInt(req.query.children, 10) || 0);
+    const excludeBookingId = req.query.exclude_booking_id == null ? null : Number(req.query.exclude_booking_id);
+    if (excludeBookingId !== null && (!Number.isSafeInteger(excludeBookingId) || excludeBookingId < 1)) {
+      return res.status(400).json({ success: false, message: 'Mã booking cần loại trừ không hợp lệ.' });
+    }
 
     // Kiểm tra hợp lệ ngày
     const inDate = new Date(checkInDate);
@@ -59,6 +63,7 @@ async function checkAvailability(req, res) {
       checkOutDate,
       adults,
       children,
+      excludeBookingId,
     });
 
     return res.json({
