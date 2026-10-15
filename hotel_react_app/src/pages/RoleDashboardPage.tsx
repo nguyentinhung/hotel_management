@@ -36,6 +36,7 @@ const dashboardConfig: Record<
       { label: 'Loại phòng', description: 'Quản lý loại phòng, giá và tiện nghi.' },
       { label: 'Dịch vụ', description: 'Quản lý dịch vụ khách sạn.' },
       { label: 'Thanh toán', description: 'Xem danh sách giao dịch thanh toán.' },
+      { label: 'Hồ sơ cá nhân', description: 'Xem và cập nhật thông tin cá nhân.' },
       { label: 'Đổi mật khẩu', description: 'Thay đổi mật khẩu tài khoản.' },
     ],
   },
@@ -50,6 +51,7 @@ const dashboardConfig: Record<
       { label: 'Thanh toán', description: 'Theo dõi trạng thái thanh toán và xác nhận giao dịch tại quầy.' },
       { label: 'Loại phòng', description: 'Tra cứu giá, sức chứa và tiện nghi của từng loại phòng.' },
       { label: 'Dịch vụ', description: 'Xem danh sách và chi tiết dịch vụ khách sạn.' },
+      { label: 'Hồ sơ cá nhân', description: 'Xem và cập nhật thông tin cá nhân.' },
       { label: 'Đổi mật khẩu', description: 'Thay đổi mật khẩu tài khoản.' },
     ],
   },
@@ -59,6 +61,7 @@ const dashboardConfig: Record<
     accent: 'Housekeeper',
     nav: [
       { label: 'Phòng cần dọn', description: 'Danh sách phòng vừa checkout hoặc cần làm sạch.' },
+      { label: 'Hồ sơ cá nhân', description: 'Xem và cập nhật thông tin cá nhân.' },
       { label: 'Đổi mật khẩu', description: 'Thay đổi mật khẩu tài khoản.' },
     ],
   },
@@ -494,7 +497,7 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
               Khi tài khoản Lễ tân chọn tab "Đặt phòng tại quầy", "Đặt phòng" hoặc "Tổng quan",
               hệ thống sẽ hiển thị giao diện tra cứu phòng trống và đặt phòng trực tiếp.
               ========================================================================= */}
-          {currentRole === 'CUSTOMER' &&
+          {(currentRole === 'CUSTOMER' || currentRole === 'ADMIN' || currentRole === 'RECEPTIONIST' || currentRole === 'HOUSEKEEPER') &&
             activeItem.label === 'Hồ sơ cá nhân' ? (
             <div className="module-content">
               <ProfilePage />

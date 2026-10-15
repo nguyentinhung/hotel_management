@@ -20,7 +20,7 @@ const { register, login, logout, verifyEmail, forgotPassword, resetPassword, cha
 const { checkAvailability, getAvailableRooms } = require('./controllers/roomController');
 const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, updateBookingHandler, cancelBookingHandler, getActiveBookingsHandler, checkOutBookingHandler, finishRoomCleaningHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
 const serviceController = require('./controllers/serviceController');
-const { requireCustomer, requireChangePassword, requirePaymentStaff, requirePaymentActor } = require('./middleware/customerAuth');
+const { requireCustomer, requireChangePassword, requirePaymentStaff, requirePaymentActor, requireViewProfile } = require('./middleware/customerAuth');
 const { createPayment, getPaymentList, getCustomerPaymentList, getPaymentStatusRequest, confirmPaymentRequest } = require('./controllers/paymentController');
 const { handleVnpayReturn, handleVnpayIpn } = require('./controllers/vnpayController');
 const bookingServiceController = require('./controllers/bookingServiceController');
@@ -73,7 +73,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // --- Profile APIs ---
-app.put('/api/profile', requireCustomer, updateCustomerProfile);
+app.put('/api/profile', requireViewProfile, updateCustomerProfile);
 // --- Authentication APIs ---
 // Đăng ký tài khoản mới cho khách hàng
 app.post('/api/auth/register', register);
