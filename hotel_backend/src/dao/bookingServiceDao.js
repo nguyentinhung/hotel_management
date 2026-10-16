@@ -87,7 +87,10 @@ async function addServiceToCheckedInBooking({ bookingId, bookingRoomId, serviceI
     const bookingResult = await transaction.request().input('bookingId', sql.BigInt, bookingId)
       .input('serviceAmount', sql.Decimal(18, 2), serviceAmount)
       .query(`
-        UPDATE bookings SET total_amount = total_amount + @serviceAmount WHERE id = @bookingId;
+        UPDATE bookings
+        SET total_amount = total_amount + @serviceAmount,
+            original_total_amount = COALESCE(original_total_amount, total_amount) + @serviceAmount
+        WHERE id = @bookingId;
         SELECT total_amount FROM bookings WHERE id = @bookingId;
       `);
     await transaction.commit();

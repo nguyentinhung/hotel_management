@@ -1,4 +1,17 @@
 import api from './api';
+
+export interface PromotionValidationResult {
+  promotion_id: number;
+  promotion_code: string;
+  discount_type: 'PERCENT' | 'FIXED_AMOUNT';
+  discount_value: number;
+  discount_amount: number;
+  original_total: number;
+  total_amount: number;
+}
+
+export const validateBookingPromotion = (code: string, subtotal: number) =>
+  api.post<PromotionValidationResult>('/api/promotions/validate', { code, subtotal });
 import type {
   CustomerBookingPayload,
   CustomerBookingResponse,

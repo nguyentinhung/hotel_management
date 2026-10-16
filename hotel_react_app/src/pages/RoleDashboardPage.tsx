@@ -386,7 +386,17 @@ function ReceptionBookingHistory({ customerMode = false }: { customerMode?: bool
     </div>
     {customerMode && !message && <div className="customer-booking-cards">{filtered.map((booking) => {
       const nights = Math.max(1, Math.ceil((new Date(String(booking.check_out_date).slice(0, 10)).getTime() - new Date(String(booking.check_in_date).slice(0, 10)).getTime()) / 86400000));
-      const remaining = Math.max(0, Number(booking.balance_due ?? (Number(booking.total_amount || 0) - Number(booking.deposit_amount || 0) - Number(booking.final_paid_amount || 0))));
+      const netTotal = Number(booking.total_amount ?? 0);
+      const paidAmount = Number(booking.deposit_amount ?? 0) + Number(booking.final_paid_amount ?? 0);
+      const remaining = Math.max(0, netTotal - paidAmount);
+      const originalTotal = Number(booking.original_total_amount ?? booking.total_amount ?? 0);
+      const discountAmount = Number(booking.discount_amount ?? 0);
+      const hasAppliedPromotion = Boolean(booking.promotion_code)
+        && discountAmount > 0
+        && Math.round((originalTotal - discountAmount) * 100) === Math.round(netTotal * 100);
+      const promotionDiscountLabel = booking.promotion_discount_type === 'PERCENT'
+        ? `giảm ${Number(booking.promotion_discount_value || 0)}%`
+        : `giảm ${formatMoney(Number(booking.promotion_discount_value || 0))}`;
       return <article className="customer-booking-card" key={booking.id}>
         {getBookingRoomImage(booking) ? <img src={getBookingRoomImage(booking) || ''} alt={`Phòng ${booking.room_type_name || ''}`} /> : <div className="customer-booking-image-placeholder">Chưa có ảnh</div>}
         <div className="customer-booking-primary">
@@ -396,7 +406,16 @@ function ReceptionBookingHistory({ customerMode = false }: { customerMode?: bool
           <span className="customer-booking-room">▣ Số phòng: {booking.room_number || 'Chưa gán'}</span>
         </div>
         <div className="customer-booking-status"><span className={`status-badge ${booking.status === 'CONFIRMED' ? 'status-confirmed' : booking.status === 'CHECKED_IN' ? 'status-checked-in' : booking.status === 'CHECKED_OUT' ? 'status-checked-out' : booking.status === 'CANCELLED' ? 'status-cancelled' : 'status-pending'}`}>{getBookingStatusLabel(booking.status)}</span></div>
-        <div className="customer-booking-payment"><span>Tổng tiền</span><strong>{formatMoney(Number(booking.total_amount || 0))}</strong>{booking.status === 'CANCELLED' ? <small>Booking đã hủy</small> : <><small>Đã thanh toán: {formatMoney(Number(booking.deposit_amount || 0) + Number(booking.final_paid_amount || 0))}</small><small>{remaining > 0 ? `Còn lại: ${formatMoney(remaining)}` : 'Thanh toán đầy đủ'}</small></>}</div>
+        <div className="customer-booking-payment">
+          <small className={hasAppliedPromotion ? 'customer-booking-promotion-applied' : 'customer-booking-promotion-none'}>
+            Đã áp dụng mã giảm giá: {hasAppliedPromotion
+              ? <strong>{booking.promotion_code} · {promotionDiscountLabel} · Đã áp dụng</strong>
+              : <strong>Không áp dụng</strong>}
+          </small>
+          {hasAppliedPromotion && <><small>Mã giảm giá: <strong>{booking.promotion_code}</strong></small><small>Mức giảm: {booking.promotion_discount_type === 'PERCENT' ? `${booking.promotion_discount_value}%` : `Cố định ${formatMoney(Number(booking.promotion_discount_value || 0))}`}</small><small>Tổng trước giảm: {formatMoney(Number(booking.original_total_amount ?? booking.total_amount))}</small><small>Được giảm: {formatMoney(Number(booking.discount_amount || 0))}</small></>}
+          <span>Tổng sau giảm</span><strong>{formatMoney(netTotal)}</strong>
+          {booking.status === 'CANCELLED' ? <small>Booking đã hủy</small> : <><small>Đã thanh toán: {formatMoney(paidAmount)}</small><small>{remaining > 0 ? `Còn lại: ${formatMoney(remaining)}` : 'Thanh toán đầy đủ'}</small></>}
+        </div>
         <button type="button" className="btn btn-outline btn-sm customer-booking-details" onClick={() => openBooking(booking)}>Chi tiết</button>
       </article>;
     })}{filtered.length === 0 && <p className="room-empty-state">Không tìm thấy booking phù hợp.</p>}</div>}
@@ -429,10 +448,10 @@ function ReceptionBookingHistory({ customerMode = false }: { customerMode?: bool
           />
           <div className="booking-detail-actions booking-edit-wide"><button className="btn btn-primary" type="submit" disabled={saving || checkingRoomAvailability || !!roomAvailabilityError || draft.adults > selectedAdultsCapacity || draft.children > selectedChildrenCapacity || draft.room_selections.reduce((sum, selection) => sum + selection.quantity, 0) < originalRoomCount}>{saving ? 'Đang lưu...' : 'Lưu thay đổi'}</button><button className="btn btn-outline" type="button" onClick={() => setEditing(false)} disabled={saving}>Quay lại</button></div>
         </form> : <>
-          <dl className="booking-detail-grid"><div><dt>Khách hàng</dt><dd>{selectedBooking.guest_full_name}</dd></div><div><dt>Điện thoại</dt><dd>{selectedBooking.guest_phone}</dd></div><div><dt>Email</dt><dd>{selectedBooking.guest_email || '—'}</dd></div><div><dt>Loại phòng / phòng</dt><dd>{selectedBooking.room_type_name || '—'}{selectedBooking.room_number ? ` · P.${selectedBooking.room_number}` : ' · Chưa gán'}</dd></div><div><dt>Nhận phòng</dt><dd>{String(selectedBooking.check_in_date).slice(0, 10)}</dd></div><div><dt>Trả phòng</dt><dd>{String(selectedBooking.check_out_date).slice(0, 10)}</dd></div><div><dt>Số khách</dt><dd>{selectedBooking.adults} người lớn, {selectedBooking.children} trẻ em</dd></div><div><dt>Trạng thái</dt><dd>{selectedBooking.status}</dd></div><div><dt>Tổng tiền</dt><dd>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(selectedBooking.total_amount)}</dd></div><div><dt>Đã cọc</dt><dd>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(selectedBooking.deposit_amount)}</dd></div><div className="booking-detail-wide"><dt>Yêu cầu đặc biệt</dt><dd>{selectedBooking.special_request || 'Không có'}</dd></div></dl>
+          <dl className="booking-detail-grid"><div><dt>Khách hàng</dt><dd>{selectedBooking.guest_full_name}</dd></div><div><dt>Điện thoại</dt><dd>{selectedBooking.guest_phone}</dd></div><div><dt>Email</dt><dd>{selectedBooking.guest_email || '—'}</dd></div><div><dt>Loại phòng / phòng</dt><dd>{selectedBooking.room_type_name || '—'}{selectedBooking.room_number ? ` · P.${selectedBooking.room_number}` : ' · Chưa gán'}</dd></div><div><dt>Nhận phòng</dt><dd>{String(selectedBooking.check_in_date).slice(0, 10)}</dd></div><div><dt>Trả phòng</dt><dd>{String(selectedBooking.check_out_date).slice(0, 10)}</dd></div><div><dt>Số khách</dt><dd>{selectedBooking.adults} người lớn, {selectedBooking.children} trẻ em</dd></div><div><dt>Trạng thái</dt><dd>{selectedBooking.status}</dd></div>{selectedBooking.promotion_code && <><div><dt>Mã giảm giá</dt><dd>{selectedBooking.promotion_code}</dd></div><div><dt>Mức giảm</dt><dd>{selectedBooking.promotion_discount_type === 'PERCENT' ? `${selectedBooking.promotion_discount_value}%` : `Cố định ${formatMoney(Number(selectedBooking.promotion_discount_value || 0))}`}</dd></div><div><dt>Tổng trước giảm</dt><dd>{formatMoney(Number(selectedBooking.original_total_amount ?? selectedBooking.total_amount))}</dd></div><div><dt>Số tiền giảm</dt><dd>{formatMoney(Number(selectedBooking.discount_amount || 0))}</dd></div></>}<div><dt>Tổng tiền sau giảm</dt><dd>{formatMoney(selectedBooking.total_amount)}</dd></div><div><dt>Đã cọc</dt><dd>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(selectedBooking.deposit_amount)}</dd></div><div className="booking-detail-wide"><dt>Yêu cầu đặc biệt</dt><dd>{selectedBooking.special_request || 'Không có'}</dd></div></dl>
           <BookingServicePanel bookingId={selectedBooking.id} canAddServices={selectedBooking.status === 'CHECKED_IN' || (selectedBooking.status === 'CONFIRMED' && String(selectedBooking.check_in_date).slice(0, 10) <= localToday && String(selectedBooking.check_out_date).slice(0, 10) > localToday)} onTotalChange={(total) => {
-            setSelectedBooking((current) => current ? { ...current, total_amount: total } : current);
-            setBookings((current) => current.map((booking) => String(booking.id) === String(selectedBooking.id) ? { ...booking, total_amount: total } : booking));
+            setSelectedBooking((current) => current ? { ...current, total_amount: total, original_total_amount: Number(current.original_total_amount ?? current.total_amount) + total - current.total_amount } : current);
+            setBookings((current) => current.map((booking) => String(booking.id) === String(selectedBooking.id) ? { ...booking, total_amount: total, original_total_amount: Number(booking.original_total_amount ?? booking.total_amount) + total - booking.total_amount } : booking));
           }} />
           <div className="booking-detail-actions">{canEditSelectedBooking && <button type="button" className="btn btn-primary" onClick={() => setEditing(true)}>Cập nhật booking</button>}{canCancelSelectedBooking && <button type="button" className="btn btn-outline" onClick={() => void cancelSelectedBooking()} disabled={saving}>Hủy booking</button>}{selectedBooking.status === 'CONFIRMED' && customerMode && !canEditSelectedBooking && <p className="booking-manage-note">Bạn chỉ có thể cập nhật booking trước thời điểm nhận phòng ít nhất 24 giờ.</p>}<button type="button" className="btn btn-outline" onClick={() => setSelectedBooking(null)}>Đóng</button></div>
         </>}

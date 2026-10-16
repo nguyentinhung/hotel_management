@@ -113,6 +113,7 @@ export interface WalkInBookingPayload {
   deposit_amount?: number;
   special_request?: string;
   check_in_now?: boolean;
+  promotion_code?: string;
 }
 
 // Kết quả trả về sau khi tạo đơn đặt phòng tại quầy thành công
@@ -128,6 +129,12 @@ export interface WalkInBookingResponse {
   nights: number;
   price_per_night: number;
   total_amount: number;
+  original_total_amount?: number;
+  discount_amount?: number;
+  promotion_id?: number | null;
+  promotion_code?: string | null;
+  promotion_discount_type?: 'PERCENT' | 'FIXED_AMOUNT' | null;
+  promotion_discount_value?: number | null;
   deposit_amount: number;
   remaining_balance: number;
   status: string;
@@ -142,6 +149,8 @@ export interface CustomerBookingPayload {
   check_out_date: string;
   adults: number;
   children: number;
+  guest_phone?: string;
+  promotion_code?: string;
   special_request?: string;
 }
 
@@ -163,6 +172,12 @@ export interface RecentBooking {
   children: number;
   status: string;
   total_amount: number;
+  original_total_amount?: number;
+  discount_amount?: number;
+  promotion_id?: number | null;
+  promotion_code?: string | null;
+  promotion_discount_type?: 'PERCENT' | 'FIXED_AMOUNT' | null;
+  promotion_discount_value?: number | null;
   deposit_amount: number;
   required_deposit_amount?: number;
   requires_deposit_payment?: boolean;

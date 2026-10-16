@@ -2,7 +2,7 @@ const { sql, getPool } = require('../config/db');
 
 function activeReservationPredicate(alias) {
   return `(${alias}.status = 'CHECKED_IN' OR (${alias}.status = 'CONFIRMED' AND (
-    COALESCE(${alias}.deposit_amount, 0) >= CEILING(COALESCE((SELECT SUM(dbr.price_per_night) FROM dbo.booking_rooms dbr WHERE dbr.booking_id = ${alias}.id), 0) * DATEDIFF(day, ${alias}.check_in_date, ${alias}.check_out_date) * 0.30)
+    COALESCE(${alias}.deposit_amount, 0) >= CEILING(COALESCE((SELECT SUM(dbr.price_per_night) FROM dbo.booking_rooms dbr WHERE dbr.booking_id = ${alias}.id), 0) * DATEDIFF(day, ${alias}.check_in_date, ${alias}.check_out_date) * 0.30 * CASE WHEN COALESCE(${alias}.original_total_amount, 0) > 0 THEN CAST(${alias}.total_amount AS decimal(18, 4)) / ${alias}.original_total_amount ELSE 1 END)
   )))`;
 }
 

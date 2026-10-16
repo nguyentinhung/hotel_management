@@ -12,7 +12,7 @@ const cors = require('cors');
 const multer = require('multer');
 const sql = require('mssql');
 const jwt = require('jsonwebtoken');
-const { getPool, ensureAuthTables, ensureBookingStatusConstraint, ensureGuestIdCardOptional } = require('./config/db');
+const { getPool, ensureAuthTables, ensureBookingStatusConstraint, ensureGuestIdCardOptional, ensureBookingPromotionColumns } = require('./config/db');
 // Seed data đã được tắt để dùng dữ liệu mẫu bạn insert trực tiếp trong SQL Server.
 const { getHomeData, getRoomTypes, getRoomTypeDetails, getPromotions, getServices, getActiveServiceById, getReviews } = require('./controllers/homeController');
 const { register, login, logout, verifyEmail, forgotPassword, resetPassword } = require('./controllers/authController');
@@ -381,6 +381,7 @@ app.delete('/api/room-types/:roomTypeId', async (req, res) => {
 });
 // Lấy danh sách khuyến mãi đang active
 app.get('/api/promotions/active', getPromotions);
+app.post('/api/promotions/validate', promotionController.validatePromotion);
 app.get('/api/promotions', promotionController.getActivePromotions);
 app.get('/api/promotions/:id', promotionController.getPromotionById);
 app.get('/api/admin/promotions', promotionController.requireAdmin, promotionController.getPromotions);
@@ -559,6 +560,7 @@ async function bootstrap() {
   await ensureAuthTables();
   await ensureBookingStatusConstraint();
   await ensureGuestIdCardOptional();
+  await ensureBookingPromotionColumns();
   const pool = await getPool();
   await pool.request().query(`
     IF OBJECT_ID(N'dbo.services', N'U') IS NOT NULL

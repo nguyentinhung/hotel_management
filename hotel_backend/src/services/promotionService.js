@@ -47,6 +47,30 @@ async function getActivePromotions() {
   return promotionDao.findActive();
 }
 
+async function validatePromotion(code, subtotal) {
+  const normalizedCode = String(code || '').trim().toUpperCase();
+  if (!normalizedCode) throw new Error('Vui lòng nhập mã khuyến mãi.');
+  const promotion = await promotionDao.findActiveByCode(normalizedCode);
+  if (!promotion) throw new Error('Mã khuyến mãi không hợp lệ, chưa hoạt động hoặc đã hết hạn.');
+  const amount = Number(subtotal);
+  if (!Number.isFinite(amount) || amount <= 0) throw new Error('Tổng booking không hợp lệ.');
+  let discount = promotion.discount_type === 'PERCENT'
+    ? Math.floor(amount * Number(promotion.discount_value) / 100)
+    : Number(promotion.discount_value);
+  if (promotion.max_discount != null) discount = Math.min(discount, Number(promotion.max_discount));
+  discount = Math.max(0, Math.min(amount, discount));
+  return {
+    promotion_id: promotion.id,
+    promotion_code: promotion.code,
+    discount_type: promotion.discount_type,
+    discount_value: Number(promotion.discount_value),
+    max_discount: promotion.max_discount == null ? null : Number(promotion.max_discount),
+    discount_amount: discount,
+    original_total: amount,
+    total_amount: amount - discount,
+  };
+}
+
 async function getPromotionById(id, activeOnly = false) {
   const promotion = await promotionDao.findById(Number(id), activeOnly);
   if (!promotion) {
@@ -90,6 +114,7 @@ async function deletePromotion(id) {
 module.exports = {
   getAllPromotions,
   getActivePromotions,
+  validatePromotion,
   getPromotionById,
   createPromotion,
   updatePromotion,

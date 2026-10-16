@@ -25,7 +25,7 @@ async function createCustomerBookingHandler(req, res) {
     return res.status(403).json({ success: false, message: 'Chỉ tài khoản khách hàng mới có thể đặt phòng trực tuyến.' });
   }
 
-  const { room_type_id, room_selections, service_selections, check_in_date, check_out_date, adults, children = 0, special_request = '' } = req.body || {};
+  const { room_type_id, room_selections, service_selections, check_in_date, check_out_date, adults, children = 0, guest_phone, promotion_code, special_request = '' } = req.body || {};
   const selections = Array.isArray(room_selections) && room_selections.length
     ? room_selections
     : [{ room_type_id, quantity: 1 }];
@@ -62,6 +62,8 @@ async function createCustomerBookingHandler(req, res) {
   try {
     const booking = await createCustomerBooking({
       customerId: claims.user_id,
+      guestPhone: guest_phone,
+      promotionCode: promotion_code,
       roomSelections: selections.map((selection) => ({ roomTypeId: Number(selection.room_type_id), quantity: Number(selection.quantity) })),
       serviceSelections: services.map((selection) => ({ serviceId: Number(selection.service_id), quantity: Number(selection.quantity) })),
       checkInDate: check_in_date,
@@ -79,7 +81,7 @@ async function createCustomerBookingHandler(req, res) {
         ? 403
         : /room type was not found/i.test(error.message)
           ? 404
-          : /guest count exceeds|only prebook services/i.test(error.message)
+          : /guest count exceeds|only prebook services|customer phone number is required|promotion code/i.test(error.message)
             ? 400
             : 500;
     const message = /no rooms are available|not enough rooms available/i.test(error.message)
@@ -177,6 +179,7 @@ async function createWalkInBookingHandler(req, res) {
       service_selections,
       special_request,
       check_in_now,
+      promotion_code,
     } = req.body || {};
 
     // 1. Kiểm tra các trường bắt buộc
@@ -230,6 +233,7 @@ async function createWalkInBookingHandler(req, res) {
       serviceSelections: services.map((selection) => ({ serviceId: Number(selection.service_id), quantity: Number(selection.quantity) })),
       specialRequest: special_request,
       checkInNow: Boolean(check_in_now),
+      promotionCode: promotion_code,
     });
 
     return res.status(201).json({
@@ -242,7 +246,8 @@ async function createWalkInBookingHandler(req, res) {
   } catch (error) {
     console.error('Create walk-in booking error:', error);
     const isInvalidServicePolicy = /only prebook services/i.test(error.message);
-    return res.status(isInvalidServicePolicy ? 400 : 500).json({
+    const isInvalidPromotion = /promotion code/i.test(error.message) || /mã khuyến mãi/i.test(error.message);
+    return res.status(isInvalidServicePolicy || isInvalidPromotion ? 400 : 500).json({
       success: false,
       message: isInvalidServicePolicy
         ? 'Chỉ có thể chọn dịch vụ được cấu hình cho phép đặt trước.'

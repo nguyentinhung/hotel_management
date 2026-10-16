@@ -1,4 +1,5 @@
 const { sql, getPool } = require('../config/db');
+const promotionDao = require('./promotionDao');
 
 /**
  * ============================================================================
@@ -32,9 +33,17 @@ function generateBookingCode() {
   return `BK${timestamp}${randomSuffix}`;
 }
 
+function calculatePromotionDiscount(promotion, subtotal) {
+  let discount = promotion.discount_type === 'PERCENT'
+    ? Math.floor(subtotal * Number(promotion.discount_value) / 100)
+    : Number(promotion.discount_value);
+  if (promotion.max_discount != null) discount = Math.min(discount, Number(promotion.max_discount));
+  return Math.max(0, Math.min(subtotal, discount));
+}
+
 function activeReservationPredicate(alias) {
   return `(${alias}.status = 'CHECKED_IN' OR (${alias}.status = 'CONFIRMED' AND (
-    COALESCE(${alias}.deposit_amount, 0) >= CEILING(COALESCE((SELECT SUM(dbr.price_per_night) FROM dbo.booking_rooms dbr WHERE dbr.booking_id = ${alias}.id), 0) * DATEDIFF(day, ${alias}.check_in_date, ${alias}.check_out_date) * 0.30)
+    COALESCE(${alias}.deposit_amount, 0) >= CEILING(COALESCE((SELECT SUM(dbr.price_per_night) FROM dbo.booking_rooms dbr WHERE dbr.booking_id = ${alias}.id), 0) * DATEDIFF(day, ${alias}.check_in_date, ${alias}.check_out_date) * 0.30 * CASE WHEN COALESCE(${alias}.original_total_amount, 0) > 0 THEN CAST(${alias}.total_amount AS decimal(18, 4)) / ${alias}.original_total_amount ELSE 1 END)
   )))`;
 }
 
@@ -58,6 +67,7 @@ async function createWalkInBooking(data) {
     serviceSelections = [],
     specialRequest = '',
     checkInNow = false,
+    promotionCode = '',
   } = data;
 
   const pool = await getPool();
@@ -124,8 +134,16 @@ async function createWalkInBooking(data) {
     validServices.push({ serviceId, quantity, price: Number(serviceResult.recordset[0].price ?? 0) });
   }
   const serviceTotal = validServices.reduce((sum, service) => sum + service.price * service.quantity, 0) * selectedRooms.length;
-  const totalAmount = totalPerNight * nights + serviceTotal;
-  const requiredDepositAmount = Math.ceil(totalPerNight * nights * 0.3);
+  const originalTotalAmount = totalPerNight * nights + serviceTotal;
+  let promotion = null;
+  let discountAmount = 0;
+  if (String(promotionCode || '').trim()) {
+    promotion = await promotionDao.findActiveByCode(String(promotionCode).trim().toUpperCase());
+    if (!promotion) throw new Error('Mã khuyến mãi không hợp lệ, chưa hoạt động hoặc đã hết hạn.');
+    discountAmount = calculatePromotionDiscount(promotion, originalTotalAmount);
+  }
+  const totalAmount = originalTotalAmount - discountAmount;
+  const requiredDepositAmount = Math.min(totalAmount, Math.ceil(totalPerNight * nights * 0.3 * (originalTotalAmount > 0 ? totalAmount / originalTotalAmount : 1)));
   const finalDeposit = Number(depositAmount ?? 0);
   if (checkInNow && finalDeposit < requiredDepositAmount) {
     throw new Error(`A deposit of at least ${requiredDepositAmount} is required before check-in.`);
@@ -187,19 +205,30 @@ async function createWalkInBooking(data) {
     .input('children', sql.TinyInt, Number(children))
     .input('status', sql.VarChar(20), initialStatus)
     .input('total_amount', sql.Decimal(12, 2), totalAmount)
+    .input('original_total_amount', sql.Decimal(12, 2), originalTotalAmount)
+    .input('discount_amount', sql.Decimal(12, 2), discountAmount)
+    .input('promotion_id', sql.Int, promotion?.id ?? null)
+    .input('promotion_code', sql.VarChar(50), promotion?.code ?? null)
+    .input('promotion_discount_type', sql.VarChar(20), promotion?.discount_type ?? null)
+    .input('promotion_discount_value', sql.Decimal(12, 2), promotion?.discount_value ?? null)
+    .input('promotion_max_discount', sql.Decimal(12, 2), promotion?.max_discount ?? null)
     .input('deposit_amount', sql.Decimal(12, 2), finalDeposit)
     .input('special_request', sql.NVarChar(500), specialRequest ? specialRequest.trim() : null)
     .query(`
       INSERT INTO bookings (
         booking_code, customer_id, guest_full_name, guest_phone, guest_email,
         check_in_date, check_out_date, adults, children, status,
-        total_amount, deposit_amount, created_at, special_request
+        total_amount, original_total_amount, discount_amount, promotion_id, promotion_code,
+        promotion_discount_type, promotion_discount_value, promotion_max_discount,
+        deposit_amount, created_at, special_request
       )
       OUTPUT INSERTED.id, INSERTED.booking_code, INSERTED.created_at
       VALUES (
         @booking_code, @customer_id, @guest_full_name, @guest_phone, @guest_email,
         @check_in_date, @check_out_date, @adults, @children, @status,
-        @total_amount, @deposit_amount, SYSUTCDATETIME(), @special_request
+        @total_amount, @original_total_amount, @discount_amount, @promotion_id, @promotion_code,
+        @promotion_discount_type, @promotion_discount_value, @promotion_max_discount,
+        @deposit_amount, SYSUTCDATETIME(), @special_request
       );
     `);
 
@@ -270,6 +299,10 @@ async function createWalkInBooking(data) {
     nights,
     price_per_night: totalPerNight,
     total_amount: totalAmount,
+    original_total_amount: originalTotalAmount,
+    discount_amount: discountAmount,
+    promotion_id: promotion?.id ?? null,
+    promotion_code: promotion?.code ?? null,
     deposit_amount: finalDeposit,
     remaining_balance: totalAmount - finalDeposit,
     status: initialStatus,
@@ -285,6 +318,8 @@ async function createWalkInBooking(data) {
 async function createCustomerBooking(data) {
   const {
     customerId,
+    guestPhone: requestedGuestPhone,
+    promotionCode = '',
     roomSelections = [{ roomTypeId: data.roomTypeId, quantity: 1 }],
     serviceSelections = [],
     checkInDate,
@@ -307,6 +342,8 @@ async function createCustomerBooking(data) {
       `);
     if (!customerResult.recordset.length) throw new Error('Customer account is unavailable.');
     const customer = customerResult.recordset[0];
+    const guestPhone = String(requestedGuestPhone || customer.phone || '').trim();
+    if (!guestPhone) throw new Error('Customer phone number is required to create a booking.');
 
     const nights = calculateNights(checkInDate, checkOutDate);
     const selectedTypes = [];
@@ -332,7 +369,7 @@ async function createCustomerBooking(data) {
              JOIN bookings b WITH (UPDLOCK, HOLDLOCK) ON b.id = br.booking_id
              WHERE br.room_type_id = @roomTypeId AND (
                b.status = 'CHECKED_IN' OR (b.status = 'CONFIRMED' AND (
-                 COALESCE(b.deposit_amount, 0) >= CEILING(COALESCE((SELECT SUM(dbr.price_per_night) FROM dbo.booking_rooms dbr WHERE dbr.booking_id = b.id), 0) * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30)
+                 COALESCE(b.deposit_amount, 0) >= CEILING(COALESCE((SELECT SUM(dbr.price_per_night) FROM dbo.booking_rooms dbr WHERE dbr.booking_id = b.id), 0) * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30 * CASE WHEN COALESCE(b.original_total_amount, 0) > 0 THEN CAST(b.total_amount AS decimal(18, 4)) / b.original_total_amount ELSE 1 END)
                ))
              )
                AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn) AS reserved_count;
@@ -373,32 +410,52 @@ async function createCustomerBooking(data) {
 
     const selectedRoomCount = selectedTypes.reduce((count, roomType) => count + roomType.quantity, 0);
     const serviceTotal = validServices.reduce((sum, service) => sum + service.price * service.quantity, 0) * selectedRoomCount;
-    const totalAmount = totalPerNight * nights + serviceTotal;
-    const requiredDepositAmount = Math.ceil(totalPerNight * nights * 0.3);
+    const originalTotalAmount = totalPerNight * nights + serviceTotal;
+    let promotion = null;
+    let discountAmount = 0;
+    if (String(promotionCode || '').trim()) {
+      promotion = await promotionDao.findActiveByCode(String(promotionCode).trim().toUpperCase());
+      if (!promotion) throw new Error('Promotion code is invalid, inactive, or expired.');
+      discountAmount = calculatePromotionDiscount(promotion, originalTotalAmount);
+    }
+    const totalAmount = originalTotalAmount - discountAmount;
+    const depositDiscountFactor = originalTotalAmount > 0 ? totalAmount / originalTotalAmount : 1;
+    const requiredDepositAmount = Math.min(totalAmount, Math.ceil(totalPerNight * nights * 0.3 * depositDiscountFactor));
     const bookingCode = generateBookingCode();
+    const initialStatus = totalAmount <= 0 ? 'CONFIRMED' : 'PENDING_PAYMENT';
     const bookingResult = await transaction.request()
       .input('booking_code', sql.VarChar(20), bookingCode)
       .input('customer_id', sql.BigInt, customer.id)
       .input('guest_full_name', sql.NVarChar(150), customer.full_name)
-      .input('guest_phone', sql.VarChar(20), customer.phone)
+      .input('guest_phone', sql.VarChar(20), guestPhone)
       .input('guest_email', sql.VarChar(150), customer.email)
       .input('check_in_date', sql.Date, checkInDate)
       .input('check_out_date', sql.Date, checkOutDate)
       .input('adults', sql.TinyInt, Number(adults))
       .input('children', sql.TinyInt, Number(children))
+      .input('status', sql.VarChar(20), initialStatus)
       .input('total_amount', sql.Decimal(12, 2), totalAmount)
+      .input('original_total_amount', sql.Decimal(12, 2), originalTotalAmount)
+      .input('discount_amount', sql.Decimal(12, 2), discountAmount)
+      .input('promotion_id', sql.Int, promotion?.id ?? null)
+      .input('promotion_code', sql.VarChar(50), promotion?.code ?? null)
+      .input('promotion_discount_type', sql.VarChar(20), promotion?.discount_type ?? null)
+      .input('promotion_discount_value', sql.Decimal(12, 2), promotion?.discount_value ?? null)
+      .input('promotion_max_discount', sql.Decimal(12, 2), promotion?.max_discount ?? null)
       .input('special_request', sql.NVarChar(500), specialRequest ? String(specialRequest).trim() : null)
       .query(`
         INSERT INTO bookings (
           booking_code, customer_id, guest_full_name, guest_phone, guest_email,
           check_in_date, check_out_date, adults, children, status,
-          total_amount, deposit_amount, created_at, special_request
+          total_amount, original_total_amount, discount_amount, promotion_id, promotion_code,
+          promotion_discount_type, promotion_discount_value, promotion_max_discount, deposit_amount, created_at, special_request
         )
         OUTPUT INSERTED.id, INSERTED.booking_code, INSERTED.created_at
         VALUES (
           @booking_code, @customer_id, @guest_full_name, @guest_phone, @guest_email,
-          @check_in_date, @check_out_date, @adults, @children, 'PENDING_PAYMENT',
-          @total_amount, 0, SYSUTCDATETIME(), @special_request
+          @check_in_date, @check_out_date, @adults, @children, @status,
+          @total_amount, @original_total_amount, @discount_amount, @promotion_id, @promotion_code,
+          @promotion_discount_type, @promotion_discount_value, @promotion_max_discount, 0, SYSUTCDATETIME(), @special_request
         );
       `);
     const booking = bookingResult.recordset[0];
@@ -438,7 +495,7 @@ async function createCustomerBooking(data) {
     await transaction.request()
       .input('booking_id', sql.BigInt, booking.id)
       .input('full_name', sql.NVarChar(150), customer.full_name)
-      .input('phone', sql.VarChar(20), customer.phone)
+      .input('phone', sql.VarChar(20), guestPhone)
       .query(`
         INSERT INTO booking_guests (booking_id, full_name, phone, id_card_verified)
         VALUES (@booking_id, @full_name, @phone, 0);
@@ -451,15 +508,24 @@ async function createCustomerBooking(data) {
       room_type_name: selectedTypes.map((roomType) => `${roomType.name}${roomType.quantity > 1 ? ` × ${roomType.quantity}` : ''}`).join(', '),
       room_number: null,
       guest_full_name: customer.full_name,
+      guest_phone: guestPhone,
       check_in_date: checkInDate,
       check_out_date: checkOutDate,
       nights,
       price_per_night: totalPerNight,
       total_amount: totalAmount,
+      original_total_amount: originalTotalAmount,
+      discount_amount: discountAmount,
+      promotion_id: promotion?.id ?? null,
+      promotion_code: promotion?.code ?? null,
+      promotion_discount_type: promotion?.discount_type ?? null,
+      promotion_discount_value: promotion ? Number(promotion.discount_value) : null,
+      room_amount: totalPerNight * nights,
+      service_amount: serviceTotal,
       deposit_amount: 0,
       required_deposit_amount: requiredDepositAmount,
       remaining_balance: totalAmount,
-      status: 'PENDING_PAYMENT',
+      status: initialStatus,
       created_at: booking.created_at,
     };
   } catch (error) {
@@ -486,7 +552,9 @@ async function checkInBooking({ bookingId, idCardNumber = '' }) {
         OUTER APPLY (
           SELECT
             CEILING(COALESCE(SUM(br_deposit.price_per_night), 0)
-              * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30) AS required_deposit_amount,
+              * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30
+              * CASE WHEN COALESCE(b.original_total_amount, 0) > 0
+                THEN CAST(b.total_amount AS decimal(18, 4)) / b.original_total_amount ELSE 1 END) AS required_deposit_amount,
             CASE WHEN EXISTS (
               SELECT 1 FROM dbo.payments p
               WHERE p.booking_id = b.id AND p.payment_type = 'DEPOSIT'
@@ -615,6 +683,12 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
         b.children,
         b.status,
         b.total_amount,
+        COALESCE(b.original_total_amount, b.total_amount) AS original_total_amount,
+        COALESCE(b.discount_amount, 0) AS discount_amount,
+        b.promotion_id,
+        b.promotion_code,
+        b.promotion_discount_type,
+        b.promotion_discount_value,
         b.deposit_amount,
         deposit_summary.required_deposit_amount,
         deposit_summary.requires_deposit_payment,
@@ -677,7 +751,9 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
       OUTER APPLY (
         SELECT
           CEILING(COALESCE(SUM(br_deposit.price_per_night), 0)
-            * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30) AS required_deposit_amount,
+            * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30
+            * CASE WHEN COALESCE(b.original_total_amount, 0) > 0
+              THEN CAST(b.total_amount AS decimal(18, 4)) / b.original_total_amount ELSE 1 END) AS required_deposit_amount,
           CASE WHEN EXISTS (
             SELECT 1 FROM dbo.payments p
             WHERE p.booking_id = b.id AND p.payment_type = 'DEPOSIT'
@@ -715,6 +791,12 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
     children: item.children,
     status: item.status,
     total_amount: Number(item.total_amount ?? 0),
+    original_total_amount: Number(item.original_total_amount ?? item.total_amount ?? 0),
+    discount_amount: Number(item.discount_amount ?? 0),
+    promotion_id: item.promotion_id,
+    promotion_code: item.promotion_code,
+    promotion_discount_type: item.promotion_discount_type,
+    promotion_discount_value: item.promotion_discount_value == null ? null : Number(item.promotion_discount_value),
     deposit_amount: Number(item.deposit_amount ?? 0),
     required_deposit_amount: Number(item.required_deposit_amount ?? 0),
     requires_deposit_payment: Boolean(item.requires_deposit_payment),
@@ -748,7 +830,8 @@ async function updateBooking({ bookingId, customerId, ...changes }) {
     if (customerId != null) request.input('customerId', sql.BigInt, Number(customerId));
     const currentResult = await request.query(`
       SELECT b.id, b.customer_id, b.status, b.check_in_date, b.check_out_date, b.deposit_amount,
-        b.guest_full_name, b.guest_phone, b.guest_email
+        b.guest_full_name, b.guest_phone, b.guest_email, b.promotion_id, b.promotion_code,
+        b.promotion_discount_type, b.promotion_discount_value, b.promotion_max_discount
       FROM bookings b WITH (UPDLOCK, HOLDLOCK)
       WHERE b.id = @bookingId ${ownerFilter};
     `);
@@ -850,7 +933,14 @@ async function updateBooking({ bookingId, customerId, ...changes }) {
         JOIN booking_rooms br ON br.id = bs.booking_room_id
         WHERE br.booking_id = @bookingId;
       `);
-    const totalAmount = totalPerNight * nights + Number(chargesResult.recordset[0].service_total ?? 0);
+    const originalTotalAmount = totalPerNight * nights + Number(chargesResult.recordset[0].service_total ?? 0);
+    const promotionSnapshot = current.promotion_id ? {
+      discount_type: current.promotion_discount_type,
+      discount_value: Number(current.promotion_discount_value),
+      max_discount: current.promotion_max_discount == null ? null : Number(current.promotion_max_discount),
+    } : null;
+    const discountAmount = promotionSnapshot ? calculatePromotionDiscount(promotionSnapshot, originalTotalAmount) : 0;
+    const totalAmount = originalTotalAmount - discountAmount;
     for (let index = 0; index < existingRooms.length; index += 1) {
       const existingRoom = existingRooms[index];
       const selectedRoom = selectedRooms[index];
@@ -908,11 +998,14 @@ async function updateBooking({ bookingId, customerId, ...changes }) {
       .input('children', sql.TinyInt, Number(changes.children))
       .input('specialRequest', sql.NVarChar(500), changes.specialRequest?.trim() || null)
       .input('totalAmount', sql.Decimal(12, 2), totalAmount)
+      .input('originalTotalAmount', sql.Decimal(12, 2), originalTotalAmount)
+      .input('discountAmount', sql.Decimal(12, 2), discountAmount)
       .query(`
         UPDATE bookings SET check_in_date = @checkInDate, check_out_date = @checkOutDate,
           guest_full_name = @guestName, guest_phone = @guestPhone, guest_email = @guestEmail,
           adults = @adults, children = @children, special_request = @specialRequest,
-          total_amount = @totalAmount
+          total_amount = @totalAmount, original_total_amount = @originalTotalAmount,
+          discount_amount = @discountAmount
         WHERE id = @bookingId;
         UPDATE booking_guests SET full_name = @guestName, phone = @guestPhone WHERE booking_id = @bookingId;
       `);
@@ -922,6 +1015,8 @@ async function updateBooking({ bookingId, customerId, ...changes }) {
       check_in_date: changes.checkInDate,
       check_out_date: changes.checkOutDate,
       total_amount: totalAmount,
+      original_total_amount: originalTotalAmount,
+      discount_amount: discountAmount,
       deposit_amount: Number(current.deposit_amount ?? 0),
     };
   } catch (error) {
@@ -940,13 +1035,8 @@ async function cancelBooking({ bookingId, customerId = null }) {
     UPDATE bookings SET status = 'CANCELLED'
     WHERE id = @bookingId ${ownerFilter} AND status = 'CONFIRMED'
       AND (
-        check_in_date > CONVERT(date, DATEADD(hour, 7, SYSUTCDATETIME()))
-        OR (
-          @isReceptionCancellation = 1
-          AND check_in_date = CONVERT(date, DATEADD(hour, 7, SYSUTCDATETIME()))
-          AND DATEADD(hour, 18, CONVERT(datetime2, check_in_date)) <= DATEADD(hour, 7, SYSUTCDATETIME())
-          AND created_at < DATEADD(hour, 11, CONVERT(datetime2, check_in_date))
-        )
+        @isReceptionCancellation = 1
+        OR check_in_date > CONVERT(date, DATEADD(hour, 7, SYSUTCDATETIME()))
       );
     SELECT @@ROWCOUNT AS updated_count;
   `);

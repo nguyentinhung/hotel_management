@@ -111,11 +111,14 @@ async function createCustomerDepositPayment({ customerId, bookingCode, paymentCo
       .input('bookingCode', sql.VarChar(20), bookingCode)
       .query(`
         SELECT TOP (1) b.id, b.status, b.deposit_amount,
-          CEILING(SUM(br.price_per_night) * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30) AS required_deposit
+          CEILING(SUM(br.price_per_night) * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30
+            * CASE WHEN COALESCE(b.original_total_amount, 0) > 0
+              THEN CAST(b.total_amount AS decimal(18, 4)) / b.original_total_amount ELSE 1 END) AS required_deposit
         FROM dbo.bookings b WITH (UPDLOCK, HOLDLOCK)
         JOIN dbo.booking_rooms br ON br.booking_id = b.id
         WHERE b.customer_id = @customerId AND b.booking_code = @bookingCode
-        GROUP BY b.id, b.status, b.deposit_amount, b.check_in_date, b.check_out_date;
+        GROUP BY b.id, b.status, b.deposit_amount, b.check_in_date, b.check_out_date,
+          b.total_amount, b.original_total_amount;
       `);
     const booking = bookingResult.recordset[0];
     if (!booking) throw paymentError('BOOKING_NOT_FOUND', 404, 'Không tìm thấy booking của bạn.');

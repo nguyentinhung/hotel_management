@@ -9,6 +9,7 @@ import {
   cancelBooking,
   createWalkInBooking,
   updateBooking,
+  validateBookingPromotion,
 } from '../services/roomService';
 import type {
   AvailableRoom,
@@ -168,6 +169,10 @@ export default function ReceptionRoomBooking({
     special_request: '',
   });
   const [isSubmittingBooking, setIsSubmittingBooking] = useState<boolean>(false);
+  const [promotionCode, setPromotionCode] = useState('');
+  const [appliedPromotion, setAppliedPromotion] = useState<{ promotion_id: number; promotion_code: string; discount_amount: number; original_total: number; total_amount: number } | null>(null);
+  const [promotionMessage, setPromotionMessage] = useState('');
+  const [isApplyingPromotion, setIsApplyingPromotion] = useState(false);
 
   // --- STATE DANH SÁCH ĐẶT PHÒNG GẦN ĐÂY ---
   const [recentBookings, setRecentBookings] = useState<RecentBooking[]>([]);
@@ -255,6 +260,26 @@ export default function ReceptionRoomBooking({
   const walkInServiceTotal = selectedRoomType
     ? serviceOptions.reduce((sum, service) => sum + Number(service.price) * (selectedServiceQuantities[service.id] || 0), 0) * (1 + additionalWalkInTypes.length)
     : 0;
+  const walkInOriginalTotal = walkInRoomTotal + walkInServiceTotal;
+  const walkInFinalTotal = appliedPromotion?.original_total === walkInOriginalTotal
+    ? appliedPromotion.total_amount
+    : walkInOriginalTotal;
+
+  const handleApplyPromotion = async () => {
+    try {
+      setIsApplyingPromotion(true);
+      const result = await validateBookingPromotion(promotionCode, walkInOriginalTotal);
+      setAppliedPromotion(result);
+      setPromotionCode(result.promotion_code);
+      setWalkInForm((form) => ({ ...form, deposit_amount: Math.min(Number(form.deposit_amount || 0), result.total_amount) }));
+      setPromotionMessage(`Đã áp dụng ${result.promotion_code}: giảm ${formatCurrency(result.discount_amount)}.`);
+    } catch (error) {
+      setAppliedPromotion(null);
+      setPromotionMessage(error instanceof Error ? error.message : 'Không thể xác thực mã khuyến mãi.');
+    } finally {
+      setIsApplyingPromotion(false);
+    }
+  };
 
   /**
    * 1. HÀM GỌI API KIỂM TRA PHÒNG TRỐNG (CHECK AVAILABILITY)
@@ -718,6 +743,9 @@ export default function ReceptionRoomBooking({
       special_request: 'Khách đặt trực tiếp tại quầy lễ tân',
     });
     setSelectedServiceQuantities({});
+    setPromotionCode('');
+    setAppliedPromotion(null);
+    setPromotionMessage('');
 
     setIsModalOpen(true);
   };
@@ -802,6 +830,7 @@ export default function ReceptionRoomBooking({
         deposit_amount: Number(walkInForm.deposit_amount || 0),
         special_request: walkInForm.special_request,
         check_in_now: false,
+        promotion_code: appliedPromotion?.original_total === walkInOriginalTotal ? appliedPromotion.promotion_code : undefined,
       };
 
       const res = await createWalkInBooking(payload);
@@ -1135,7 +1164,9 @@ export default function ReceptionRoomBooking({
                   </span>
                 </div>
                 <div><strong>Tổng tiền dịch vụ:</strong> <span className="text-highlight">{formatCurrency(walkInServiceTotal)}</span></div>
-                <div><strong>Tổng booking dự kiến:</strong> <span className="text-highlight">{formatCurrency(walkInRoomTotal + walkInServiceTotal)}</span></div>
+                <div><strong>Tổng tiền ban đầu:</strong> <span>{formatCurrency(walkInOriginalTotal)}</span></div>
+                {appliedPromotion && appliedPromotion.original_total === walkInOriginalTotal && <div><strong>Đã giảm ({appliedPromotion.promotion_code}):</strong> <span className="text-highlight">−{formatCurrency(appliedPromotion.discount_amount)}</span></div>}
+                <div><strong>Tổng booking dự kiến:</strong> <span className="text-highlight">{formatCurrency(walkInFinalTotal)}</span></div>
               </div>
 
               {/* Thông tin khách hàng đến quầy */}
@@ -1208,6 +1239,21 @@ export default function ReceptionRoomBooking({
               <div className="form-sub-header">Xếp phòng & Thanh toán</div>
               <div className="form-row-2">
                 <div className="form-group">
+                  <label htmlFor="walkin-promotion-code">Mã khuyến mãi</label>
+                  <input id="walkin-promotion-code" value={promotionCode} onChange={(event) => { setPromotionCode(event.target.value.toUpperCase()); setAppliedPromotion(null); setPromotionMessage(''); }} placeholder="Nhập mã khuyến mãi" />
+                  {promotionMessage && <small role="status">{promotionMessage}</small>}
+                </div>
+                <div className="form-group">
+                  <label>&nbsp;</label>
+                  <button type="button" className="btn btn-outline" onClick={() => {
+                    if (!promotionCode.trim()) { setAppliedPromotion(null); setPromotionMessage(''); return; }
+                    void handleApplyPromotion();
+                  }} disabled={isApplyingPromotion || !promotionCode.trim()}>{isApplyingPromotion ? 'Đang kiểm tra...' : appliedPromotion ? 'Áp dụng lại' : 'Áp dụng'}</button>
+                  {appliedPromotion && <button type="button" className="btn btn-outline" onClick={() => { setPromotionCode(''); setAppliedPromotion(null); setPromotionMessage('Đã bỏ mã khuyến mãi.'); }}>Xóa mã</button>}
+                </div>
+              </div>
+              <div className="form-row-2">
+                <div className="form-group">
                   <label htmlFor="assigned_room_id">Chọn số phòng vật lý <span className="optional-hint">(có thể gán sau nếu phòng đang dọn)</span></label>
                   <select
                     id="assigned_room_id"
@@ -1277,10 +1323,14 @@ export default function ReceptionRoomBooking({
                         min={0}
                         max={10}
                         value={selectedServiceQuantities[service.id] || 0}
-                        onChange={(e) => setSelectedServiceQuantities({
-                          ...selectedServiceQuantities,
-                          [service.id]: Math.max(0, Math.min(10, Number(e.target.value) || 0)),
-                        })}
+                        onChange={(e) => {
+                          setSelectedServiceQuantities({
+                            ...selectedServiceQuantities,
+                            [service.id]: Math.max(0, Math.min(10, Number(e.target.value) || 0)),
+                          });
+                          setAppliedPromotion(null);
+                          setPromotionMessage('Tổng booking đã đổi. Hãy áp dụng lại mã khuyến mãi.');
+                        }}
                       />
                     </div>
                   ))}
@@ -1417,16 +1467,18 @@ export default function ReceptionRoomBooking({
                 <th>Trả phòng</th>
                 <th>Trạng thái</th>
                 <th>Thanh toán</th>
+                <th>Mã khuyến mãi</th>
+                <th>Số tiền giảm</th>
                 <th>Tổng tiền</th>
               </tr>
             </thead>
             <tbody>
               {managementBookingsError ? (
-                <tr><td colSpan={9} className="booking-management-empty">{managementBookingsError}</td></tr>
+                <tr><td colSpan={11} className="booking-management-empty">{managementBookingsError}</td></tr>
               ) : isLoadingBookings && managementBookings.length === 0 ? (
-                <tr><td colSpan={9} className="booking-management-empty">Đang tải danh sách booking...</td></tr>
+                <tr><td colSpan={11} className="booking-management-empty">Đang tải danh sách booking...</td></tr>
               ) : paginatedManagementBookings.length === 0 ? (
-                <tr><td colSpan={9} className="booking-management-empty">Không có booking khớp bộ lọc.</td></tr>
+                <tr><td colSpan={11} className="booking-management-empty">Không có booking khớp bộ lọc.</td></tr>
               ) : paginatedManagementBookings.map((booking) => (
                 <tr
                   key={booking.id}
@@ -1458,6 +1510,8 @@ export default function ReceptionRoomBooking({
                     <span className="booking-management-deposit-amount">Đã cọc: {formatCurrency(booking.deposit_amount)}</span>
                     <small className="booking-management-deposit-status">{getDepositPaymentStatus(booking)}</small>
                   </td>
+                  <td>{booking.promotion_code || '—'}</td>
+                  <td>{formatCurrency(Number(booking.discount_amount || 0))}</td>
                   <td>{formatCurrency(booking.total_amount)}</td>
                 </tr>
               ))}

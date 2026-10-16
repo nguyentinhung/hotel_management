@@ -202,10 +202,49 @@ async function ensureGuestIdCardOptional() {
   `);
 }
 
+async function ensureBookingPromotionColumns() {
+  const currentPool = await getPool();
+  const schema = await currentPool.request().query(`
+    SELECT DB_NAME() AS database_name,
+      CASE WHEN OBJECT_ID(N'dbo.bookings', N'U') IS NULL THEN 0 ELSE 1 END AS has_bookings;
+  `);
+  if (!schema.recordset[0]?.has_bookings) {
+    throw new Error(`Table dbo.bookings was not found in database "${schema.recordset[0]?.database_name ?? 'unknown'}".`);
+  }
+
+  // Run each ALTER separately so SQL Server compiles the next statement after
+  // the new column exists (same-batch references can fail with error 207).
+  const columns = [
+    ['original_total_amount', `ALTER TABLE dbo.bookings ADD original_total_amount DECIMAL(12, 2) NULL;`],
+    ['discount_amount', `ALTER TABLE dbo.bookings ADD discount_amount DECIMAL(12, 2) NOT NULL CONSTRAINT DF_bookings_discount_amount DEFAULT (0) WITH VALUES;`],
+    ['promotion_id', `ALTER TABLE dbo.bookings ADD promotion_id INT NULL;`],
+    ['promotion_code', `ALTER TABLE dbo.bookings ADD promotion_code VARCHAR(50) NULL;`],
+    ['promotion_discount_type', `ALTER TABLE dbo.bookings ADD promotion_discount_type VARCHAR(20) NULL;`],
+    ['promotion_discount_value', `ALTER TABLE dbo.bookings ADD promotion_discount_value DECIMAL(12, 2) NULL;`],
+    ['promotion_max_discount', `ALTER TABLE dbo.bookings ADD promotion_max_discount DECIMAL(12, 2) NULL;`],
+  ];
+  for (const [column, alterSql] of columns) {
+    const exists = await currentPool.request()
+      .input('columnName', sql.NVarChar(128), column)
+      .query(`SELECT COL_LENGTH(N'dbo.bookings', @columnName) AS column_length;`);
+    if (exists.recordset[0]?.column_length == null) await currentPool.request().query(alterSql);
+  }
+  await currentPool.request().query(`
+    UPDATE dbo.bookings
+    SET original_total_amount = total_amount
+    WHERE original_total_amount IS NULL;
+  `);
+  await currentPool.request().query(`
+    IF EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_bookings_promotions')
+      ALTER TABLE dbo.bookings DROP CONSTRAINT FK_bookings_promotions;
+  `);
+}
+
 module.exports = {
   sql,
   getPool,
   ensureAuthTables,
   ensureBookingStatusConstraint,
   ensureGuestIdCardOptional,
+  ensureBookingPromotionColumns,
 };

@@ -39,6 +39,14 @@ async function getActivePromotions(req, res) {
   }
 }
 
+async function validatePromotion(req, res) {
+  try {
+    return res.json(await promotionService.validatePromotion(req.body?.code, req.body?.subtotal));
+  } catch (error) {
+    return res.status(400).json({ message: error.message });
+  }
+}
+
 async function getPromotionById(req, res) {
   try {
     const activeOnly = req.baseUrl === '/api/promotions';
@@ -81,6 +89,7 @@ module.exports = {
   requireAdmin,
   getPromotions,
   getActivePromotions,
+  validatePromotion,
   getPromotionById,
   createPromotion,
   updatePromotion,

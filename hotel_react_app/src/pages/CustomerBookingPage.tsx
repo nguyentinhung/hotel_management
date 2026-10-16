@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { createCustomerBooking, checkRoomAvailability } from '../services/roomService';
+import { createCustomerBooking, checkRoomAvailability, validateBookingPromotion } from '../services/roomService';
 import { createFinalPayment } from '../services/paymentService';
 import { resolveRole } from '../utils/role';
 import type { CustomerBookingResponse, RoomAvailabilityItem, ServiceItem } from '../types';
 import { useToast } from '../components/ToastProvider';
 
 const vnpayEnabled = import.meta.env.VITE_VNPAY_ENABLED === 'true';
+const formatMoney = (amount: number) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(amount);
 const dateValue = (date: Date) => date.toISOString().slice(0, 10);
 const tomorrowValue = () => {
   const tomorrow = new Date();
@@ -36,6 +37,13 @@ export default function CustomerBookingPage() {
   const [serviceOptions, setServiceOptions] = useState<ServiceItem[]>([]);
   const [selectedServiceQuantities, setSelectedServiceQuantities] = useState<Record<number, number>>({});
   const [booking, setBooking] = useState<CustomerBookingResponse | null>(null);
+  const [guestPhone, setGuestPhone] = useState('');
+  const [promotionCode, setPromotionCode] = useState('');
+  const [isPromotionApplied, setIsPromotionApplied] = useState(false);
+  const [appliedPromotion, setAppliedPromotion] = useState<Awaited<ReturnType<typeof validateBookingPromotion>> | null>(null);
+  const [promotionMessage, setPromotionMessage] = useState('');
+  const [isApplyingPromotion, setIsApplyingPromotion] = useState(false);
+  const promotionRequestId = useRef(0);
 
   const roomTypeId = Number(params.get('room_type_id'));
   const accessToken = localStorage.getItem('accessToken');
@@ -55,6 +63,10 @@ export default function CustomerBookingPage() {
     }
   }, []);
   const currentRole = resolveRole(localUser);
+
+  useEffect(() => {
+    setGuestPhone(localUser.phone || '');
+  }, [localUser.phone]);
 
   useEffect(() => {
     if (!accessToken || (currentRole && currentRole !== 'CUSTOMER')) {
@@ -108,7 +120,48 @@ export default function CustomerBookingPage() {
   const selectedCapacityMatched = selectedRoomTypes.reduce((total, { room: selectedRoom, quantity }) => total + selectedRoom.max_adults * quantity, 0) >= adults
     && selectedRoomTypes.reduce((total, { room: selectedRoom, quantity }) => total + selectedRoom.max_children * quantity, 0) >= children;
   const totalPricePerNight = selectedRoomTypes.reduce((total, { room: selectedRoom, quantity }) => total + selectedRoom.base_price * quantity, 0);
+  const roomSubtotal = totalPricePerNight * nights;
+  const selectedRoomCount = selectedRoomTypes.reduce((total, selection) => total + selection.quantity, 0);
+  const serviceSubtotal = serviceOptions.reduce((total, service) => total + Number(service.price) * (selectedServiceQuantities[service.id] || 0), 0) * selectedRoomCount;
+  const bookingSubtotal = roomSubtotal + serviceSubtotal;
+  // SQL DECIMAL values may arrive as strings; normalize before comparing.
+  const promotionIsCurrent = Boolean(appliedPromotion)
+    && Number(appliedPromotion?.original_total) === bookingSubtotal;
+  const netBookingTotal = promotionIsCurrent && appliedPromotion
+    ? Number(appliedPromotion.total_amount)
+    : bookingSubtotal;
+  const estimatedDeposit = Math.min(netBookingTotal, Math.ceil((bookingSubtotal > 0 ? roomSubtotal * 0.3 * netBookingTotal / bookingSubtotal : 0)));
+  const estimatedBalance = Math.max(0, netBookingTotal - estimatedDeposit);
   const additionalRoomCount = Object.values(additionalRoomQuantities).reduce((total, quantity) => total + quantity, 0);
+
+  useEffect(() => {
+    if (!isPromotionApplied || !promotionCode.trim()) {
+      setAppliedPromotion(null);
+      setIsApplyingPromotion(false);
+      return;
+    }
+    const requestId = ++promotionRequestId.current;
+    setIsApplyingPromotion(true);
+    setPromotionMessage('Đang kiểm tra mã giảm giá...');
+    validateBookingPromotion(promotionCode, bookingSubtotal)
+      .then((result) => {
+        if (requestId !== promotionRequestId.current) return;
+        setAppliedPromotion(result);
+        setPromotionCode(result.promotion_code);
+        setPromotionMessage(result.discount_type === 'PERCENT'
+          ? `Đã áp dụng ${result.promotion_code}: giảm ${result.discount_value}%.`
+          : `Đã áp dụng ${result.promotion_code}: giảm ${formatMoney(result.discount_amount)}.`);
+      })
+      .catch((validationError: unknown) => {
+        if (requestId !== promotionRequestId.current) return;
+        setAppliedPromotion(null);
+        setPromotionMessage(validationError instanceof Error ? validationError.message : 'Không thể kiểm tra mã giảm giá.');
+      })
+      .finally(() => {
+        if (requestId === promotionRequestId.current) setIsApplyingPromotion(false);
+      });
+    return () => { promotionRequestId.current += 1; };
+  }, [isPromotionApplied, promotionCode, bookingSubtotal]);
   const confirmAdditionalRooms = () => {
     const additions = Object.fromEntries(Object.entries(additionalRoomQuantities).filter(([, quantity]) => quantity > 0));
     setSelectedRoomQuantities({ ...selectedRoomQuantities, ...Object.fromEntries(Object.entries(additions).map(([id, quantity]) => [id, Number(quantity)])) });
@@ -134,6 +187,19 @@ export default function CustomerBookingPage() {
       showToast('Các phòng đã chọn không còn đủ số lượng hoặc sức chứa. Vui lòng kiểm tra lại.', 'error');
       return;
     }
+    const normalizedGuestPhone = guestPhone.trim();
+    if (!/^\d{10}$/.test(normalizedGuestPhone)) {
+      const message = 'Vui lòng nhập số điện thoại gồm đúng 10 chữ số để đặt phòng.';
+      setError(message);
+      showToast(message, 'error');
+      return;
+    }
+    if (isPromotionApplied && (!promotionIsCurrent || isApplyingPromotion)) {
+      const message = isApplyingPromotion ? 'Vui lòng chờ xác thực mã giảm giá.' : 'Mã giảm giá chưa được xác thực cho tổng tiền hiện tại.';
+      setError(message);
+      showToast(message, 'error');
+      return;
+    }
 
     try {
       setIsSubmitting(true);
@@ -148,11 +214,18 @@ export default function CustomerBookingPage() {
           check_out_date: checkOut,
           adults,
           children,
+          guest_phone: normalizedGuestPhone,
+          promotion_code: promotionIsCurrent ? appliedPromotion?.promotion_code : undefined,
           special_request: specialRequest,
         },
         accessToken,
       );
       setBooking(result.booking);
+      if (Number(result.booking.required_deposit_amount || 0) <= 0) {
+        showToast('Đặt phòng thành công. Booking không cần đặt cọc.', 'success');
+        navigate('/my-bookings');
+        return;
+      }
       const method = vnpayEnabled ? 'VNPAY' : 'SIMULATED';
       const deposit = await createFinalPayment(result.booking.booking_code, method, 'DEPOSIT');
       if (method === 'VNPAY') {
@@ -290,22 +363,39 @@ export default function CustomerBookingPage() {
                 ))}
               </div>
             ) : <p>Hiện chưa có dịch vụ nào đang hoạt động.</p>}
-          </div>
-                <div>
-                    <h3>Áp mã khuyến mãi</h3>
-                      <input type="text"
-                       step="không bắt buoc"
-                      />
-
-
+              <div className="customer-promotion-form">
+                <h3>Áp dụng mã giảm giá</h3>
+                <div className="customer-promotion-controls">
+                  <input aria-label="Mã giảm giá" type="text" value={promotionCode} placeholder="Mã giảm giá của bạn" onChange={(event) => { setPromotionCode(event.target.value.toUpperCase()); setIsPromotionApplied(false); setAppliedPromotion(null); setPromotionMessage(''); }} />
+                  <button type="button" className="btn btn-outline" disabled={!promotionCode.trim() || bookingSubtotal <= 0 || isApplyingPromotion || promotionIsCurrent} onClick={() => { setError(''); setIsPromotionApplied(true); }}>{isApplyingPromotion ? 'Đang kiểm tra...' : promotionIsCurrent ? 'Đã áp dụng' : 'Áp dụng'}</button>
+                  {promotionCode && <button type="button" className="btn btn-outline" onClick={() => { promotionRequestId.current += 1; setPromotionCode(''); setIsPromotionApplied(false); setAppliedPromotion(null); setPromotionMessage('Đã xóa mã giảm giá.'); }}>Xóa mã</button>}
                 </div>
+                {promotionMessage && <p className="customer-promotion-message" role="status">{promotionMessage}</p>}
+              </div>
+
+          </div>
+          <div className="booking-room-summary customer-booking-price-summary" aria-live="polite">
+            <h3>Tổng kết chi phí</h3>
+            <div><span>Tiền phòng</span><strong>{formatMoney(roomSubtotal)}</strong></div>
+            <div><span>Dịch vụ</span><strong>{formatMoney(serviceSubtotal)}</strong></div>
+            <div><span>Tổng trước giảm</span><strong>{formatMoney(bookingSubtotal)}</strong></div>
+            {promotionIsCurrent && appliedPromotion && <>
+              <div><span>Mã giảm giá</span><strong>{appliedPromotion.promotion_code}</strong></div>
+              <div><span>Mức giảm</span><strong>{appliedPromotion.discount_type === 'PERCENT' ? `${appliedPromotion.discount_value}%` : `Giảm cố định ${formatMoney(appliedPromotion.discount_value)}`}</strong></div>
+              <div><span>Số tiền giảm</span><strong>−{formatMoney(appliedPromotion.discount_amount)}</strong></div>
+            </>}
+            <div className="customer-booking-price-total"><span>Tổng sau giảm</span><strong>{formatMoney(netBookingTotal)}</strong></div>
+            <div><span>Đặt cọc dự kiến (30%)</span><strong>{formatMoney(estimatedDeposit)}</strong></div>
+            <div><span>Còn lại sau đặt cọc</span><strong>{formatMoney(estimatedBalance)}</strong></div>
+          </div>
           <div className="booking-room-summary">
             <h3>Thông tin khách đặt</h3>
-            <p>{localUser.full_name || 'Khách hàng'} · {localUser.email || ''} · {localUser.phone || 'Chưa có số điện thoại trong tài khoản'}</p>
+            <p>{localUser.full_name || 'Khách hàng'} · {localUser.email || ''}</p>
+            <label><span>Số điện thoại liên hệ <strong>*</strong></span><input type="tel" inputMode="numeric" autoComplete="tel" required minLength={10} maxLength={10} pattern="[0-9]{10}" value={guestPhone} onChange={(event) => setGuestPhone(event.target.value.replace(/\D/g, '').slice(0, 10))} placeholder="số điện thoại của bạn" /></label>
             <label><span>Yêu cầu thêm (không bắt buộc)</span><textarea maxLength={500} value={specialRequest} onChange={(event) => setSpecialRequest(event.target.value)} /></label>
           </div>
 
-          <button className="btn btn-primary" type="button" disabled={isSubmitting || isLoading || !selectedRoomsAvailable || !selectedCapacityMatched} onClick={() => void handleSubmit()}>
+          <button className="btn btn-primary" type="button" disabled={isSubmitting || isLoading || !selectedRoomsAvailable || !selectedCapacityMatched || isApplyingPromotion || (isPromotionApplied && !promotionIsCurrent)} onClick={() => void handleSubmit()}>
             {isSubmitting ? 'Đang tạo đặt phòng...' : 'Xác nhận đặt phòng'}
           </button>
         </div>

@@ -75,6 +75,16 @@ async function findByCode(code, excludedId = null) {
   return result.recordset[0] || null;
 }
 
+async function findActiveByCode(code) {
+  const pool = await getPool();
+  const result = await pool.request().input('code', sql.VarChar(50), code).query(`
+    SELECT ${selectColumns} FROM promotions
+    WHERE UPPER(LTRIM(RTRIM(code))) = UPPER(@code)
+      AND is_active = 1 AND CAST(GETDATE() AS date) BETWEEN valid_from AND valid_to;
+  `);
+  return result.recordset[0] || null;
+}
+
 async function create(promotion) {
   const pool = await getPool();
   const request = pool.request()
@@ -171,6 +181,7 @@ module.exports = {
   findActive,
   findById,
   findByCode,
+  findActiveByCode,
   create,
   update,
   remove
