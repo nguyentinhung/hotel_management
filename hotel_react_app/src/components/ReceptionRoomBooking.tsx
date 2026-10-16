@@ -19,7 +19,9 @@ import type {
 } from '../types';
 import BookingServicePanel from './BookingServicePanel';
 import BookingRoomSelectionEditor, { type BookingRoomSelection } from './BookingRoomSelectionEditor';
-import { createReceptionCheckout } from '../services/paymentService';
+import { createReceptionCheckout, createReceptionInvoice, getInvoiceDetails } from '../services/paymentService';
+import type { InvoiceDetail } from '../services/paymentService';
+import CheckoutPaymentSuccessModal, { type CheckoutPaymentSuccess } from './CheckoutPaymentSuccessModal';
 import { useToast } from './ToastProvider';
 import DataTable from './DataTable';
 
@@ -228,8 +230,13 @@ export default function ReceptionRoomBooking({
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [isCheckingOut, setIsCheckingOut] = useState<string | number | null>(null);
   const [selectedCheckOutBooking, setSelectedCheckOutBooking] = useState<RecentBooking | null>(null);
+  const [isCreatingInvoice, setIsCreatingInvoice] = useState(false);
+  const [createdInvoice, setCreatedInvoice] = useState<{ detail: InvoiceDetail; created: boolean } | null>(null);
   const [checkOutPaymentMethod, setCheckOutPaymentMethod] = useState<'CASH' | 'VNPAY'>('CASH');
+  const [checkOutPaymentNote, setCheckOutPaymentNote] = useState('');
+  const [cashTendered, setCashTendered] = useState('');
   const vnpayEnabled = import.meta.env.VITE_VNPAY_ENABLED === 'true';
+  const [checkoutSuccess, setCheckoutSuccess] = useState<CheckoutPaymentSuccess | null>(null);
 
   const vietnamToday = getVietnamToday(attentionNow);
   const overdueCheckInCutoffUtc = getVietnamCheckInCutoffUtc(attentionNow);
@@ -575,7 +582,11 @@ export default function ReceptionRoomBooking({
       showToast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.', 'error');
       return;
     }
+    setCreatedInvoice(null);
+    setCheckoutSuccess(null);
     setCheckOutPaymentMethod('CASH');
+    setCheckOutPaymentNote('');
+    setCashTendered('');
     setSelectedCheckOutBooking(booking);
   };
 
@@ -589,21 +600,59 @@ export default function ReceptionRoomBooking({
     }
     const booking = selectedCheckOutBooking;
     const method = checkOutPaymentMethod;
+    const confirmedAt = new Date().toISOString();
+    if (method === 'VNPAY' && !vnpayEnabled) {
+      showToast('VNPay hiện chỉ hiển thị minh họa. Hãy bật cấu hình VNPay để thanh toán qua cổng.', 'error');
+      return;
+    }
     try {
       setIsCheckingOut(booking.id);
       const result = await createReceptionCheckout(booking.id, method);
       if (method === 'VNPAY') {
         if (!result.payment_url) throw new Error('Không nhận được đường dẫn thanh toán VNPay.');
+        if (createdInvoice?.detail.id) sessionStorage.setItem('hotelManagement.checkoutInvoiceId', String(createdInvoice.detail.id));
+        sessionStorage.setItem('hotelManagement.checkoutPaymentCode', result.payment_code);
         window.location.assign(result.payment_url);
         return;
       }
+      if (result.status !== 'SUCCESS' || !result.invoice_id) throw new Error('Backend chưa xác nhận thanh toán thành công. Hóa đơn vẫn được giữ để bạn thử lại.');
+      const detail = await getInvoiceDetails(result.invoice_id);
+      const payment = detail.payments?.find((item) => item.payment_code === result.payment_code);
+      if (!payment || payment.status.toUpperCase() !== 'SUCCESS'
+        || detail.status.toUpperCase() !== 'PAID'
+        || detail.booking_status.toUpperCase() !== 'CHECKED_OUT') {
+        throw new Error('Giao dịch chưa được xác nhận đầy đủ. Hãy kiểm tra trạng thái thanh toán trước khi tiếp tục.');
+      }
+      setCreatedInvoice(null);
       setSelectedCheckOutBooking(null);
+      setCheckoutSuccess({
+        detail,
+        payment: method === 'CASH' ? { ...payment, paid_at: confirmedAt } : payment,
+      });
       await fetchRecent();
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Không thể check-out booking.', 'error');
     } finally {
       setIsCheckingOut(null);
     }
+  };
+
+  const createCheckoutInvoice = async () => {
+    if (!selectedCheckOutBooking) return;
+    try {
+      setIsCreatingInvoice(true);
+      const result = await createReceptionInvoice(selectedCheckOutBooking.id);
+      const detail = await getInvoiceDetails(result.invoice_id);
+      setCreatedInvoice({ detail, created: result.created });
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Không thể tạo hoặc tải hóa đơn.', 'error');
+    } finally {
+      setIsCreatingInvoice(false);
+    }
+  };
+
+  const continueInvoicePayment = () => {
+    void confirmCheckOut();
   };
 
   // Tự động tải dữ liệu khi component được gắn vào giao diện
@@ -858,8 +907,17 @@ export default function ReceptionRoomBooking({
       ? 'Chỉ hiển thị khách đã check-in và đang lưu trú.'
       : 'Booking đã check-in vẫn được giữ tại đây; booking đã checkout nằm trong lịch sử booking.';
 
+  const invoiceBalanceDue = createdInvoice ? Math.max(0, Number(createdInvoice.detail.amount_due) || 0) : 0;
+  const cashTenderedIsEmpty = cashTendered.trim() === '';
+  const cashTenderedAmount = cashTenderedIsEmpty ? 0 : Math.max(0, Number(cashTendered) || 0);
+  const cashChangeDue = Math.max(0, cashTenderedAmount - invoiceBalanceDue);
+  const cashAmountIsInsufficient = Boolean(createdInvoice)
+    && checkOutPaymentMethod === 'CASH'
+    && (cashTenderedIsEmpty || cashTenderedAmount < invoiceBalanceDue);
+
   return (
     <div className={`reception-booking-module${mode === 'management' ? ' booking-management-main-container' : ''}`}>
+      {checkoutSuccess && <CheckoutPaymentSuccessModal result={checkoutSuccess} onClose={() => setCheckoutSuccess(null)} />}
       {mode === 'management' && <>
       <section className="booking-management-toolbar">
         <div>
@@ -1888,12 +1946,12 @@ export default function ReceptionRoomBooking({
             </section>
           </div>
         )}
-        {selectedCheckOutBooking && (
+        {selectedCheckOutBooking && !createdInvoice && (
           <div className="checkout-page-backdrop">
             <section className="checkout-page" role="dialog" aria-modal="true" aria-labelledby="checkout-modal-title">
               <header className="checkout-page-header">
                 <div><span className="checkin-modal-eyebrow">CHECK-OUT GUEST</span><h3 id="checkout-modal-title">Check-out và thanh toán</h3><p>Kiểm tra thông tin lưu trú, đối soát chi phí và hoàn tất trả phòng.</p></div>
-                <button className="checkin-modal-close" type="button" aria-label="Đóng" disabled={isCheckingOut != null} onClick={() => setSelectedCheckOutBooking(null)}>×</button>
+                <button className="checkin-modal-close" type="button" aria-label="Đóng" disabled={isCheckingOut != null || isCreatingInvoice} onClick={() => setSelectedCheckOutBooking(null)}>×</button>
               </header>
               <div className="checkout-page-body">
                 <section className="checkout-page-section">
@@ -1929,26 +1987,157 @@ export default function ReceptionRoomBooking({
                   <p className="checkout-page-note">Các khoản phát sinh ngoài booking cần được ghi nhận vào booking trước khi thu tiền.</p>
                 </section>
                 <section className="checkout-page-section">
-                  <h4>Thanh toán và trả phòng</h4>
-                <fieldset className="checkout-payment-options">
-                  <legend>Chọn phương thức thanh toán</legend>
-                  <label>
-                    <input type="radio" name="checkout-payment-method" value="CASH" checked={checkOutPaymentMethod === 'CASH'} onChange={() => setCheckOutPaymentMethod('CASH')} />
-                    <span>Tiền mặt</span>
-                  </label>
-                  {vnpayEnabled && <label>
-                    <input type="radio" name="checkout-payment-method" value="VNPAY" checked={checkOutPaymentMethod === 'VNPAY'} onChange={() => setCheckOutPaymentMethod('VNPAY')} />
-                    <span>VNPay</span>
-                  </label>}
-                </fieldset>
+                  <h4>Hóa đơn</h4>
                 <div className="checkout-page-actions">
                   <button className="btn btn-outline" type="button" disabled={isCheckingOut != null} onClick={() => setSelectedCheckOutBooking(null)}>Quay lại</button>
-                  <button className="btn btn-primary" type="button" disabled={isCheckingOut != null} onClick={() => void confirmCheckOut()}>
-                    {isCheckingOut != null ? 'Đang xử lý...' : Number(selectedCheckOutBooking.balance_due ?? 0) > 0 ? 'Thanh toán và hoàn tất checkout' : 'Hoàn tất checkout'}
+                  <button className="btn btn-primary checkout-create-invoice-btn" type="button" disabled={isCheckingOut != null || isCreatingInvoice} onClick={() => void createCheckoutInvoice()}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/></svg>
+                    {isCreatingInvoice ? 'Đang tạo hóa đơn…' : 'Tạo hóa đơn'}
                   </button>
                 </div>
                 </section>
               </div>
+            </section>
+          </div>
+        )}
+        {createdInvoice && (
+          <div className="checkout-created-invoice-backdrop" role="presentation" onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !isCheckingOut) setCreatedInvoice(null);
+          }}>
+            <section className="checkout-created-invoice-dialog" role="dialog" aria-modal="true" aria-labelledby="created-invoice-title">
+              <header className="checkout-created-invoice-header">
+                <div>
+                  <span>CHECK-OUT GUEST</span>
+                  <h2 id="created-invoice-title">{createdInvoice.created ? 'Hóa đơn đã được tạo' : 'Thông tin hóa đơn'}</h2>
+                  <p>Kiểm tra thông tin hóa đơn trước khi tiếp tục thanh toán.</p>
+                </div>
+                <button type="button" aria-label="Đóng" disabled={isCheckingOut != null} onClick={() => setCreatedInvoice(null)}>×</button>
+              </header>
+              <div className={`checkout-invoice-notice ${createdInvoice.created ? 'is-success' : 'is-existing'}`} role="status">
+                <span className="checkout-invoice-check" aria-hidden="true">{createdInvoice.created ? '✓' : 'i'}</span>
+                <div>
+                  <strong>{createdInvoice.created ? 'Tạo hóa đơn thành công!' : 'Booking đã có hóa đơn.'}</strong>
+                  <p>Mã hóa đơn: {createdInvoice.detail.invoice_number}. {createdInvoice.created ? 'Vui lòng kiểm tra thông tin bên dưới.' : 'Hệ thống đã mở hóa đơn hiện có, không tạo bản trùng.'}</p>
+                </div>
+              </div>
+              <div className="checkout-created-invoice-body">
+                <div className="checkout-created-invoice-overview">
+                  <section className="checkout-created-invoice-card checkout-created-invoice-main-card">
+                    <h3>Thông tin hóa đơn</h3>
+                    <dl>
+                      <div><dt>Mã hóa đơn</dt><dd>{createdInvoice.detail.invoice_number}</dd></div>
+                      <div><dt>Ngày tạo</dt><dd>{formatVietnamDateTime(createdInvoice.detail.issued_at)}</dd></div>
+                      <div><dt>Trạng thái</dt><dd><span className={`checkout-invoice-status ${createdInvoice.detail.amount_due <= 0 || createdInvoice.detail.status.toUpperCase() === 'PAID' ? 'is-paid' : 'is-open'}`}>{createdInvoice.detail.amount_due <= 0 || createdInvoice.detail.status.toUpperCase() === 'PAID' ? 'Đã thanh toán' : 'Chờ thanh toán'}</span></dd></div>
+                      <div><dt>Nhân viên lập</dt><dd>{createdInvoice.detail.created_by_full_name || '—'}</dd></div>
+                    </dl>
+                  </section>
+                  <section className="checkout-created-invoice-card checkout-created-invoice-booking-card">
+                    <h3>Thông tin booking</h3>
+                    <dl>
+                      <div><dt>Mã booking</dt><dd>{createdInvoice.detail.booking_code}</dd></div>
+                      <div><dt>Loại phòng</dt><dd>{Object.entries(createdInvoice.detail.rooms.reduce<Record<string, number>>((counts, room) => {
+                        if (room.room_type_name) counts[room.room_type_name] = (counts[room.room_type_name] || 0) + 1;
+                        return counts;
+                      }, {})).map(([name, count]) => `${name} × ${count}`).join(', ') || '—'}</dd></div>
+                      <div><dt>Phòng</dt><dd>{createdInvoice.detail.rooms.map((room) => room.room_number).filter(Boolean).join(', ') || '—'}</dd></div>
+                      <div><dt>Nhận phòng</dt><dd>{String(createdInvoice.detail.check_in_date || '').slice(0, 10) || '—'}</dd></div>
+                      <div><dt>Trả phòng</dt><dd>{String(createdInvoice.detail.check_out_date || '').slice(0, 10) || '—'}</dd></div>
+                      <div><dt>Số đêm</dt><dd>{calculateNights(String(createdInvoice.detail.check_in_date || '').slice(0, 10), String(createdInvoice.detail.check_out_date || '').slice(0, 10))}</dd></div>
+                    </dl>
+                  </section>
+                  <section className="checkout-created-invoice-card checkout-created-invoice-customer-card">
+                    <h3>Thông tin khách hàng</h3>
+                    <dl>
+                      <div><dt>Họ và tên</dt><dd>{createdInvoice.detail.customer_full_name || createdInvoice.detail.guest_full_name || '—'}</dd></div>
+                      <div><dt>Số điện thoại</dt><dd>{createdInvoice.detail.customer_phone || createdInvoice.detail.guest_phone || '—'}</dd></div>
+                      <div><dt>Email</dt><dd>{createdInvoice.detail.customer_email || createdInvoice.detail.guest_email || '—'}</dd></div>
+                      <div><dt>CCCD</dt><dd>{createdInvoice.detail.guest_id_card_number || '—'}</dd></div>
+                      <div><dt>Số người lớn</dt><dd>{createdInvoice.detail.adults}</dd></div>
+                      <div><dt>Số trẻ em</dt><dd>{createdInvoice.detail.children}</dd></div>
+                    </dl>
+                  </section>
+                <section className="checkout-created-invoice-card checkout-created-invoice-items">
+                  <h3>Chi tiết khoản mục</h3>
+                  <div className="table-responsive">
+                    <table>
+                      <thead><tr><th>#</th><th>Loại</th><th>Nội dung</th><th>Đơn giá</th><th>Số lượng</th><th>Thành tiền</th></tr></thead>
+                      <tbody>{createdInvoice.detail.items.length ? createdInvoice.detail.items.map((item, index) => {
+                        const roomIndex = createdInvoice.detail.items.slice(0, index).filter((candidate) => candidate.item_type === 'ROOM').length;
+                        const room = item.item_type === 'ROOM' ? createdInvoice.detail.rooms[roomIndex] : undefined;
+                        const description = room
+                          ? `${room.room_type_name} - ${room.room_number || 'Chưa xếp'}`
+                          : item.item_type === 'SERVICE' && item.room_number
+                            ? `${item.description} - ${item.room_number}`
+                            : item.description || '—';
+                        return <tr key={`${item.item_type}-${index}`}>
+                          <td>{index + 1}</td>
+                          <td>{item.item_type === 'ROOM' ? 'Tiền phòng' : item.item_type === 'SERVICE' ? 'Dịch vụ' : item.item_type === 'OTHER' ? 'Phụ thu' : item.item_type}</td>
+                          <td>{description}</td>
+                          <td>{formatCurrency(item.unit_price)}</td>
+                          <td>{item.item_type === 'ROOM' ? `1 phòng · ${item.quantity} đêm` : item.quantity}</td>
+                          <td>{formatCurrency(item.amount)}</td>
+                        </tr>;
+                      }) : <tr><td colSpan={6} className="checkout-invoice-empty">Hóa đơn chưa có khoản mục.</td></tr>}</tbody>
+                    </table>
+                  </div>
+                </section>
+                </div>
+                <div className="checkout-created-invoice-payment">
+                  <div className="checkout-created-invoice-payment-left">
+                    <section className="checkout-created-invoice-card checkout-created-invoice-method-card">
+                      <h3>Phương thức thanh toán</h3>
+                      <fieldset className="checkout-created-invoice-methods">
+                        <label className={checkOutPaymentMethod === 'CASH' ? 'is-selected' : ''}>
+                          <input type="radio" name="checkout-invoice-payment-method" value="CASH" checked={checkOutPaymentMethod === 'CASH'} onChange={() => setCheckOutPaymentMethod('CASH')} />
+                          <svg className="checkout-payment-method-icon cash" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="2" stroke="currentColor" strokeWidth="1.8"/><path d="M4 10h16M8 15h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/><path d="M7 7V5h11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
+                          <span><strong>Tiền mặt</strong><small>Thanh toán trực tiếp tại quầy</small></span>
+                        </label>
+                        <label className={`${checkOutPaymentMethod === 'VNPAY' ? 'is-selected' : ''}${!vnpayEnabled ? ' is-demo' : ''}`} title={!vnpayEnabled ? 'VNPay chỉ hiển thị minh họa; chưa bật cấu hình thanh toán' : undefined}>
+                          <input type="radio" name="checkout-invoice-payment-method" value="VNPAY" checked={checkOutPaymentMethod === 'VNPAY'} onChange={() => setCheckOutPaymentMethod('VNPAY')} aria-label="Thanh toán qua cổng VNPay" />
+                          <span className="checkout-payment-method-vnpay-brand">
+                            <img className="checkout-payment-method-logo-vnpay" src="/vnpay-logo-full.jpg" alt="VNPay — Cho cuộc sống đơn giản hơn" />
+                            <small>Thanh toán qua cổng VNPay</small>
+                          </span>
+                        </label>
+                      </fieldset>
+                    </section>
+                    <section className="checkout-created-invoice-card checkout-created-invoice-note-card">
+                      <h3>Ghi chú (tùy chọn)</h3>
+                      <textarea value={checkOutPaymentNote} onChange={(event) => setCheckOutPaymentNote(event.target.value)} maxLength={500} rows={3} placeholder="Nhập ghi chú..." />
+                      <small>{checkOutPaymentNote.length}/500</small>
+                    </section>
+                  </div>
+                  <div className="checkout-created-invoice-payment-right">
+                    <section className="checkout-created-invoice-card checkout-created-invoice-summary">
+                      <h3>Tổng kết hóa đơn</h3>
+                      <div><span>Tổng tiền</span><strong>{formatCurrency(createdInvoice.detail.total_amount)}</strong></div>
+                      <div><span>Đã thanh toán (tiền cọc)</span><strong>{formatCurrency(createdInvoice.detail.deposit_paid)}</strong></div>
+                      <div className="checkout-invoice-due"><span>Số tiền còn phải thanh toán</span><strong>{formatCurrency(createdInvoice.detail.amount_due)}</strong></div>
+                    </section>
+                    {checkOutPaymentMethod === 'CASH' && <section className="checkout-created-invoice-card checkout-cash-payment-card">
+                      <h3>Thông tin thanh toán tiền mặt</h3>
+                      <div className="checkout-cash-payment-row">
+                        <label htmlFor="checkout-cash-tendered">Tiền khách đưa</label>
+                        <div className="checkout-cash-input-wrap">
+                          <input id="checkout-cash-tendered" type="number" min="0" step="1" inputMode="numeric" value={cashTendered} onChange={(event) => setCashTendered(event.target.value)} placeholder="Nhập số tiền khách đưa" />
+                          <span>₫</span>
+                        </div>
+                      </div>
+                      <div className="checkout-cash-payment-row">
+                        <span>Tiền trả lại khách</span>
+                        <strong className={cashChangeDue > 0 ? 'has-change' : ''}>{formatCurrency(cashChangeDue)}</strong>
+                      </div>
+                      {cashAmountIsInsufficient && <p className="checkout-cash-insufficient">{cashTenderedIsEmpty ? 'Vui lòng nhập số tiền khách đưa.' : 'Tiền khách đưa chưa đủ số tiền cần thanh toán.'}</p>}
+                    </section>}
+                  </div>
+                </div>
+              </div>
+              <footer className="checkout-created-invoice-actions">
+                <button className="btn btn-outline" type="button" disabled={isCheckingOut != null} onClick={() => setCreatedInvoice(null)}>← Quay lại chỉnh sửa</button>
+                <button className="btn btn-primary" type="button" disabled={isCheckingOut != null || createdInvoice.detail.amount_due <= 0 || createdInvoice.detail.status.toUpperCase() === 'PAID' || cashAmountIsInsufficient} onClick={continueInvoicePayment}>
+                  {createdInvoice.detail.amount_due <= 0 || createdInvoice.detail.status.toUpperCase() === 'PAID' ? 'Đã thanh toán' : isCheckingOut != null ? 'Đang xử lý…' : 'Xác nhận thanh toán'}
+                </button>
+              </footer>
             </section>
           </div>
         )}

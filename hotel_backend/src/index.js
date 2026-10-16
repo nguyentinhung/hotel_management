@@ -12,15 +12,15 @@ const cors = require('cors');
 const multer = require('multer');
 const sql = require('mssql');
 const jwt = require('jsonwebtoken');
-const { getPool, ensureAuthTables, ensureBookingStatusConstraint, ensureGuestIdCardOptional } = require('./config/db');
+const { getPool, ensureAuthTables, ensureBookingStatusConstraint, ensureGuestIdCardOptional, ensureInvoiceCreatorColumn } = require('./config/db');
 // Seed data đã được tắt để dùng dữ liệu mẫu bạn insert trực tiếp trong SQL Server.
 const { getHomeData, getRoomTypes, getRoomTypeDetails, getPromotions, getServices, getActiveServiceById, getReviews } = require('./controllers/homeController');
 const { register, login, logout, verifyEmail, forgotPassword, resetPassword } = require('./controllers/authController');
 const { checkAvailability, getAvailableRooms } = require('./controllers/roomController');
-const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, updateBookingHandler, cancelBookingHandler, getActiveBookingsHandler, checkOutBookingHandler, finishRoomCleaningHandler, reportRoomMaintenanceHandler, getRoomMaintenanceReportsHandler, resolveRoomMaintenanceReportHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
+const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, updateBookingHandler, cancelBookingHandler, getActiveBookingsHandler, checkOutBookingHandler, createReceptionInvoiceHandler, finishRoomCleaningHandler, reportRoomMaintenanceHandler, getRoomMaintenanceReportsHandler, resolveRoomMaintenanceReportHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
 const serviceController = require('./controllers/serviceController');
 const { requireCustomer, requirePaymentStaff, requirePaymentActor } = require('./services/customerAuth');
-const { createPayment, getPaymentList, getCustomerPaymentList, getInvoiceList, getPaymentStatusRequest, confirmPaymentRequest, simulateDepositPaymentRequest } = require('./controllers/paymentController');
+const { createPayment, getPaymentList, getCustomerPaymentList, getInvoiceList, getInvoiceDetail, getPaymentStatusRequest, confirmPaymentRequest, simulateDepositPaymentRequest } = require('./controllers/paymentController');
 const { handleVnpayReturn, handleVnpayIpn } = require('./controllers/vnpayController');
 const bookingServiceController = require('./controllers/bookingServiceController');
 const app = express();
@@ -408,6 +408,7 @@ app.patch('/api/bookings/:bookingId', updateBookingHandler);
 app.post('/api/bookings/:bookingId/cancel', cancelBookingHandler);
 app.post('/api/bookings/:bookingId/check-in', checkInBookingHandler);
 app.post('/api/bookings/:bookingId/check-out', checkOutBookingHandler);
+app.post('/api/bookings/:bookingId/invoice', createReceptionInvoiceHandler);
 app.get('/api/bookings/:bookingId/assignable-rooms', getAssignableRoomsHandler);
 app.post('/api/bookings/:bookingId/assign-room', assignRoomHandler);
 app.post('/api/rooms/:roomId/cleaning-complete', finishRoomCleaningHandler);
@@ -427,6 +428,8 @@ app.get('/api/payments', requirePaymentStaff, getPaymentList);
 app.get('/api/payments/my', requireCustomer, getCustomerPaymentList);
 app.get('/api/invoices', requirePaymentStaff, getInvoiceList);
 app.get('/api/invoices/my', requireCustomer, getInvoiceList);
+app.get('/api/invoices/:invoiceId', requirePaymentStaff, getInvoiceDetail);
+app.get('/api/invoices/my/:invoiceId', requireCustomer, getInvoiceDetail);
 app.get('/api/payments/:paymentCode/status', requirePaymentActor, getPaymentStatusRequest);
 app.patch('/api/payments/:paymentCode/confirm', requirePaymentStaff, confirmPaymentRequest);
 app.post('/api/payments/:paymentCode/simulate', requireCustomer, simulateDepositPaymentRequest);
@@ -547,6 +550,7 @@ async function bootstrap() {
   await ensureAuthTables();
   await ensureBookingStatusConstraint();
   await ensureGuestIdCardOptional();
+  await ensureInvoiceCreatorColumn();
   const pool = await getPool();
   await pool.request().query(`
     IF OBJECT_ID(N'dbo.services', N'U') IS NOT NULL

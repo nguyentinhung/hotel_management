@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 const { createWalkInBooking, createCustomerBooking, checkInBooking, getRecentBookings, getActiveBookings, updateBooking, cancelBooking, checkOutBooking, updateRoomStatus, reportRoomMaintenance, getOpenRoomMaintenanceReports, resolveRoomMaintenanceReport, getRoomStatuses, getAssignableRooms, assignRoomToBooking } = require('../dao/bookingDao');
-const { makeReceptionCheckoutPayment } = require('../services/paymentService');
+const { makeReceptionCheckoutPayment, createReceptionInvoice } = require('../services/paymentService');
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
 const roleCodeById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
 const hasRole = (claims, ...roles) => {
@@ -411,6 +411,7 @@ async function checkOutBookingHandler(req, res) {
       bookingId: req.params.bookingId,
       method: req.body?.payment_method,
       ipAddress: req.ip,
+      createdByUserId: claims.user_id,
     });
     return res.json({
       success: true,
@@ -422,6 +423,25 @@ async function checkOutBookingHandler(req, res) {
     if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
     const notFound = /not found/i.test(error.message);
     return res.status(notFound ? 404 : 409).json({ success: false, message: notFound ? 'Không tìm thấy booking.' : 'Booking này chưa check-in hoặc không thể check-out.' });
+  }
+}
+
+async function createReceptionInvoiceHandler(req, res) {
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/, '');
+  let claims;
+  try { claims = jwt.verify(token, JWT_SECRET); } catch {
+    return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
+  }
+  if (!hasRole(claims, 'RECEPTIONIST', 'ADMIN')) return res.status(403).json({ success: false, message: 'Chỉ lễ tân hoặc quản trị viên mới được tạo hóa đơn.' });
+  const bookingId = Number(req.params.bookingId);
+  if (!Number.isSafeInteger(bookingId) || bookingId < 1) return res.status(400).json({ success: false, message: 'Mã booking không hợp lệ.' });
+  try {
+    const invoice = await createReceptionInvoice(bookingId, claims.user_id);
+    return res.json({ success: true, message: invoice.created ? 'Đã tạo hóa đơn.' : 'Booking đã có hóa đơn.', ...invoice });
+  } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
+    console.error('Create reception invoice error:', error);
+    return res.status(500).json({ success: false, message: 'Không thể tạo hóa đơn.' });
   }
 }
 
@@ -558,6 +578,7 @@ module.exports = {
   cancelBookingHandler,
   getActiveBookingsHandler,
   checkOutBookingHandler,
+  createReceptionInvoiceHandler,
   finishRoomCleaningHandler,
   reportRoomMaintenanceHandler,
   getRoomMaintenanceReportsHandler,

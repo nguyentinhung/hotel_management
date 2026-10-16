@@ -202,10 +202,26 @@ async function ensureGuestIdCardOptional() {
   `);
 }
 
+async function ensureInvoiceCreatorColumn() {
+  const currentPool = await getPool();
+  await currentPool.request().query(`
+    IF COL_LENGTH('dbo.invoices', 'created_by_user_id') IS NULL
+      ALTER TABLE dbo.invoices ADD created_by_user_id BIGINT NULL;
+
+    IF NOT EXISTS (
+      SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_invoices_created_by_user'
+    )
+      ALTER TABLE dbo.invoices WITH CHECK
+        ADD CONSTRAINT FK_invoices_created_by_user
+        FOREIGN KEY (created_by_user_id) REFERENCES dbo.users(id);
+  `);
+}
+
 module.exports = {
   sql,
   getPool,
   ensureAuthTables,
   ensureBookingStatusConstraint,
   ensureGuestIdCardOptional,
+  ensureInvoiceCreatorColumn,
 };

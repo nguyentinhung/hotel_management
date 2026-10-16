@@ -1,4 +1,4 @@
-const { makePayment, simulateDepositPayment, getPayments, getCustomerPayments, getInvoices, getPaymentStatus, confirmPayment } = require('../services/paymentService');
+const { makePayment, simulateDepositPayment, getPayments, getCustomerPayments, getInvoices, getInvoiceDetails, getPaymentStatus, confirmPayment } = require('../services/paymentService');
 
 async function getInvoiceList(req, res) {
   try {
@@ -7,6 +7,22 @@ async function getInvoiceList(req, res) {
   } catch (error) {
     console.error('Get invoice list error:', error);
     return res.status(500).json({ message: 'Khong the tai danh sach hoa don.' });
+  }
+}
+
+async function getInvoiceDetail(req, res) {
+  const invoiceId = Number(req.params.invoiceId);
+  if (!Number.isSafeInteger(invoiceId) || invoiceId < 1) {
+    return res.status(400).json({ message: 'Mã hóa đơn không hợp lệ.' });
+  }
+  try {
+    const customerId = req.auth.roleCode === 'CUSTOMER' ? req.auth.userId : null;
+    const invoice = await getInvoiceDetails(invoiceId, customerId);
+    if (!invoice) return res.status(404).json({ message: 'Không tìm thấy hóa đơn.' });
+    return res.json(invoice);
+  } catch (error) {
+    console.error('Get invoice detail error:', error);
+    return res.status(500).json({ message: 'Không thể tải chi tiết hóa đơn.' });
   }
 }
 
@@ -113,6 +129,7 @@ async function getPaymentStatusRequest(req, res) {
       payment_type: payment.payment_type,
       amount: Number(payment.amount),
       status: payment.status,
+      invoice_id: payment.invoice_id == null ? null : Number(payment.invoice_id),
     });
   } catch (error) {
     console.error('Get payment status error:', error);
@@ -159,4 +176,4 @@ async function simulateDepositPaymentRequest(req, res) {
   }
 }
 
-module.exports = { createPayment, getPaymentList, getCustomerPaymentList, getInvoiceList, getPaymentStatusRequest, confirmPaymentRequest, simulateDepositPaymentRequest };
+module.exports = { createPayment, getPaymentList, getCustomerPaymentList, getInvoiceList, getInvoiceDetail, getPaymentStatusRequest, confirmPaymentRequest, simulateDepositPaymentRequest };

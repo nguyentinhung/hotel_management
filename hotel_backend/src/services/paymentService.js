@@ -4,9 +4,11 @@ const {
   createCustomerDepositPayment,
   completeSimulatedDepositPayment,
   createReceptionCheckoutPayment,
+  createReceptionInvoice: createReceptionInvoiceDao,
   getPaymentList,
   getCustomerPaymentList,
   getInvoiceList: getInvoiceListDao,
+  getInvoiceDetails: getInvoiceDetailsDao,
   getPaymentStatus: getPaymentStatusByCode,
   confirmPaymentByCode,
   completeVnpayPayment,
@@ -68,7 +70,7 @@ async function simulateDepositPayment({ paymentCode, customerId, succeeded }) {
   return completeSimulatedDepositPayment({ paymentCode, customerId, succeeded });
 }
 
-async function makeReceptionCheckoutPayment({ bookingId, method, ipAddress }) {
+async function makeReceptionCheckoutPayment({ bookingId, method, ipAddress, createdByUserId }) {
   const normalizedMethod = String(method || '').toUpperCase();
   if (normalizedMethod !== 'CASH' && !(vnpayEnabled && normalizedMethod === 'VNPAY')) {
     const error = new Error(vnpayEnabled ? 'Vui lòng chọn phương thức thanh toán hợp lệ.' : 'VNPay đang tạm dừng; hiện chỉ hỗ trợ thanh toán tiền mặt tại quầy.');
@@ -77,10 +79,14 @@ async function makeReceptionCheckoutPayment({ bookingId, method, ipAddress }) {
   }
   if (normalizedMethod === 'VNPAY') getVnpayConfig();
   const paymentCode = `PAY${Date.now().toString(36).toUpperCase()}${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
-  const payment = await createReceptionCheckoutPayment({ bookingId, paymentCode, method: normalizedMethod });
+  const payment = await createReceptionCheckoutPayment({ bookingId, paymentCode, method: normalizedMethod, createdByUserId });
   return normalizedMethod === 'VNPAY' && payment.amount > 0
     ? { ...payment, payment_url: buildVnpayPaymentUrl({ paymentCode, amount: payment.amount, ipAddress }) }
     : payment;
+}
+
+async function createReceptionInvoice(bookingId, createdByUserId) {
+  return createReceptionInvoiceDao(bookingId, createdByUserId);
 }
 
 async function getPayments() {
@@ -107,6 +113,30 @@ async function getInvoices(customerId = null) {
       ...item, quantity: Number(item.quantity), unit_price: Number(item.unit_price), amount: Number(item.amount),
     })) : [],
   }));
+}
+
+async function getInvoiceDetails(invoiceId, customerId = null) {
+  const invoice = await getInvoiceDetailsDao(invoiceId, customerId);
+  if (!invoice) return null;
+  const parseItems = (value) => value ? (Array.isArray(value) ? value : JSON.parse(value)) : [];
+  return {
+    ...invoice,
+    id: Number(invoice.id),
+    adults: Number(invoice.adults),
+    children: Number(invoice.children),
+    room_amount: Number(invoice.room_amount),
+    service_amount: Number(invoice.service_amount),
+    discount_amount: Number(invoice.discount_amount),
+    tax_amount: Number(invoice.tax_amount),
+    total_amount: Number(invoice.total_amount),
+    deposit_paid: Number(invoice.deposit_paid),
+    amount_due: Number(invoice.amount_due),
+    items: parseItems(invoice.items).map((item) => ({
+      ...item, quantity: Number(item.quantity), unit_price: Number(item.unit_price), amount: Number(item.amount),
+    })),
+    payments: parseItems(invoice.payments).map((payment) => ({ ...payment, amount: Number(payment.amount) })),
+    rooms: parseItems(invoice.rooms),
+  };
 }
 
 async function getPaymentStatus(paymentCode, customerId = null) {
@@ -161,4 +191,4 @@ async function inspectVnpayReturn(params) {
   return { ...payment, paymentCode, succeeded };
 }
 
-module.exports = { makePayment, simulateDepositPayment, makeReceptionCheckoutPayment, getPayments, getCustomerPayments, getInvoices, getPaymentStatus, confirmPayment, handleVnpayCallback, inspectVnpayReturn };
+module.exports = { makePayment, simulateDepositPayment, makeReceptionCheckoutPayment, createReceptionInvoice, getPayments, getCustomerPayments, getInvoices, getInvoiceDetails, getPaymentStatus, confirmPayment, handleVnpayCallback, inspectVnpayReturn };

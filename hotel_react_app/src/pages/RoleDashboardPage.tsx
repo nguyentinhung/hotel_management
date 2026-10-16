@@ -609,14 +609,16 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
       return;
     }
 
+    const requestedModule = new URLSearchParams(location.search).get('module');
     setActiveModule((previous) => {
+      if (requestedModule && config.nav.some((item) => item.label === requestedModule)) return requestedModule;
       if (previous && config.nav.some((item) => item.label === previous)) {
         return previous;
       }
 
       return config.nav[0].label;
     });
-  }, [config]);
+  }, [config, location.search]);
 
   const activeItem = config.nav.find((item) => item.label === activeModule)
     ?? (currentRole === 'RECEPTIONIST' && activeModule === 'Lịch sử booking'

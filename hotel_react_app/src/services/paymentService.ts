@@ -28,6 +28,7 @@ export interface PaymentGuestDetail {
 export interface PaymentInvoiceItem {
   item_type: 'ROOM' | 'SERVICE' | 'OTHER';
   description: string;
+  room_number?: string | null;
   quantity: number;
   unit_price: number;
   amount: number;
@@ -84,10 +85,71 @@ export interface InvoiceListItem {
   status: string;
   issued_at: string;
   items: PaymentInvoiceItem[];
+  room_amount?: number;
+  service_amount?: number;
+  discount_amount?: number;
+  tax_amount?: number;
+  check_in_date?: string;
+  check_out_date?: string;
+  guest_email?: string;
+  customer_email?: string | null;
+  booking_status?: string;
+  adults?: number;
+  children?: number;
+  special_request?: string | null;
+}
+
+export interface InvoiceDetail extends InvoiceListItem {
+  created_by_full_name?: string | null;
+  room_amount: number;
+  service_amount: number;
+  discount_amount: number;
+  tax_amount: number;
+  check_in_date: string;
+  check_out_date: string;
+  booking_status: string;
+  guest_email: string;
+  special_request: string | null;
+  adults: number;
+  children: number;
+  customer_email: string | null;
+  guest_id_card_number?: string | null;
+  items: PaymentInvoiceItem[];
+  payments: Array<{
+    payment_code: string;
+    payment_type: string;
+    method: string;
+    amount: number;
+    status: string;
+    paid_at: string | null;
+    vnpay_transaction_no: string | null;
+  }>;
+  rooms: Array<{
+    room_number: string | null;
+    floor: number | null;
+    room_status: string | null;
+    room_type_name: string;
+  }>;
 }
 
 export function getInvoiceList(customerOnly = false): Promise<InvoiceListItem[]> {
   return api.get<InvoiceListItem[]>(customerOnly ? '/api/invoices/my' : '/api/invoices', localStorage.getItem('accessToken') || undefined);
+}
+
+export function getInvoiceDetails(invoiceId: number, customerOnly = false): Promise<InvoiceDetail> {
+  const path = customerOnly ? `/api/invoices/my/${invoiceId}` : `/api/invoices/${invoiceId}`;
+  return api.get<InvoiceDetail>(path, localStorage.getItem('accessToken') || undefined);
+}
+
+export function createReceptionInvoice(bookingId: string | number): Promise<{
+  success: boolean;
+  message: string;
+  invoice_id: number;
+  invoice_number: string;
+  status: string;
+  created: boolean;
+}> {
+  return api.post(`/api/bookings/${bookingId}/invoice`, {}, localStorage.getItem('accessToken') || undefined);
 }
 
 export function createFinalPayment(bookingCode: string, method: 'CASH' | 'VNPAY' | 'SIMULATED', paymentType: 'FINAL' | 'DEPOSIT' = 'FINAL'): Promise<CreatePaymentResponse> {
@@ -98,8 +160,8 @@ export function createFinalPayment(bookingCode: string, method: 'CASH' | 'VNPAY'
   );
 }
 
-export function createReceptionCheckout(bookingId: string | number, method: 'CASH' | 'VNPAY'): Promise<Omit<CreatePaymentResponse, 'status'> & { status: 'PENDING' | 'SUCCESS'; success: boolean; message: string }> {
-  return api.post<Omit<CreatePaymentResponse, 'status'> & { status: 'PENDING' | 'SUCCESS'; success: boolean; message: string }>(
+export function createReceptionCheckout(bookingId: string | number, method: 'CASH' | 'VNPAY'): Promise<Omit<CreatePaymentResponse, 'status'> & { status: 'PENDING' | 'SUCCESS'; success: boolean; message: string; invoice_id: number | null; invoice_number: string | null }> {
+  return api.post<Omit<CreatePaymentResponse, 'status'> & { status: 'PENDING' | 'SUCCESS'; success: boolean; message: string; invoice_id: number | null; invoice_number: string | null }>(
     `/api/bookings/${bookingId}/check-out`,
     { payment_method: method },
     localStorage.getItem('accessToken') || undefined,
@@ -120,6 +182,7 @@ export interface PaymentStatusResponse {
   payment_type: 'DEPOSIT' | 'FINAL';
   amount: number;
   status: 'PENDING' | 'SUCCESS' | 'FAILED' | 'CANCELLED';
+  invoice_id?: number | null;
 }
 
 export function getPaymentStatus(paymentCode: string): Promise<PaymentStatusResponse> {

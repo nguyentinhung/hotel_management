@@ -1,7 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { Link } from 'react-router-dom';
-import { createFinalPayment, getPaymentStatus, simulateDepositPayment, type PaymentStatusResponse } from '../services/paymentService';
+import { Link, useNavigate } from 'react-router-dom';
+import { createFinalPayment, getInvoiceDetails, getPaymentStatus, simulateDepositPayment, type InvoiceDetail, type PaymentStatusResponse } from '../services/paymentService';
 import { resolveRole } from '../utils/role';
+import CheckoutPaymentSuccessModal, { type CheckoutPaymentSuccess } from '../components/CheckoutPaymentSuccessModal';
 
 interface PaymentReceipt {
   payment_code: string;
@@ -15,6 +16,7 @@ const formatVnd = (amount: number) =>
 const vnpayEnabled = import.meta.env.VITE_VNPAY_ENABLED === 'true';
 
 export default function MakePaymentPage() {
+  const navigate = useNavigate();
   const initialParams = new URLSearchParams(window.location.search);
   const initialPaymentType = initialParams.get('paymentType') === 'DEPOSIT' ? 'DEPOSIT' : 'FINAL';
   const isSimulatedDeposit = initialPaymentType === 'DEPOSIT' && !vnpayEnabled;
@@ -31,12 +33,16 @@ export default function MakePaymentPage() {
   const [returnMessage, setReturnMessage] = useState('');
   const [showPaymentSuccess, setShowPaymentSuccess] = useState(false);
   const [isPaymentConfirmed, setIsPaymentConfirmed] = useState(false);
+  const [checkoutPaymentSuccess, setCheckoutPaymentSuccess] = useState<CheckoutPaymentSuccess | null>(null);
   const storedUser = (() => {
     try { return JSON.parse(localStorage.getItem('user') || '{}') as { role?: string; role_id?: number; role_code?: string; role_name?: string }; }
     catch { return {}; }
   })();
   const isReceptionCheckout = paymentType === 'FINAL'
     && ['RECEPTIONIST', 'ADMIN'].includes(resolveRole(storedUser) || '');
+  const checkoutReturnPath = resolveRole(storedUser) === 'ADMIN'
+    ? '/admin?module=Check-out Guest'
+    : '/reception?module=Check-out';
   const successHeading = isReceptionCheckout ? 'Checkout đã thanh toán thành công' : 'Thanh toán thành công';
   const successReturnPath = isReceptionCheckout ? '/reception' : '/';
   const successReturnLabel = isReceptionCheckout ? 'Quay về lễ tân' : 'Quay về trang chủ';
@@ -84,8 +90,24 @@ export default function MakePaymentPage() {
         if (payment?.status === 'SUCCESS') {
           if (!cancelled) {
             setReturnMessage('');
-            setIsPaymentConfirmed(true);
-            setShowPaymentSuccess(true);
+            if (isReceptionCheckout) {
+              if (payment.payment_type !== 'FINAL') throw new Error('Giao dịch này không phải khoản thanh toán checkout.');
+              const storedInvoiceId = sessionStorage.getItem('hotelManagement.checkoutInvoiceId');
+              const invoiceId = payment.invoice_id || (storedInvoiceId ? Number(storedInvoiceId) : null);
+              if (!invoiceId) throw new Error('Không tìm thấy hóa đơn gắn với giao dịch checkout.');
+              const detail: InvoiceDetail = await getInvoiceDetails(invoiceId);
+              const confirmedPayment = detail.payments?.find((item) => item.payment_code === paymentCode);
+              if (!confirmedPayment || confirmedPayment.status.toUpperCase() !== 'SUCCESS'
+                || detail.status.toUpperCase() !== 'PAID' || detail.booking_status.toUpperCase() !== 'CHECKED_OUT') {
+                throw new Error('Backend chưa xác nhận đầy đủ trạng thái hóa đơn và check-out.');
+              }
+              sessionStorage.removeItem('hotelManagement.checkoutInvoiceId');
+              sessionStorage.removeItem('hotelManagement.checkoutPaymentCode');
+              setCheckoutPaymentSuccess({ detail, payment: confirmedPayment });
+            } else {
+              setIsPaymentConfirmed(true);
+              setShowPaymentSuccess(true);
+            }
           }
           return;
         }
@@ -93,8 +115,9 @@ export default function MakePaymentPage() {
           if (!cancelled) setReturnMessage('Giao dịch chưa hoàn tất. Bạn có thể kiểm tra lại lịch sử thanh toán.');
           return;
         }
-      } catch {
+      } catch (statusError) {
         // The IPN may still be processing; retry briefly before showing pending status.
+        if (attempts >= 29 && !cancelled) setReturnMessage(statusError instanceof Error ? statusError.message : 'Chưa thể xác nhận giao dịch với hóa đơn.');
       }
       attempts += 1;
       if (cancelled) return;
@@ -111,7 +134,7 @@ export default function MakePaymentPage() {
       cancelled = true;
       if (timeout) clearTimeout(timeout);
     };
-  }, []);
+  }, [isReceptionCheckout]);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -192,6 +215,7 @@ export default function MakePaymentPage() {
 
   return (
     <main className="payment-page">
+      {checkoutPaymentSuccess && <CheckoutPaymentSuccessModal result={checkoutPaymentSuccess} onClose={() => navigate(checkoutReturnPath)} />}
       {showPaymentSuccess && (
         <div className="modal-backdrop" role="presentation">
           <section className="payment-success-dialog" role="alertdialog" aria-modal="true" aria-labelledby="payment-success-title">
