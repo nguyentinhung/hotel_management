@@ -16,7 +16,7 @@ interface ServiceListPageProps {
     role?: string;
 }
 
-const SERVICE_PAGE_SIZE = 10;
+const SERVICE_PAGE_SIZE = 5;
 
 function SearchIcon() {
     return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m16 16 4.5 4.5"/></svg>;
@@ -38,7 +38,9 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
     const [view, setView] = useState<'list' | 'create' | 'details' | 'edit'>('list');
     const [selectedService, setSelectedService] = useState<Service | null>(null);
     const [searchTerm, setSearchTerm] = useState('');
+    const [appliedSearch, setAppliedSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
+    const [typeFilter, setTypeFilter] = useState<'ALL' | Service['booking_policy']>('ALL');
     const [currentPage, setCurrentPage] = useState(1);
 
     // Kiểm tra quyền ADMIN
@@ -64,14 +66,15 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
     }, [role]);
 
     const filteredServices = useMemo(() => {
-        const query = searchTerm.trim().toLocaleLowerCase('vi');
+        const query = appliedSearch.trim().toLocaleLowerCase('vi');
         return services.filter((service) => {
             const matchesQuery = !query || `${service.name} ${service.description ?? ''}`.toLocaleLowerCase('vi').includes(query);
             const matchesStatus = statusFilter === 'ALL'
                 || (statusFilter === 'ACTIVE' ? service.is_active : !service.is_active);
-            return matchesQuery && matchesStatus;
+            const matchesType = typeFilter === 'ALL' || service.booking_policy === typeFilter;
+            return matchesQuery && matchesStatus && matchesType;
         });
-    }, [services, searchTerm, statusFilter]);
+    }, [services, appliedSearch, statusFilter, typeFilter]);
     const pageCount = Math.max(1, Math.ceil(filteredServices.length / SERVICE_PAGE_SIZE));
     const pageServices = filteredServices.slice((currentPage - 1) * SERVICE_PAGE_SIZE, currentPage * SERVICE_PAGE_SIZE);
     const firstVisibleService = filteredServices.length === 0 ? 0 : (currentPage - 1) * SERVICE_PAGE_SIZE + 1;
@@ -83,7 +86,9 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
 
     const handleRefresh = () => {
         setSearchTerm('');
+        setAppliedSearch('');
         setStatusFilter('ALL');
+        setTypeFilter('ALL');
         setCurrentPage(1);
         void loadServices();
     };
@@ -244,13 +249,21 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
                         <h3 id="service-list-title">Danh sách dịch vụ</h3>
                         <span>({services.length} dịch vụ)</span>
                     </div>
-                    {isAdmin && <button type="button" className="service-create-button" onClick={handleOpenCreate}>+ Add Service</button>}
                 </div>
+                <p className="service-list-description">Xem và quản lý các dịch vụ trong khách sạn.</p>
 
                 <div className="service-list-toolbar">
-                    <label className="service-search-field">
+                    <form className="service-search-field" role="search" onSubmit={(event) => { event.preventDefault(); setAppliedSearch(searchTerm); setCurrentPage(1); }}>
                         <span className="sr-only">Tìm theo tên dịch vụ hoặc mô tả</span>
-                        <span className="service-search-control"><SearchIcon /><input type="search" value={searchTerm} placeholder="Tìm theo tên dịch vụ hoặc mô tả..." onChange={(event) => { setSearchTerm(event.target.value); setCurrentPage(1); }} /></span>
+                        <span className="service-search-control"><SearchIcon /><input type="search" value={searchTerm} placeholder="Tìm theo tên dịch vụ, mô tả..." onChange={(event) => setSearchTerm(event.target.value)} /></span>
+                    </form>
+                    <label className="service-status-filter">
+                        <span>Loại dịch vụ</span>
+                        <select value={typeFilter} onChange={(event) => { setTypeFilter(event.target.value as typeof typeFilter); setCurrentPage(1); }}>
+                            <option value="ALL">Tất cả</option>
+                            <option value="PREBOOK">Đặt trước</option>
+                            <option value="ON_DEMAND">Khi khách yêu cầu</option>
+                        </select>
                     </label>
                     <label className="service-status-filter">
                         <span>Trạng thái</span>
@@ -260,7 +273,9 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
                             <option value="INACTIVE">Inactive</option>
                         </select>
                     </label>
+                    <button type="button" className="service-search-button" onClick={() => { setAppliedSearch(searchTerm); setCurrentPage(1); }}><SearchIcon />Search</button>
                     <button type="button" className="service-refresh-button dashboard-refresh-button" onClick={handleRefresh} disabled={loading}><RefreshIcon />Làm mới</button>
+                    {isAdmin && <button type="button" className="service-create-button" onClick={handleOpenCreate}>+ Thêm dịch vụ</button>}
                 </div>
 
                 {loadError ? (
@@ -275,9 +290,9 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
                 ) : (
                     <>
                         <DataTable className="service-table-scroll">
-                            <table className="reception-table service-table">
+                            <table className={`reception-table service-table${isAdmin ? ' service-table-admin' : ''}`}>
                                 <thead><tr>
-                                    <th>ID</th><th>Dịch vụ</th><th>Mô tả</th><th>Giá</th><th>Đơn vị</th><th>Cách cung cấp</th><th>Trạng thái</th>
+                                    <th>ID</th><th>Dịch vụ</th><th>Mô tả</th><th>Giá</th><th>Đơn vị</th><th>Cách cung cấp</th><th>Trạng thái</th>{isAdmin && <th>Thao tác</th>}
                                 </tr></thead>
                                 <tbody>{pageServices.map((service) => (
                                     <tr key={service.id} className="service-table-row-clickable" tabIndex={0} aria-label={`Xem chi tiết ${service.name}`} onClick={() => void handleOpenDetails(service.id)} onKeyDown={(event) => {
@@ -286,23 +301,22 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
                                         void handleOpenDetails(service.id);
                                     }}>
                                         <td>{service.id}</td>
-                                        <td><div className="service-name-cell"><strong>{service.name}</strong><div className="service-name-actions">
-                                            {isAdmin && <>
-                                                <button className="room-type-delete-button" type="button" aria-label={`Xóa ${service.name}`} title="Xóa dịch vụ" onClick={(event) => { event.stopPropagation(); void handleDelete(service.id); }}>×</button>
-                                                <button className="room-type-edit-button" type="button" aria-label={`Sửa ${service.name}`} title="Sửa dịch vụ" onClick={(event) => { event.stopPropagation(); void handleOpenEdit(service.id); }}>✎</button>
-                                            </>}
-                                        </div></div></td>
+                                        <td><div className="service-name-cell"><strong>{service.name}</strong></div></td>
                                         <td className="service-description-cell" title={service.description}>{service.description || '—'}</td>
                                         <td>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(service.price)}</td>
                                         <td>{service.unit}</td>
                                         <td>{service.booking_policy === 'PREBOOK' ? 'Đặt trước' : 'Khi khách yêu cầu'}</td>
                                         <td><span className={`status-badge ${service.is_active ? 'active' : 'inactive'}`}>{service.is_active ? 'Active' : 'Inactive'}</span></td>
+                                        {isAdmin && <td><div className="service-row-actions">
+                                            <button className="service-delete-action" type="button" aria-label={`Xóa ${service.name}`} title="Xóa dịch vụ" onClick={(event) => { event.stopPropagation(); void handleDelete(service.id); }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m4 4v6m6-6v6"/></svg></button>
+                                            <button className="service-edit-action" type="button" aria-label={`Cập nhật ${service.name}`} title="Cập nhật dịch vụ" onClick={(event) => { event.stopPropagation(); void handleOpenEdit(service.id); }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 5 4 4M4 20l4-.8L19 8a2.1 2.1 0 0 0-3-3L5 16z"/><path d="M13 7 17 11"/></svg></button>
+                                        </div></td>}
                                     </tr>
                                 ))}</tbody>
                             </table>
                         </DataTable>
                         <div className="service-list-footer">
-                            <span>Hiển thị {firstVisibleService}–{lastVisibleService} trong tổng số {filteredServices.length} dịch vụ</span>
+                            <span>Hiển thị {firstVisibleService} - {lastVisibleService} trên tổng số {filteredServices.length} dịch vụ</span>
                             {pageCount > 1 && <nav className="service-pagination" aria-label="Phân trang danh sách dịch vụ">
                                 <button type="button" aria-label="Trang trước" disabled={currentPage === 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}>‹</button>
                                 {Array.from({ length: pageCount }, (_, index) => index + 1).map((page) => <button key={page} type="button" aria-current={currentPage === page ? 'page' : undefined} className={currentPage === page ? 'active' : ''} onClick={() => setCurrentPage(page)}>{page}</button>)}

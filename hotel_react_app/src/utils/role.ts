@@ -25,14 +25,7 @@ function normalizeRole(value: unknown): Role | undefined {
 }
 
 export function resolveRole(user: RoleLike): Role | undefined {
-  switch (Number(user.role_id)) {
-    case 1: return 'CUSTOMER';
-    case 2: return 'RECEPTIONIST';
-    case 3: return 'HOUSEKEEPER';
-    case 4: return 'ADMIN';
-    default: break;
-  }
-
+  // Role IDs may differ between database environments; the joined role code/name is authoritative.
   const fromCode = normalizeRole(user.role_code);
   if (fromCode) return fromCode;
 
@@ -41,6 +34,14 @@ export function resolveRole(user: RoleLike): Role | undefined {
 
   const fromStoredRole = normalizeRole(user.role);
   if (fromStoredRole) return fromStoredRole;
+
+  switch (Number(user.role_id)) {
+    case 1: return 'CUSTOMER';
+    case 2: return 'RECEPTIONIST';
+    case 3: return 'HOUSEKEEPER';
+    case 4: return 'ADMIN';
+    default: break;
+  }
 
   return undefined;
 }

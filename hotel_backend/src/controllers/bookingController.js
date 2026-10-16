@@ -4,7 +4,7 @@ const { makeReceptionCheckoutPayment } = require('../services/paymentService');
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
 const roleCodeById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
 const hasRole = (claims, ...roles) => {
-  const roleCode = roleCodeById[Number(claims.role_id)] || String(claims.role_code || '').toUpperCase();
+  const roleCode = String(claims.role_code || '').toUpperCase() || roleCodeById[Number(claims.role_id)];
   return roles.includes(roleCode);
 };
 const isCustomerClaims = (claims) => hasRole(claims, 'CUSTOMER');

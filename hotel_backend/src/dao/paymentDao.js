@@ -221,7 +221,7 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method }
   await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
   try {
     const bookingResult = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
-      SELECT b.id, b.status, b.total_amount, b.deposit_amount,
+      SELECT b.id, b.booking_code, b.status, b.total_amount, b.deposit_amount,
         COALESCE(final_payments.amount_paid, 0) AS final_paid_amount
       FROM dbo.bookings b WITH (UPDLOCK, HOLDLOCK)
       OUTER APPLY (
@@ -245,17 +245,96 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method }
     const rooms = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
       SELECT room_id FROM dbo.booking_rooms WHERE booking_id = @bookingId AND room_id IS NOT NULL;
     `);
+    let invoiceId = null;
+    const existingInvoice = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
+      SELECT TOP (1) id, invoice_number FROM dbo.invoices WITH (UPDLOCK, HOLDLOCK) WHERE booking_id = @bookingId;
+    `);
+    let invoiceNumber = existingInvoice.recordset[0]?.invoice_number || null;
+    if (existingInvoice.recordset.length) invoiceId = existingInvoice.recordset[0].id;
+    if (bookingStatus === 'CHECKED_IN') {
+      if (!invoiceId) {
+        const totals = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
+          SELECT
+            COALESCE((SELECT SUM(br.price_per_night * DATEDIFF(day, b.check_in_date, b.check_out_date))
+              FROM dbo.booking_rooms br WHERE br.booking_id = b.id), 0) AS room_amount,
+            COALESCE((SELECT SUM(bs.quantity * bs.unit_price)
+              FROM dbo.booking_services bs JOIN dbo.booking_rooms br ON br.id = bs.booking_room_id
+              WHERE br.booking_id = b.id), 0) AS service_amount
+          FROM dbo.bookings b WHERE b.id = @bookingId;
+        `);
+        const roomAmount = Number(totals.recordset[0].room_amount);
+        const serviceAmount = Number(totals.recordset[0].service_amount);
+        const depositPaid = Number(booking.deposit_amount || 0);
+        invoiceNumber = `INV-${String(booking.booking_code).replace(/[^A-Z0-9-]/gi, '')}`;
+        const created = await transaction.request()
+          .input('bookingId', sql.BigInt, bookingId)
+          .input('invoiceNumber', sql.VarChar(30), invoiceNumber)
+          .input('roomAmount', sql.Decimal(14, 2), roomAmount)
+          .input('serviceAmount', sql.Decimal(14, 2), serviceAmount)
+          .input('totalAmount', sql.Decimal(14, 2), Number(booking.total_amount))
+          .input('depositPaid', sql.Decimal(14, 2), depositPaid)
+          .input('amountDue', sql.Decimal(14, 2), method === 'CASH' ? 0 : amount)
+          .input('invoiceStatus', sql.VarChar(20), method === 'CASH' || amount <= 0 ? 'PAID' : 'ISSUED')
+          .query(`
+            INSERT INTO dbo.invoices
+              (booking_id, invoice_number, room_amount, service_amount, discount_amount, tax_amount,
+               total_amount, deposit_paid, amount_due, status, issued_at)
+            OUTPUT INSERTED.id
+            VALUES (@bookingId, @invoiceNumber, @roomAmount, @serviceAmount, 0, 0,
+                    @totalAmount, @depositPaid, @amountDue, @invoiceStatus, SYSUTCDATETIME());
+          `);
+        invoiceId = created.recordset[0].id;
+
+        const roomItems = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
+          SELECT rt.name AS room_type_name, r.room_number, br.price_per_night,
+            DATEDIFF(day, b.check_in_date, b.check_out_date) AS nights
+          FROM dbo.booking_rooms br
+          JOIN dbo.bookings b ON b.id = br.booking_id
+          JOIN dbo.room_types rt ON rt.id = br.room_type_id
+          LEFT JOIN dbo.rooms r ON r.id = br.room_id
+          WHERE br.booking_id = @bookingId ORDER BY br.id;
+        `);
+        for (const item of roomItems.recordset) {
+          const nights = Number(item.nights);
+          const unitPrice = Number(item.price_per_night);
+          await transaction.request()
+            .input('invoiceId', sql.BigInt, invoiceId)
+            .input('description', sql.NVarChar(255), `Phòng ${item.room_number || item.room_type_name} (${nights} đêm)`)
+            .input('quantity', sql.Int, nights)
+            .input('unitPrice', sql.Decimal(14, 2), unitPrice)
+            .input('amount', sql.Decimal(14, 2), unitPrice * nights)
+            .query(`INSERT INTO dbo.invoice_items (invoice_id, item_type, description, quantity, unit_price, amount)
+              VALUES (@invoiceId, 'ROOM', @description, @quantity, @unitPrice, @amount);`);
+        }
+        const serviceItems = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
+          SELECT s.name, bs.quantity, bs.unit_price
+          FROM dbo.booking_services bs JOIN dbo.booking_rooms br ON br.id = bs.booking_room_id
+          JOIN dbo.services s ON s.id = bs.service_id WHERE br.booking_id = @bookingId ORDER BY bs.id;
+        `);
+        for (const item of serviceItems.recordset) {
+          await transaction.request()
+            .input('invoiceId', sql.BigInt, invoiceId)
+            .input('description', sql.NVarChar(255), item.name)
+            .input('quantity', sql.Int, item.quantity)
+            .input('unitPrice', sql.Decimal(14, 2), item.unit_price)
+            .input('amount', sql.Decimal(14, 2), Number(item.quantity) * Number(item.unit_price))
+            .query(`INSERT INTO dbo.invoice_items (invoice_id, item_type, description, quantity, unit_price, amount)
+              VALUES (@invoiceId, 'SERVICE', @description, @quantity, @unitPrice, @amount);`);
+        }
+      }
+    }
     if (amount > 0) {
       await transaction.request()
         .input('paymentCode', sql.VarChar(30), paymentCode)
         .input('bookingId', sql.BigInt, bookingId)
+        .input('invoiceId', sql.BigInt, invoiceId)
         .input('amount', sql.Decimal(14, 2), amount)
         .input('method', sql.VarChar(20), method)
         .input('status', sql.VarChar(20), method === 'CASH' ? 'SUCCESS' : 'PENDING')
         .input('paidAt', sql.DateTime2, method === 'CASH' ? new Date() : null)
         .query(`
           INSERT INTO dbo.payments (payment_code, booking_id, invoice_id, amount, payment_type, method, status, paid_at)
-          VALUES (@paymentCode, @bookingId, NULL, @amount, 'FINAL', @method, @status, @paidAt);
+          VALUES (@paymentCode, @bookingId, @invoiceId, @amount, 'FINAL', @method, @status, @paidAt);
         `);
     }
     // For VNPay, keep the guest checked in and the room occupied until IPN
@@ -267,7 +346,7 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method }
       }
     }
     await transaction.commit();
-    return { payment_code: paymentCode, amount, status: amount === 0 || method === 'CASH' ? 'SUCCESS' : 'PENDING' };
+    return { payment_code: paymentCode, amount, status: amount === 0 || method === 'CASH' ? 'SUCCESS' : 'PENDING', invoice_id: invoiceId, invoice_number: invoiceNumber };
   } catch (error) {
     try { await transaction.rollback(); } catch (rollbackError) { console.error('Checkout payment rollback error:', rollbackError); }
     throw error;
@@ -507,6 +586,28 @@ async function getCustomerPaymentList(customerId) {
   return getPaymentList(customerId);
 }
 
+async function getInvoiceList(customerId = null) {
+  const pool = await getPool();
+  const request = pool.request();
+  const customerFilter = customerId == null ? '' : 'AND b.customer_id = @customerId';
+  if (customerId != null) request.input('customerId', sql.BigInt, customerId);
+  const result = await request.query(`
+    SELECT i.id, i.invoice_number, i.room_amount, i.service_amount, i.discount_amount,
+      i.tax_amount, i.total_amount, i.deposit_paid, i.amount_due, i.status, i.issued_at,
+      b.booking_code, b.check_in_date, b.check_out_date, b.guest_full_name, b.guest_phone,
+      b.guest_email, u.full_name AS customer_full_name, u.email AS customer_email,
+      u.phone AS customer_phone,
+      JSON_QUERY((SELECT ii.item_type, ii.description, ii.quantity, ii.unit_price, ii.amount
+        FROM dbo.invoice_items ii WHERE ii.invoice_id = i.id ORDER BY ii.id FOR JSON PATH)) AS items
+    FROM dbo.invoices i
+    JOIN dbo.bookings b ON b.id = i.booking_id
+    LEFT JOIN dbo.users u ON u.id = b.customer_id
+    WHERE 1 = 1 ${customerFilter}
+    ORDER BY i.issued_at DESC, i.id DESC;
+  `);
+  return result.recordset;
+}
+
 async function getPaymentStatus({ paymentCode, customerId = null }) {
   const pool = await getPool();
   const request = pool.request().input('paymentCode', sql.VarChar(30), paymentCode);
@@ -629,4 +730,4 @@ async function confirmPaymentByCode(paymentCode) {
   }
 }
 
-module.exports = { createFinalPayment, createCustomerDepositPayment, completeSimulatedDepositPayment, createReceptionCheckoutPayment, completeVnpayPayment, getVnpayPaymentContext, getPaymentList, getCustomerPaymentList, getPaymentStatus, confirmPaymentByCode };
+module.exports = { createFinalPayment, createCustomerDepositPayment, completeSimulatedDepositPayment, createReceptionCheckoutPayment, completeVnpayPayment, getVnpayPaymentContext, getPaymentList, getCustomerPaymentList, getInvoiceList, getPaymentStatus, confirmPaymentByCode };

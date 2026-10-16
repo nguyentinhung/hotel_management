@@ -26,6 +26,15 @@ const formatDate = (value: string | null) => {
   }).format(date);
 };
 
+const formatInvoiceDate = (value: string | null) => {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return new Intl.DateTimeFormat('vi-VN', {
+    day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Asia/Ho_Chi_Minh',
+  }).format(date);
+};
+
 const formatStayDate = (value: string) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
@@ -69,8 +78,11 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
   const [paymentMethod, setPaymentMethod] = useState<'ALL' | PaymentListItem['method']>('ALL');
   const [paymentType, setPaymentType] = useState<'ALL' | PaymentListItem['payment_type']>('ALL');
   const [paymentDate, setPaymentDate] = useState('');
-  const [appliedPaymentFilters, setAppliedPaymentFilters] = useState({ fromDate: '', toDate: '', status: 'ALL' as 'ALL' | PaymentListItem['status'] });
   const [paymentFilterError, setPaymentFilterError] = useState('');
+  const [invoiceSearch, setInvoiceSearch] = useState('');
+  const [invoiceStatusFilter, setInvoiceStatusFilter] = useState('ALL');
+  const [invoiceMethodFilter, setInvoiceMethodFilter] = useState('ALL');
+  const [appliedInvoiceFilters, setAppliedInvoiceFilters] = useState({ search: '', fromDate: '', toDate: '', status: 'ALL', method: 'ALL' });
   const [selectedPayment, setSelectedPayment] = useState<PaymentListItem | null>(null);
   const [confirmingCode, setConfirmingCode] = useState<string | null>(null);
   const [canConfirmPayment, setCanConfirmPayment] = useState(false);
@@ -127,13 +139,36 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
   const availablePaymentStatuses = [...new Set(payments.map((payment) => payment.status))].sort();
   const availablePaymentMethods = [...new Set(payments.map((payment) => payment.method))].sort();
   const availablePaymentTypes = [...new Set(payments.map((payment) => payment.payment_type))].sort();
-  const filteredPayments = customerOnly ? payments.filter((payment) => {
-    const paymentDate = getPaymentDateKey(payment.paid_at);
-    const matchesFromDate = !appliedPaymentFilters.fromDate || Boolean(paymentDate && paymentDate >= appliedPaymentFilters.fromDate);
-    const matchesToDate = !appliedPaymentFilters.toDate || Boolean(paymentDate && paymentDate <= appliedPaymentFilters.toDate);
-    const matchesStatus = appliedPaymentFilters.status === 'ALL' || payment.status === appliedPaymentFilters.status;
-    return matchesFromDate && matchesToDate && matchesStatus;
-  }) : payments.filter((payment) => {
+  const invoiceGroups = new Map<string, PaymentListItem[]>();
+  if (customerOnly) payments.forEach((payment) => {
+    if (!payment.invoice_number) return;
+    const group = invoiceGroups.get(payment.invoice_number) || [];
+    group.push(payment);
+    invoiceGroups.set(payment.invoice_number, group);
+  });
+  const invoices = [...invoiceGroups.entries()].map(([invoiceNumber, invoicePayments]) => {
+    const payment = invoicePayments[0];
+    const total = Number(payment.invoice_total_amount || 0);
+    const remaining = payment.invoice_amount_due == null
+      ? Math.max(0, total - Number(payment.invoice_deposit_paid || 0))
+      : Math.max(0, Number(payment.invoice_amount_due));
+    return { invoiceNumber, payment, payments: invoicePayments, total, remaining, status: String(payment.invoice_status || 'ISSUED').toUpperCase() };
+  });
+  const invoiceStatusOptions = [...new Set(invoices.map((invoice) => invoice.status))].sort();
+  const invoiceMethodOptions = [...new Set(invoices.flatMap((invoice) => invoice.payments.map((payment) => payment.method)))].sort();
+  const filteredInvoices = invoices.filter((invoice) => {
+    const payment = invoice.payment;
+    const query = appliedInvoiceFilters.search.trim().toLocaleLowerCase();
+    const textMatch = !query || [invoice.invoiceNumber, payment.booking_code, payment.customer_full_name, payment.guest_full_name]
+      .some((value) => String(value || '').toLocaleLowerCase().includes(query));
+    const invoiceDate = getPaymentDateKey(payment.invoice_issued_at);
+    const matchesFromDate = !appliedInvoiceFilters.fromDate || Boolean(invoiceDate && invoiceDate >= appliedInvoiceFilters.fromDate);
+    const matchesToDate = !appliedInvoiceFilters.toDate || Boolean(invoiceDate && invoiceDate <= appliedInvoiceFilters.toDate);
+    const matchesStatus = appliedInvoiceFilters.status === 'ALL' || invoice.status === appliedInvoiceFilters.status;
+    const matchesMethod = appliedInvoiceFilters.method === 'ALL' || invoice.payments.some((item) => item.method === appliedInvoiceFilters.method);
+    return textMatch && matchesFromDate && matchesToDate && matchesStatus && matchesMethod;
+  });
+  const filteredPayments = customerOnly ? [] : payments.filter((payment) => {
     const textMatch = !normalizedSearch || [payment.payment_code, payment.booking_code, payment.customer_full_name, payment.guest_full_name]
       .some((value) => String(value || '').toLocaleLowerCase().includes(normalizedSearch));
     const phone = String(payment.customer_phone || payment.guest_phone || '');
@@ -145,9 +180,11 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
     return matchesSearch && matchesStatus && matchesMethod && matchesType && matchesDate;
   });
   const pageSize = customerOnly ? CUSTOMER_PAGE_SIZE : MANAGEMENT_PAGE_SIZE;
-  const pageCount = Math.max(1, Math.ceil(filteredPayments.length / pageSize));
+  const recordCount = customerOnly ? filteredInvoices.length : filteredPayments.length;
+  const pageCount = Math.max(1, Math.ceil(recordCount / pageSize));
   const firstPayment = (currentPage - 1) * pageSize;
   const visiblePayments = filteredPayments.slice(firstPayment, firstPayment + pageSize);
+  const visibleInvoices = filteredInvoices.slice(firstPayment, firstPayment + pageSize);
   useEffect(() => {
     if (currentPage > pageCount) setCurrentPage(pageCount);
   }, [currentPage, pageCount]);
@@ -258,20 +295,28 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
         </section>
       )}
       {customerOnly && (
-        <div className="customer-search-bar payment-history-filters" role="search" aria-label="Lọc lịch sử thanh toán">
-          <label className="customer-search-field"><span>Từ ngày</span><span className="customer-search-input-wrap"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3.5" y="5" width="17" height="16" rx="2" stroke="currentColor" strokeWidth="1.7"/><path d="M7.5 3v4M16.5 3v4M4 9.5h16" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/></svg><input lang="en-GB" type="date" aria-label="Từ ngày thanh toán" value={paymentFromDate} max={paymentToDate || undefined} onChange={(event) => setPaymentFromDate(event.target.value)} /></span></label>
-          <label className="customer-search-field"><span>Đến ngày</span><span className="customer-search-input-wrap"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3.5" y="5" width="17" height="16" rx="2" stroke="currentColor" strokeWidth="1.7"/><path d="M7.5 3v4M16.5 3v4M4 9.5h16" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/></svg><input lang="en-GB" type="date" aria-label="Đến ngày thanh toán" value={paymentToDate} min={paymentFromDate || undefined} onChange={(event) => setPaymentToDate(event.target.value)} /></span></label>
-          <label className="customer-search-field"><span>Trạng thái</span><span className="customer-search-input-wrap customer-search-select-wrap"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="9" cy="8" r="3.2" stroke="currentColor" strokeWidth="1.7"/><path d="M3.5 19c.4-3.1 2.2-4.7 5.5-4.7 1.3 0 2.3.3 3.2.8M16 11.5l1.7 1.7 3.3-3.6" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"/></svg><select aria-label="Trạng thái thanh toán" value={paymentStatus} onChange={(event) => setPaymentStatus(event.target.value as typeof paymentStatus)}><option value="ALL">Tất cả</option><option value="PENDING">Pending</option><option value="SUCCESS">Success</option><option value="FAILED">Failed</option><option value="CANCELLED">Cancelled</option></select><svg className="customer-select-chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 9 6 6 6-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg></span></label>
-          <button type="button" className="customer-search-refresh" onClick={() => { setPaymentFromDate(''); setPaymentToDate(''); setPaymentStatus('ALL'); setAppliedPaymentFilters({ fromDate: '', toDate: '', status: 'ALL' }); setPaymentFilterError(''); setCurrentPage(1); }}><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 7v5h-5M4.5 10a7.5 7.5 0 0 1 13-3L20 12M4 17v-5h5m10.5 2a7.5 7.5 0 0 1-13 3L4 12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>Làm mới</button>
-          <button type="button" className="customer-search-submit" onClick={() => { if (paymentFromDate && paymentToDate && paymentFromDate > paymentToDate) { setPaymentFilterError('Ngày bắt đầu phải trước hoặc cùng ngày kết thúc.'); return; } setPaymentFilterError(''); setAppliedPaymentFilters({ fromDate: paymentFromDate, toDate: paymentToDate, status: paymentStatus }); setCurrentPage(1); }}><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8" stroke="currentColor" strokeWidth="2"/><path d="m16 16 4.5 4.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>Tìm kiếm</button>
+        <>
+        <header className="customer-invoice-heading">
+          <div className="customer-invoice-title"><h3>Danh sách hóa đơn</h3><span>({invoices.length} hóa đơn)</span></div>
+          <p>Xem thông tin chi tiết các hóa đơn và khoản thanh toán của bạn.</p>
+        </header>
+        <div className="customer-search-bar payment-history-filters customer-invoice-filters" role="search" aria-label="Tìm kiếm và lọc hóa đơn">
+          <label className="customer-search-field customer-invoice-search"><span>Tìm kiếm</span><input type="search" aria-label="Tìm theo mã hóa đơn, mã đặt phòng hoặc tên khách hàng" placeholder="Theo mã hóa đơn, mã đặt phòng..." value={invoiceSearch} onChange={(event) => setInvoiceSearch(event.target.value)} /></label>
+          <label className="customer-search-field"><span>Từ ngày</span><input lang="en-GB" type="date" aria-label="Từ ngày lập hóa đơn" value={paymentFromDate} max={paymentToDate || undefined} onChange={(event) => setPaymentFromDate(event.target.value)} /></label>
+          <label className="customer-search-field"><span>Đến ngày</span><input lang="en-GB" type="date" aria-label="Đến ngày lập hóa đơn" value={paymentToDate} min={paymentFromDate || undefined} onChange={(event) => setPaymentToDate(event.target.value)} /></label>
+          <label className="customer-search-field"><span>Trạng thái</span><select aria-label="Trạng thái hóa đơn" value={invoiceStatusFilter} onChange={(event) => setInvoiceStatusFilter(event.target.value)}><option value="ALL">Tất cả</option>{invoiceStatusOptions.map((status) => <option key={status} value={status}>{status}</option>)}</select></label>
+          <label className="customer-search-field"><span>Phương thức thanh toán</span><select aria-label="Phương thức thanh toán" value={invoiceMethodFilter} onChange={(event) => setInvoiceMethodFilter(event.target.value)}><option value="ALL">Tất cả</option>{invoiceMethodOptions.map((method) => <option key={method} value={method}>{method === 'CASH' ? 'Tiền mặt' : 'VNPay'}</option>)}</select></label>
+          <button type="button" className="customer-search-refresh" onClick={() => { setInvoiceSearch(''); setPaymentFromDate(''); setPaymentToDate(''); setInvoiceStatusFilter('ALL'); setInvoiceMethodFilter('ALL'); setAppliedInvoiceFilters({ search: '', fromDate: '', toDate: '', status: 'ALL', method: 'ALL' }); setPaymentFilterError(''); setCurrentPage(1); }}><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 7v5h-5M4.5 10a7.5 7.5 0 0 1 13-3L20 12M4 17v-5h5m10.5 2a7.5 7.5 0 0 1-13 3L4 12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/></svg>Làm mới</button>
+          <button type="button" className="customer-search-submit" onClick={() => { if (paymentFromDate && paymentToDate && paymentFromDate > paymentToDate) { setPaymentFilterError('Ngày bắt đầu phải trước hoặc cùng ngày kết thúc.'); return; } setPaymentFilterError(''); setAppliedInvoiceFilters({ search: invoiceSearch, fromDate: paymentFromDate, toDate: paymentToDate, status: invoiceStatusFilter, method: invoiceMethodFilter }); setCurrentPage(1); }}><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8" stroke="currentColor" strokeWidth="2"/><path d="m16 16 4.5 4.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>Tìm kiếm</button>
           {paymentFilterError && <p className="customer-search-error" role="alert">{paymentFilterError}</p>}
         </div>
+        </>
       )}
       <section className="payment-data-section" aria-label={customerOnly ? 'Lịch sử thanh toán' : 'Danh sách thanh toán'}>
       <DataTable className="table-wrap">
         <table className="payment-table">
           <thead>
-            <tr>
+            {customerOnly ? <tr><th>STT</th><th>Mã hóa đơn</th><th>Mã đặt phòng</th><th>Tên khách hàng</th><th>Tổng tiền</th><th>Đã thanh toán</th><th>Còn lại</th><th>Trạng thái</th><th>Ngày lập</th><th>Thao tác</th></tr> : <tr>
               <th>STT</th>
               <th>Mã thanh toán</th>
               <th>Mã đặt phòng</th>
@@ -281,10 +326,23 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
               <th>Trạng thái</th>
               <th>Ngày thanh toán</th>
               <th>Mã giao dịch VNPay</th>
-            </tr>
+            </tr>}
           </thead>
           <tbody>
-            {visiblePayments.length === 0 ? (
+            {customerOnly ? (visibleInvoices.length === 0 ? (
+              <tr><td colSpan={10} className="text-center py-4 text-muted">{invoices.length === 0 ? 'Chưa có hóa đơn.' : 'Không tìm thấy hóa đơn phù hợp.'}</td></tr>
+            ) : visibleInvoices.map((invoice, index) => {
+              const paid = Math.max(0, invoice.total - invoice.remaining);
+              const label = ['CANCELLED', 'CANCELED', 'VOID'].includes(invoice.status) ? 'Đã hủy' : invoice.remaining <= 0 ? 'Đã thanh toán' : paid > 0 ? 'Thanh toán một phần' : 'Chưa thanh toán';
+              const statusClass = label === 'Đã thanh toán' ? 'success' : label === 'Đã hủy' ? 'cancelled' : 'pending';
+              return <tr key={invoice.invoiceNumber}>
+                <td>{firstPayment + index + 1}</td><td className="invoice-code-cell">{invoice.invoiceNumber}</td><td>{invoice.payment.booking_code}</td>
+                <td>{invoice.payment.customer_full_name || invoice.payment.guest_full_name}</td>
+                <td className="payment-amount-cell">{formatAmount(invoice.total)}</td><td>{formatAmount(paid)}</td><td>{formatAmount(invoice.remaining)}</td>
+                <td><span className={`payment-status payment-status-${statusClass}`}>{label}</span></td><td>{formatInvoiceDate(invoice.payment.invoice_issued_at)}</td>
+                <td><button type="button" className="customer-invoice-view" onClick={() => setSelectedPayment(invoice.payment)}>Xem</button></td>
+              </tr>;
+            })) : visiblePayments.length === 0 ? (
               <tr><td colSpan={customerOnly ? 10 : 11} className="text-center py-4 text-muted">{payments.length === 0 ? 'Chưa có giao dịch thanh toán.' : 'Không tìm thấy giao dịch phù hợp.'}</td></tr>
             ) : visiblePayments.map((payment, index) => (
               <tr
@@ -328,7 +386,7 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
       </DataTable>
       <div className="payment-list-footer">
         <span>
-          Hiển thị {filteredPayments.length === 0 ? 0 : firstPayment + 1} - {Math.min(firstPayment + pageSize, filteredPayments.length)} của {filteredPayments.length} giao dịch
+          {customerOnly ? `Hiển thị ${recordCount === 0 ? 0 : firstPayment + 1} - ${Math.min(firstPayment + pageSize, recordCount)} trên tổng số ${recordCount} hóa đơn` : `Hiển thị ${recordCount === 0 ? 0 : firstPayment + 1} - ${Math.min(firstPayment + pageSize, recordCount)} của ${recordCount} giao dịch`}
         </span>
         <nav className="payment-pagination" aria-label="Phân trang danh sách thanh toán">
           <button

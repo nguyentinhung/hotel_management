@@ -70,6 +70,26 @@ export interface PaymentListItem {
   vnpay_transaction_no: string | null;
 }
 
+export interface InvoiceListItem {
+  id: number;
+  invoice_number: string;
+  booking_code: string;
+  guest_full_name: string;
+  guest_phone: string;
+  customer_full_name: string | null;
+  customer_phone: string | null;
+  total_amount: number;
+  deposit_paid: number;
+  amount_due: number;
+  status: string;
+  issued_at: string;
+  items: PaymentInvoiceItem[];
+}
+
+export function getInvoiceList(customerOnly = false): Promise<InvoiceListItem[]> {
+  return api.get<InvoiceListItem[]>(customerOnly ? '/api/invoices/my' : '/api/invoices', localStorage.getItem('accessToken') || undefined);
+}
+
 export function createFinalPayment(bookingCode: string, method: 'CASH' | 'VNPAY' | 'SIMULATED', paymentType: 'FINAL' | 'DEPOSIT' = 'FINAL'): Promise<CreatePaymentResponse> {
   return api.post<CreatePaymentResponse>(
     '/api/payments',

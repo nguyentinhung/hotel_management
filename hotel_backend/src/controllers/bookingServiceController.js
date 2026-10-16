@@ -2,7 +2,7 @@ const jwt = require('jsonwebtoken');
 const { getServiceableBookingRooms, getBookingServices, addServiceToCheckedInBooking } = require('../dao/bookingServiceDao');
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
 const roleCodeById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
-const getRoleCode = (claims) => roleCodeById[Number(claims.role_id)] || String(claims.role_code || '').toUpperCase();
+const getRoleCode = (claims) => String(claims.role_code || '').toUpperCase() || roleCodeById[Number(claims.role_id)];
 
 function requireReceptionOrAdmin(req, res, next) {
   const authorization = req.headers.authorization || '';

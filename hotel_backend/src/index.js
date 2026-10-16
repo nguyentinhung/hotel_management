@@ -20,7 +20,7 @@ const { checkAvailability, getAvailableRooms } = require('./controllers/roomCont
 const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, updateBookingHandler, cancelBookingHandler, getActiveBookingsHandler, checkOutBookingHandler, finishRoomCleaningHandler, reportRoomMaintenanceHandler, getRoomMaintenanceReportsHandler, resolveRoomMaintenanceReportHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
 const serviceController = require('./controllers/serviceController');
 const { requireCustomer, requirePaymentStaff, requirePaymentActor } = require('./services/customerAuth');
-const { createPayment, getPaymentList, getCustomerPaymentList, getPaymentStatusRequest, confirmPaymentRequest, simulateDepositPaymentRequest } = require('./controllers/paymentController');
+const { createPayment, getPaymentList, getCustomerPaymentList, getInvoiceList, getPaymentStatusRequest, confirmPaymentRequest, simulateDepositPaymentRequest } = require('./controllers/paymentController');
 const { handleVnpayReturn, handleVnpayIpn } = require('./controllers/vnpayController');
 const bookingServiceController = require('./controllers/bookingServiceController');
 const app = express();
@@ -425,6 +425,8 @@ app.get('/api/bookings/active', getActiveBookingsHandler);
 app.post('/api/payments', requireCustomer, createPayment);
 app.get('/api/payments', requirePaymentStaff, getPaymentList);
 app.get('/api/payments/my', requireCustomer, getCustomerPaymentList);
+app.get('/api/invoices', requirePaymentStaff, getInvoiceList);
+app.get('/api/invoices/my', requireCustomer, getInvoiceList);
 app.get('/api/payments/:paymentCode/status', requirePaymentActor, getPaymentStatusRequest);
 app.patch('/api/payments/:paymentCode/confirm', requirePaymentStaff, confirmPaymentRequest);
 app.post('/api/payments/:paymentCode/simulate', requireCustomer, simulateDepositPaymentRequest);

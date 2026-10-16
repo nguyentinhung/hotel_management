@@ -6,6 +6,7 @@ const {
   createReceptionCheckoutPayment,
   getPaymentList,
   getCustomerPaymentList,
+  getInvoiceList: getInvoiceListDao,
   getPaymentStatus: getPaymentStatusByCode,
   confirmPaymentByCode,
   completeVnpayPayment,
@@ -90,6 +91,24 @@ async function getCustomerPayments(customerId) {
   return getCustomerPaymentList(customerId);
 }
 
+async function getInvoices(customerId = null) {
+  const rows = await getInvoiceListDao(customerId);
+  return rows.map((invoice) => ({
+    ...invoice,
+    id: Number(invoice.id),
+    room_amount: Number(invoice.room_amount),
+    service_amount: Number(invoice.service_amount),
+    discount_amount: Number(invoice.discount_amount),
+    tax_amount: Number(invoice.tax_amount),
+    total_amount: Number(invoice.total_amount),
+    deposit_paid: Number(invoice.deposit_paid),
+    amount_due: Number(invoice.amount_due),
+    items: invoice.items ? (Array.isArray(invoice.items) ? invoice.items : JSON.parse(invoice.items)).map((item) => ({
+      ...item, quantity: Number(item.quantity), unit_price: Number(item.unit_price), amount: Number(item.amount),
+    })) : [],
+  }));
+}
+
 async function getPaymentStatus(paymentCode, customerId = null) {
   return getPaymentStatusByCode({ paymentCode, customerId });
 }
@@ -142,4 +161,4 @@ async function inspectVnpayReturn(params) {
   return { ...payment, paymentCode, succeeded };
 }
 
-module.exports = { makePayment, simulateDepositPayment, makeReceptionCheckoutPayment, getPayments, getCustomerPayments, getPaymentStatus, confirmPayment, handleVnpayCallback, inspectVnpayReturn };
+module.exports = { makePayment, simulateDepositPayment, makeReceptionCheckoutPayment, getPayments, getCustomerPayments, getInvoices, getPaymentStatus, confirmPayment, handleVnpayCallback, inspectVnpayReturn };

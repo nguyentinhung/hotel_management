@@ -1,4 +1,14 @@
-const { makePayment, simulateDepositPayment, getPayments, getCustomerPayments, getPaymentStatus, confirmPayment } = require('../services/paymentService');
+const { makePayment, simulateDepositPayment, getPayments, getCustomerPayments, getInvoices, getPaymentStatus, confirmPayment } = require('../services/paymentService');
+
+async function getInvoiceList(req, res) {
+  try {
+    const customerId = req.auth.roleCode === 'CUSTOMER' ? req.auth.userId : null;
+    return res.json(await getInvoices(customerId));
+  } catch (error) {
+    console.error('Get invoice list error:', error);
+    return res.status(500).json({ message: 'Khong the tai danh sach hoa don.' });
+  }
+}
 
 async function createPayment(req, res) {
   try {
@@ -149,4 +159,4 @@ async function simulateDepositPaymentRequest(req, res) {
   }
 }
 
-module.exports = { createPayment, getPaymentList, getCustomerPaymentList, getPaymentStatusRequest, confirmPaymentRequest, simulateDepositPaymentRequest };
+module.exports = { createPayment, getPaymentList, getCustomerPaymentList, getInvoiceList, getPaymentStatusRequest, confirmPaymentRequest, simulateDepositPaymentRequest };
