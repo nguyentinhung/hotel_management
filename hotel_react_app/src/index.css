@@ -9252,6 +9252,20 @@ a:focus-visible {
 .invoice-detail-note { margin: 12px 0 0; color: var(--muted, #60748d); font-size: .82rem; }
 .invoice-detail-state, .invoice-detail-empty { padding: 22px 8px; color: #71849e; text-align: center; }
 .invoice-detail-error { color: #a83232; }
+.invoice-detail-dialog { box-sizing: border-box; width: min(1200px, calc(100vw - 40px)); max-width: none; max-height: min(90vh, 820px); padding: 22px 24px; }
+.invoice-detail-overview { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.invoice-detail-overview > .invoice-detail-card { min-height: 100%; }
+.invoice-detail-overview .invoice-detail-info-grid { grid-template-columns: 1fr; gap: 9px; }
+.invoice-detail-overview .invoice-detail-info-grid > div { grid-template-columns: minmax(100px, .9fr) minmax(0, 1.5fr); align-items: baseline; gap: 10px; }
+.invoice-detail-overview .invoice-detail-info-grid > .invoice-detail-wide-field { grid-template-columns: 1fr; }
+.invoice-detail-overview .invoice-detail-customer-email { grid-template-columns: 86px minmax(0, 1fr); }
+.invoice-detail-overview .invoice-detail-customer-email strong { white-space: nowrap; overflow-wrap: normal; }
+.invoice-detail-overview .invoice-detail-booking-grid { grid-template-columns: 1fr; }
+.invoice-detail-wide { width: 100%; }
+.invoice-detail-bottom { display: grid; grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr); gap: 12px; align-items: start; }
+.invoice-detail-summary-total { padding: 9px 10px !important; background: #e6f5ee; border: 0 !important; border-radius: 8px; }
+@media (max-width: 1000px) { .invoice-detail-overview { grid-template-columns: 1fr 1fr; } .invoice-detail-overview > .invoice-detail-card:last-child { grid-column: 1 / -1; } .invoice-detail-bottom { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .invoice-detail-overview { grid-template-columns: 1fr; } .invoice-detail-overview > .invoice-detail-card:last-child { grid-column: auto; } .invoice-detail-overview .invoice-detail-info-grid > div { grid-template-columns: minmax(100px, .8fr) minmax(0, 1.2fr); } .invoice-detail-dialog { width: 100%; padding: 16px 12px; } }
 @media (max-width: 900px) { .invoice-detail-invoice-layout { grid-template-columns: 1fr; } .invoice-detail-invoice-layout .invoice-detail-info-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .invoice-detail-finance { padding: 12px 0 0; border-top: 1px solid rgba(15, 61, 62, .1); border-left: 0; } .invoice-detail-booking-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .invoice-detail-backdrop { padding: 8px; } .invoice-detail-dialog { width: 100%; max-width: none; max-height: 90vh; padding: 16px 12px; } .invoice-detail-card { padding: 13px 11px; } .invoice-detail-header h2 { font-size: 1.2rem; } }
 @media (max-width: 1000px) {

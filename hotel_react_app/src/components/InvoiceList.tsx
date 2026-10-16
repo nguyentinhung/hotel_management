@@ -12,8 +12,17 @@ const dateTime = (value: string | null) => {
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? '—' : new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Ho_Chi_Minh' }).format(parsed);
 };
+const dateTimeSeconds = (value: string | null) => {
+  if (!value) return 'Chưa thanh toán';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? '—' : new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'Asia/Ho_Chi_Minh' }).format(parsed);
+};
 const bookingStatusLabel = (status: string) => ({ CHECKED_OUT: 'Đã trả phòng', CHECKED_IN: 'Đang lưu trú', CONFIRMED: 'Đã xác nhận', PENDING: 'Chờ xác nhận', CANCELLED: 'Đã hủy' }[status.toUpperCase()] || status);
 const paymentStatusLabel = (status: string) => ({ SUCCESS: 'Thành công', PENDING: 'Đang xử lý', FAILED: 'Thất bại', CANCELLED: 'Đã hủy' }[status.toUpperCase()] || status);
+const summarizeRoomTypes = (rooms: InvoiceDetail['rooms']) => Object.entries(rooms.reduce<Record<string, number>>((counts, room) => {
+  if (room.room_type_name) counts[room.room_type_name] = (counts[room.room_type_name] || 0) + 1;
+  return counts;
+}, {})).map(([name, count]) => `${name} × ${count}`).join(', ');
 
 const invoiceStatusLabel = (invoice: InvoiceListItem) => {
   const status = invoice.status.toUpperCase();
@@ -62,12 +71,15 @@ export default function InvoiceList({ customerOnly = false }: { customerOnly?: b
   const pageSize = 5;
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const visibleInvoices = filtered.slice((page - 1) * pageSize, page * pageSize);
-  const amountPaid = detail?.payments
-    .filter((payment) => payment.status.toUpperCase() === 'SUCCESS')
-    .reduce((sum, payment) => sum + payment.amount, 0) ?? 0;
   const historyPayments = detail?.payments.filter((payment) =>
     detail.status.toUpperCase() === 'PAID' || detail.amount_due <= 0 || payment.status.toUpperCase() === 'SUCCESS',
   ) ?? [];
+  const confirmedPayments = historyPayments
+    .filter((payment) => payment.status.toUpperCase() === 'SUCCESS' && payment.paid_at)
+    .sort((first, second) => new Date(second.paid_at!).getTime() - new Date(first.paid_at!).getTime());
+  const paidAt = confirmedPayments.find((payment) => payment.payment_type.toUpperCase() === 'FINAL')?.paid_at
+    || confirmedPayments[0]?.paid_at
+    || null;
   const applyFilters = () => { setAppliedFilters({ search, fromDate, toDate, status }); setPage(1); };
   const resetFilters = () => { setSearch(''); setFromDate(''); setToDate(''); setStatus('ALL'); setAppliedFilters({ search: '', fromDate: '', toDate: '', status: 'ALL' }); setPage(1); };
   const openDetails = async (invoice: InvoiceListItem) => {
@@ -146,14 +158,39 @@ export default function InvoiceList({ customerOnly = false }: { customerOnly?: b
 
     {selected && <div className="invoice-detail-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelected(null); }}>
       <section className="invoice-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="invoice-detail-title">
-        <header className="invoice-detail-header"><div><span>THÔNG TIN HÓA ĐƠN</span><h2 id="invoice-detail-title">Chi tiết hóa đơn</h2><p>{detail?.invoice_number || selected.invoice_number}</p></div><button type="button" aria-label="Đóng" onClick={() => setSelected(null)}>×</button></header>
+        <header className="invoice-detail-header"><div><span>THÔNG TIN HÓA ĐƠN</span><h2 id="invoice-detail-title">Hóa đơn chi tiết</h2><p>{detail?.invoice_number || selected.invoice_number}</p></div><button type="button" aria-label="Đóng" onClick={() => setSelected(null)}>×</button></header>
         {detailLoading ? <div className="invoice-detail-state" role="status">Đang tải chi tiết hóa đơn…</div> : detailError ? <div className="invoice-detail-state invoice-detail-error" role="alert">{detailError}</div> : detail && <>
           <div className="invoice-detail-content">
-            <section className="invoice-detail-card"><h3>Thông tin hóa đơn</h3><div className="invoice-detail-invoice-layout"><div className="invoice-detail-info-grid"><div><span>Mã hóa đơn</span><strong>{detail.invoice_number}</strong></div><div><span>Trạng thái hóa đơn</span><strong className={`invoice-detail-badge ${detail.amount_due <= 0 ? 'is-paid' : 'is-open'}`}>{invoiceStatusLabel(detail)}</strong></div><div><span>Ngày lập</span><strong>{dateTime(detail.issued_at)}</strong></div><div><span>Tiền phòng</span><strong>{money(detail.room_amount)}</strong></div><div><span>Tiền dịch vụ</span><strong>{money(detail.service_amount)}</strong></div><div><span>Thuế</span><strong>{money(detail.tax_amount)}</strong></div></div><div className="invoice-detail-finance"><div className="invoice-detail-card-total"><span>Tổng tiền</span><strong>{money(detail.total_amount)}</strong></div><div className="invoice-detail-paid-row"><span>Đã thanh toán</span><strong>{money(amountPaid)}</strong></div><div className="invoice-detail-paid-row is-due"><span>Còn phải trả</span><strong>{money(detail.amount_due)}</strong></div></div></div></section>
-            <section className="invoice-detail-card"><h3>Thông tin khách hàng</h3><div className="invoice-detail-info-grid"><div><span>Họ và tên</span><strong>{detail.customer_full_name || detail.guest_full_name}</strong></div><div><span>Email</span><strong>{detail.customer_email || detail.guest_email || '—'}</strong></div><div><span>Số điện thoại</span><strong>{detail.customer_phone || detail.guest_phone || '—'}</strong></div><div><span>Tài khoản</span><strong>{detail.customer_email || 'Khách lưu trú'}</strong></div></div></section>
-            <section className="invoice-detail-card"><h3>Thông tin đặt phòng</h3><div className="invoice-detail-info-grid invoice-detail-booking-grid"><div><span>Mã đặt phòng</span><strong>{detail.booking_code}</strong></div><div><span>Trạng thái đặt phòng</span><strong className="invoice-detail-status-text">{bookingStatusLabel(detail.booking_status)}</strong></div><div><span>Số khách</span><strong>{detail.adults} người lớn, {detail.children} trẻ em</strong></div><div><span>Ngày nhận phòng</span><strong>{date(detail.check_in_date)}</strong></div><div><span>Ngày trả phòng</span><strong>{date(detail.check_out_date)}</strong></div></div></section>
-            <section className="invoice-detail-card"><h3>Danh sách phòng</h3>{detail.rooms.length ? <div className="table-responsive"><table className="table invoice-detail-room-table"><thead><tr><th>Số phòng</th><th>Loại phòng</th><th>Tầng</th><th>Trạng thái phòng</th></tr></thead><tbody>{detail.rooms.map((room, index) => <tr key={`${room.room_number || room.room_type_name}-${index}`}><td>{room.room_number || 'Chưa xếp'}</td><td>{room.room_type_name}</td><td>{room.floor ?? '—'}</td><td>{room.room_status || 'Chưa xếp phòng'}</td></tr>)}</tbody></table></div> : <p className="invoice-detail-note">Không có thông tin phòng.</p>}</section>
-            <section className="invoice-detail-card"><h3>Chi tiết khoản mục</h3><div className="table-responsive"><table className="table invoice-detail-items"><thead><tr><th>STT</th><th>Loại khoản mục</th><th>Mô tả</th><th>Số lượng</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead><tbody>{detail.items.length ? detail.items.map((item, index) => {
+            <div className="invoice-detail-overview">
+              <section className="invoice-detail-card"><h3>Thông tin hóa đơn</h3><div className="invoice-detail-info-grid invoice-detail-invoice-grid">
+                <div><span>Mã hóa đơn</span><strong>{detail.invoice_number}</strong></div>
+                <div><span>Ngày tạo</span><strong>{dateTimeSeconds(detail.issued_at)}</strong></div>
+                <div><span>Ngày thanh toán</span><strong>{dateTimeSeconds(paidAt)}</strong></div>
+                <div><span>Phương thức</span><strong>{historyPayments[0]?.method === 'CASH' ? 'Tiền mặt' : historyPayments[0]?.method || '—'}</strong></div>
+                <div><span>Trạng thái</span><strong><span className={`invoice-detail-badge ${detail.amount_due <= 0 ? 'is-paid' : 'is-open'}`}>{invoiceStatusLabel(detail)}</span></strong></div>
+                <div><span>Nhân viên lập</span><strong>{detail.created_by_full_name || '—'}</strong></div>
+                <div className="invoice-detail-wide-field"><span>Ghi chú</span><strong>{detail.special_request || '—'}</strong></div>
+              </div></section>
+              <section className="invoice-detail-card"><h3>Thông tin booking</h3><div className="invoice-detail-info-grid invoice-detail-booking-grid">
+                <div><span>Mã booking</span><strong>{detail.booking_code}</strong></div>
+                <div><span>Loại phòng</span><strong>{summarizeRoomTypes(detail.rooms) || '—'}</strong></div>
+                <div><span>Phòng</span><strong>{detail.rooms.map((room) => room.room_number).filter(Boolean).join(', ') || '—'}</strong></div>
+                <div><span>Nhận phòng</span><strong>{date(detail.check_in_date)}</strong></div>
+                <div><span>Trả phòng</span><strong>{date(detail.check_out_date)}</strong></div>
+                <div><span>Số đêm</span><strong>{Math.max(1, Math.ceil((new Date(detail.check_out_date).getTime() - new Date(detail.check_in_date).getTime()) / 86400000))}</strong></div>
+                <div><span>Trạng thái</span><strong><span className="invoice-detail-badge">{bookingStatusLabel(detail.booking_status)}</span></strong></div>
+              </div></section>
+              <section className="invoice-detail-card"><h3>Thông tin khách hàng</h3><div className="invoice-detail-info-grid single">
+                <div><span>Họ và tên</span><strong>{detail.customer_full_name || detail.guest_full_name || '—'}</strong></div>
+                <div><span>Số điện thoại</span><strong>{detail.customer_phone || detail.guest_phone || '—'}</strong></div>
+                <div className="invoice-detail-customer-email"><span>Email</span><strong>{detail.customer_email || detail.guest_email || '—'}</strong></div>
+                <div><span>CCCD</span><strong>{detail.guest_id_card_number || '—'}</strong></div>
+                <div><span>Số người lớn</span><strong>{detail.adults}</strong></div>
+                <div><span>Số trẻ em</span><strong>{detail.children}</strong></div>
+              </div></section>
+            </div>
+            <section className="invoice-detail-card invoice-detail-wide"><h3>Danh sách phòng</h3>{detail.rooms.length ? <div className="table-responsive"><table className="table invoice-detail-room-table"><thead><tr><th>Số phòng</th><th>Loại phòng</th><th>Tầng</th><th>Trạng thái phòng</th></tr></thead><tbody>{detail.rooms.map((room, index) => <tr key={`${room.room_number || room.room_type_name}-${index}`}><td>{room.room_number || 'Chưa xếp'}</td><td>{room.room_type_name}</td><td>{room.floor ?? '—'}</td><td>{room.room_status || 'Chưa xếp phòng'}</td></tr>)}</tbody></table></div> : <p className="invoice-detail-note">Không có thông tin phòng.</p>}</section>
+            <section className="invoice-detail-card invoice-detail-wide"><h3>Chi tiết khoản mục</h3><div className="table-responsive"><table className="table invoice-detail-items"><thead><tr><th>STT</th><th>Loại khoản mục</th><th>Mô tả</th><th>Số lượng</th><th>Đơn giá</th><th>Thành tiền</th></tr></thead><tbody>{detail.items.length ? detail.items.map((item, index) => {
               const roomIndex = detail.items.slice(0, index).filter((candidate) => candidate.item_type === 'ROOM').length;
               const room = item.item_type === 'ROOM' ? detail.rooms[roomIndex] : undefined;
               const description = room
@@ -161,11 +198,13 @@ export default function InvoiceList({ customerOnly = false }: { customerOnly?: b
                 : item.item_type === 'SERVICE' && item.room_number
                   ? `${item.description} - ${item.room_number}`
                   : item.description;
-              return <tr key={`${item.item_type}-${index}`}><td>{index + 1}</td><td>{item.item_type === 'ROOM' ? 'Phòng' : item.item_type === 'SERVICE' ? 'Dịch vụ' : 'Khác'}</td><td>{description}</td><td>{item.item_type === 'ROOM' ? `1 phòng · ${item.quantity} đêm` : item.quantity}</td><td>{money(item.unit_price)}</td><td>{money(item.amount)}</td></tr>;
+              return <tr key={`${item.item_type}-${index}`}><td>{index + 1}</td><td>{item.item_type === 'ROOM' ? 'Tiền phòng' : item.item_type === 'SERVICE' ? 'Dịch vụ' : 'Khác'}</td><td>{description}</td><td>{item.item_type === 'ROOM' ? `1 phòng · ${item.quantity} đêm` : item.quantity}</td><td>{money(item.unit_price)}</td><td>{money(item.amount)}</td></tr>;
             }) : <tr><td colSpan={6} className="invoice-detail-empty">Không có khoản mục.</td></tr>}</tbody></table></div></section>
-            <section className="invoice-detail-card"><h3>Lịch sử thanh toán</h3><div className="table-responsive"><table className="table invoice-detail-items invoice-detail-payments"><thead><tr><th>STT</th><th>Mã thanh toán</th><th>Loại thanh toán</th><th>Phương thức</th><th>Số tiền</th><th>Trạng thái</th><th>Ngày thanh toán</th></tr></thead><tbody>{historyPayments.length ? historyPayments.map((payment, index) => <tr key={payment.payment_code}><td>{index + 1}</td><td>{payment.payment_code}</td><td>{payment.payment_type === 'DEPOSIT' ? 'Đặt cọc' : 'Thanh toán cuối'}</td><td>{payment.method}</td><td>{money(payment.amount)}</td><td><span className={`invoice-detail-badge ${payment.status === 'SUCCESS' ? 'is-paid' : 'is-open'}`}>{paymentStatusLabel(payment.status)}</span></td><td>{dateTime(payment.paid_at)}</td></tr>) : <tr><td colSpan={7} className="invoice-detail-empty">Chưa có giao dịch thanh toán.</td></tr>}</tbody></table></div></section>
-            <section className="invoice-detail-card invoice-detail-summary"><h3>Tổng kết hóa đơn</h3><div><span>Tiền phòng</span><strong>{money(detail.room_amount)}</strong></div><div><span>Tiền dịch vụ</span><strong>{money(detail.service_amount)}</strong></div><div><span>Giảm giá</span><strong>{money(detail.discount_amount)}</strong></div><div><span>Thuế</span><strong>{money(detail.tax_amount)}</strong></div><div className="invoice-detail-summary-total"><span>Tổng cộng</span><strong>{money(detail.total_amount)}</strong></div></section>
-            <section className="invoice-detail-card"><h3>Ghi chú</h3><p className="invoice-detail-note">{detail.special_request || 'Không có ghi chú.'}</p></section>
+            <div className="invoice-detail-bottom">
+              <section className="invoice-detail-card"><h3>Lịch sử thanh toán</h3><div className="table-responsive"><table className="table invoice-detail-items invoice-detail-payments"><thead><tr><th>STT</th><th>Mã thanh toán</th><th>Loại thanh toán</th><th>Phương thức</th><th>Số tiền</th><th>Trạng thái</th><th>Ngày thanh toán</th></tr></thead><tbody>{historyPayments.length ? historyPayments.map((payment, index) => <tr key={payment.payment_code}><td>{index + 1}</td><td>{payment.payment_code}</td><td>{payment.payment_type === 'DEPOSIT' ? 'Đặt cọc' : 'Thanh toán cuối'}</td><td>{payment.method === 'CASH' ? 'Tiền mặt' : payment.method}</td><td>{money(payment.amount)}</td><td><span className={`invoice-detail-badge ${payment.status === 'SUCCESS' ? 'is-paid' : 'is-open'}`}>{paymentStatusLabel(payment.status)}</span></td><td>{dateTime(payment.paid_at)}</td></tr>) : <tr><td colSpan={7} className="invoice-detail-empty">Chưa có giao dịch thanh toán.</td></tr>}</tbody></table></div></section>
+              <section className="invoice-detail-card invoice-detail-summary"><h3>Tổng kết hóa đơn</h3><div><span>Tổng tiền</span><strong>{money(detail.total_amount)}</strong></div><div><span>Đã thanh toán (đặt cọc)</span><strong>{money(detail.deposit_paid)}</strong></div><div><span>Đã thanh toán (lần này)</span><strong>{money(historyPayments.filter((payment) => payment.payment_type === 'FINAL').reduce((sum, payment) => sum + payment.amount, 0))}</strong></div><div className="invoice-detail-summary-total"><span>Số tiền còn lại</span><strong>{money(detail.amount_due)}</strong></div></section>
+            </div>
+            <section className="invoice-detail-card invoice-detail-wide"><h3>Ghi chú</h3><p className="invoice-detail-note">{detail.special_request || 'Không có ghi chú.'}</p></section>
           </div>
         </>}
       </section>
