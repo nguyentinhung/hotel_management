@@ -42,11 +42,11 @@ async function updateCustomerProfile(req, res) {
       INSERTED.phone,
       INSERTED.status
     WHERE id = @userId
-      AND role_id = (
-        SELECT TOP 1 id
-        FROM roles
-        WHERE code = 'CUSTOMER'
-      );
+  AND role_id IN (
+    SELECT id
+    FROM roles
+    WHERE code IN ('CUSTOMER', 'ADMIN', 'RECEPTIONIST', 'HOUSEKEEPER')
+  );
   `);
 
     if (!result.recordset.length) {
