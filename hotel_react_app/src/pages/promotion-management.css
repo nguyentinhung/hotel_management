@@ -1,0 +1,129 @@
+﻿.promotion-page {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.promotion-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.promotion-table-wrap {
+    overflow-x: auto;
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    background: #fff;
+}
+
+.promotion-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.promotion-table th,
+.promotion-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid #eef0f4;
+    text-align: left;
+}
+
+.promotion-table th {
+    background: #f9fafb;
+    color: #4b5563;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.promotion-code-cell {
+    color: #111827;
+    font-weight: 700;
+}
+
+.promotion-form {
+    max-width: 920px;
+}
+
+.promotion-page .form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.promotion-page .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.promotion-page .form-group label {
+    color: #374151;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.promotion-page .form-group input,
+.promotion-page .form-group textarea,
+.promotion-page .form-group select {
+    width: 100%;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    padding: 9px 10px;
+    font: inherit;
+    background: #fff;
+}
+
+.promotion-page .form-wide {
+    grid-column: 1 / -1;
+}
+
+.promotion-page .form-actions,
+.promotion-page .promotion-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.promotion-page .form-actions {
+    margin-top: 18px;
+}
+
+.promotion-detail-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 12px;
+    padding: 18px;
+    background: #fff;
+}
+
+.promotion-detail-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.promotion-detail-grid div {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.promotion-detail-grid span {
+    color: #6b7280;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+@media (max-width: 720px) {
+    .promotion-header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .promotion-page .form-grid,
+    .promotion-detail-grid {
+        grid-template-columns: 1fr;
+    }
+}

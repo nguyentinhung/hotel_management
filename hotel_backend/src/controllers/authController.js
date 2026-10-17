@@ -369,6 +369,7 @@ module.exports = {
   verifyEmail,
   forgotPassword,
   resetPassword,
+  changePassword,
 };
 async function forgotPassword(req, res) {
   try {
@@ -604,5 +605,46 @@ async function resetPassword(req, res) {
       message: 'Đặt lại mật khẩu thất bại.',
       error: error.message,
     });
+  }
+}
+
+async function changePassword(req, res) {
+  try {
+    const userId = Number(req.auth?.userId);
+    const { currentPassword, newPassword } = req.body || {};
+    if (!userId) return res.status(401).json({ message: 'Vui lòng đăng nhập lại.' });
+    if (typeof currentPassword !== 'string' || !currentPassword || typeof newPassword !== 'string' || !newPassword) {
+      return res.status(400).json({ message: 'Vui lòng nhập mật khẩu hiện tại và mật khẩu mới.' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: 'Mật khẩu mới phải có ít nhất 6 ký tự.' });
+    }
+
+    const pool = await getPool();
+    const result = await pool.request()
+      .input('userId', sql.BigInt, userId)
+      .query('SELECT password_hash, status FROM users WHERE id = @userId;');
+    const user = result.recordset[0];
+    if (!user) return res.status(404).json({ message: 'Không tìm thấy tài khoản.' });
+    if (String(user.status).toUpperCase() !== 'ACTIVE') {
+      return res.status(403).json({ message: 'Tài khoản chưa được kích hoạt hoặc đã bị khóa.' });
+    }
+
+    const matches = user.password_hash === currentPassword
+      || await bcrypt.compare(currentPassword, user.password_hash).catch(() => false);
+    if (!matches) return res.status(400).json({ message: 'Mật khẩu hiện tại không đúng.' });
+    if (await bcrypt.compare(newPassword, user.password_hash).catch(() => false)) {
+      return res.status(400).json({ message: 'Mật khẩu mới phải khác mật khẩu hiện tại.' });
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await pool.request()
+      .input('userId', sql.BigInt, userId)
+      .input('passwordHash', sql.VarChar(255), passwordHash)
+      .query('UPDATE users SET password_hash = @passwordHash WHERE id = @userId;');
+    return res.json({ message: 'Đổi mật khẩu thành công.' });
+  } catch (error) {
+    console.error('Change password error:', error);
+    return res.status(500).json({ message: 'Không thể đổi mật khẩu lúc này.' });
   }
 }

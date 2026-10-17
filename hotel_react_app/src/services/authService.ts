@@ -87,3 +87,10 @@ export const resetPassword = async (
     }
   );
 };
+
+export const changePassword = async (currentPassword: string, newPassword: string, token: string) =>
+  api.post<{ message: string }>(
+    '/api/auth/change-password',
+    { currentPassword, newPassword },
+    token,
+  );

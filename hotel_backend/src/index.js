@@ -12,18 +12,21 @@ const cors = require('cors');
 const multer = require('multer');
 const sql = require('mssql');
 const jwt = require('jsonwebtoken');
-const { getPool, ensureAuthTables, ensureBookingStatusConstraint, ensureGuestIdCardOptional, ensureInvoiceCreatorColumn } = require('./config/db');
+const { getPool, ensureAuthTables, ensureBookingStatusConstraint, ensureGuestIdCardOptional, ensureInvoiceCreatorColumn, ensureBookingPromotionColumns, ensureBookingCancellationReason } = require('./config/db');
 // Seed data đã được tắt để dùng dữ liệu mẫu bạn insert trực tiếp trong SQL Server.
 const { getHomeData, getRoomTypes, getRoomTypeDetails, getPromotions, getServices, getActiveServiceById, getReviews } = require('./controllers/homeController');
-const { register, login, logout, verifyEmail, forgotPassword, resetPassword } = require('./controllers/authController');
-const { checkAvailability, getAvailableRooms } = require('./controllers/roomController');
+const { register, login, logout, verifyEmail, forgotPassword, resetPassword, changePassword } = require('./controllers/authController');
+const { getRoomList: getRoomListHandler, getRoomDetails: getRoomDetailsHandler, createRoom: createRoomHandler, updateRoom: updateRoomHandler, deleteRoom: deleteRoomHandler, checkAvailability, getAvailableRooms } = require('./controllers/roomController');
 const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, updateBookingHandler, cancelBookingHandler, getActiveBookingsHandler, checkOutBookingHandler, createReceptionInvoiceHandler, finishRoomCleaningHandler, reportRoomMaintenanceHandler, getRoomMaintenanceReportsHandler, resolveRoomMaintenanceReportHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('./controllers/bookingController');
 const serviceController = require('./controllers/serviceController');
-const { requireCustomer, requirePaymentStaff, requirePaymentActor } = require('./services/customerAuth');
+const { requireCustomer, requirePaymentStaff, requirePaymentActor, requireProfileAccess, requireChangePassword } = require('./services/customerAuth');
+const { getProfile, updateProfile } = require('./controllers/profileController');
 const { createPayment, getPaymentList, getCustomerPaymentList, getInvoiceList, getInvoiceDetail, getPaymentStatusRequest, confirmPaymentRequest, simulateDepositPaymentRequest } = require('./controllers/paymentController');
 const { handleVnpayReturn, handleVnpayIpn } = require('./controllers/vnpayController');
 const bookingServiceController = require('./controllers/bookingServiceController');
 const { getAdminStatistics } = require('./controllers/statisticsController');
+const { expirePendingBookings } = require('./dao/bookingDao');
+const promotionController = require('./controllers/promotionController');
 const app = express();
 const PORT = 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
@@ -61,6 +64,23 @@ function requireAdmin(req, res, next) {
   }
 }
 
+function requireRoomListAccess(req, res, next) {
+  const authorization = req.headers.authorization || '';
+  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+  if (!token) return res.status(401).json({ success: false, message: 'Vui lòng đăng nhập để tiếp tục.' });
+  try {
+    const user = jwt.verify(token, JWT_SECRET);
+    const roleById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
+    const roleCode = String(user.role_code || roleById[Number(user.role_id)] || '').toUpperCase();
+    if (!['ADMIN', 'RECEPTIONIST'].includes(roleCode)) {
+      return res.status(403).json({ success: false, message: 'Bạn không có quyền xem thông tin phòng.' });
+    }
+    return next();
+  } catch {
+    return res.status(401).json({ success: false, message: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.' });
+  }
+}
+
 app.use(cors());
 app.use(express.json());
 // Giữ phục vụ các ảnh cũ trong lúc chuyển chúng từ ổ đĩa vào SQL Server.
@@ -72,6 +92,8 @@ app.get('/api/health', (req, res) => {
 });
 
 app.get('/api/admin/statistics', requireAdmin, getAdminStatistics);
+app.get('/api/profile', requireProfileAccess, getProfile);
+app.put('/api/profile', requireProfileAccess, updateProfile);
 
 // --- Authentication APIs ---
 // Đăng ký tài khoản mới cho khách hàng
@@ -85,6 +107,7 @@ app.get('/api/auth/verify-email', verifyEmail);
 
 // Quên mật khẩu
 app.post('/api/auth/forgot-password', forgotPassword);
+app.post('/api/auth/change-password', requireChangePassword, changePassword);
 
 // Đặt lại mật khẩu bằng OTP
 app.post('/api/auth/reset-password', resetPassword);
@@ -382,6 +405,12 @@ app.delete('/api/room-types/:roomTypeId', async (req, res) => {
 });
 // Lấy danh sách khuyến mãi đang active
 app.get('/api/promotions/active', getPromotions);
+app.post('/api/promotions/validate', promotionController.validatePromotion);
+app.get('/api/admin/promotions', promotionController.requireAdmin, promotionController.getPromotions);
+app.get('/api/admin/promotions/:id', promotionController.requireAdmin, promotionController.getPromotionById);
+app.post('/api/admin/promotions', promotionController.requireAdmin, promotionController.createPromotion);
+app.put('/api/admin/promotions/:id', promotionController.requireAdmin, promotionController.updatePromotion);
+app.delete('/api/admin/promotions/:id', promotionController.requireAdmin, promotionController.deletePromotion);
 // Lấy danh sách dịch vụ khách sạn
 app.get('/api/services', getServices);
 app.get('/api/services/:id', getActiveServiceById);
@@ -419,6 +448,11 @@ app.post('/api/rooms/:roomId/maintenance-report', reportRoomMaintenanceHandler);
 app.get('/api/rooms/maintenance-reports', getRoomMaintenanceReportsHandler);
 app.post('/api/rooms/maintenance-reports/:reportId/resolve', resolveRoomMaintenanceReportHandler);
 app.get('/api/rooms/statuses', getRoomStatusesHandler);
+app.get('/api/rooms', requireRoomListAccess, getRoomListHandler);
+app.post('/api/rooms', requireAdmin, createRoomHandler);
+app.get('/api/rooms/:roomId', requireRoomListAccess, getRoomDetailsHandler);
+app.put('/api/rooms/:roomId', requireAdmin, updateRoomHandler);
+app.delete('/api/rooms/:roomId', requireAdmin, deleteRoomHandler);
 
 // 4. Lấy danh sách đặt phòng gần đây cho màn hình Dashboard Lễ tân
 app.get('/api/bookings/recent', getRecentBookingsHandler);
@@ -554,6 +588,9 @@ async function bootstrap() {
   await ensureBookingStatusConstraint();
   await ensureGuestIdCardOptional();
   await ensureInvoiceCreatorColumn();
+  await ensureBookingPromotionColumns();
+  await ensureBookingCancellationReason();
+  await expirePendingBookings();
   const pool = await getPool();
   await pool.request().query(`
     IF OBJECT_ID(N'dbo.services', N'U') IS NOT NULL
@@ -611,6 +648,10 @@ async function bootstrap() {
   app.listen(PORT, () => {
     console.log(`Hotel backend is running on http://localhost:${PORT}`);
   });
+  const pendingBookingExpiryTimer = setInterval(() => {
+    expirePendingBookings().catch((error) => console.error('Pending booking expiry failed:', error.message));
+  }, 60_000);
+  pendingBookingExpiryTimer.unref?.();
 }
 
 bootstrap().catch((error) => {

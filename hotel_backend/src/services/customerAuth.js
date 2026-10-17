@@ -54,4 +54,14 @@ const requirePaymentActor = requireRoles(
   'Bạn không có quyền kiểm tra trạng thái giao dịch này.',
 );
 
-module.exports = { requireCustomer, requirePaymentStaff, requirePaymentActor };
+const requireProfileAccess = requireRoles(
+  ['CUSTOMER', 'ADMIN', 'RECEPTIONIST', 'HOUSEKEEPER'],
+  'Bạn không có quyền truy cập hồ sơ.',
+);
+
+const requireChangePassword = requireRoles(
+  ['CUSTOMER', 'ADMIN', 'RECEPTIONIST', 'HOUSEKEEPER'],
+  'Bạn không có quyền đổi mật khẩu.',
+);
+
+module.exports = { requireCustomer, requirePaymentStaff, requirePaymentActor, requireProfileAccess, requireChangePassword };
