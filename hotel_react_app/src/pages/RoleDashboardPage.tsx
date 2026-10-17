@@ -19,6 +19,7 @@ import { useToast } from '../components/ToastProvider';
 import dashboardSidebarImage from '../assets/lumiere-dashboard-sidebar.png';
 import dashboardBannerImage from '../assets/lumiere-hero.png';
 import lotusLogo from '../assets/lumiere-lotus.png';
+import ReportsStatisticsPage from './ReportsStatisticsPage';
 
 /**
  * ============================================================================
@@ -49,6 +50,7 @@ const dashboardConfig: Record<
       { label: 'Booking Management', description: 'Quản lý booking, phân phòng và thông tin đặt phòng.' },
       { label: 'Check-in Guest', description: 'Xem booking đến nhận phòng và thực hiện thủ tục check-in.' },
       { label: 'Check-out Guest', description: 'Xem khách đang lưu trú và thực hiện thủ tục check-out.' },
+      { label: 'Reports & Statistics', description: 'Số liệu thống kê về kinh doanh và vận hành khách sạn.' },
     ],
   },
   RECEPTIONIST: {
@@ -734,15 +736,16 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
               {group.items.map((item) => {
                 const module = item.moduleIndex === undefined ? undefined : config.nav[item.moduleIndex]?.label;
                 const invoiceModule = item.label === 'Invoice Management';
-                const isActive = Boolean((module && module === activeItem.label) || (invoiceModule && activeItem.label === 'Invoice Management'));
-                const isDisabled = !module && !invoiceModule;
+                const reportsModule = item.label === 'Reports & Statistics';
+                const isActive = Boolean((module && module === activeItem.label) || (invoiceModule && activeItem.label === 'Invoice Management') || (reportsModule && activeItem.label === 'Reports & Statistics'));
+                const isDisabled = !module && !invoiceModule && !reportsModule;
                 return <button
                   key={item.label}
                   type="button"
                   className={`nav-item${isActive ? ' active' : ''}${isDisabled ? ' nav-item-disabled' : ''}`}
                   aria-disabled={isDisabled}
                   title={isDisabled ? 'This section is not available yet' : undefined}
-                  onClick={() => { if (module) setActiveModule(module); else if (invoiceModule) setActiveModule('Invoice Management'); }}
+                  onClick={() => { if (module) setActiveModule(module); else if (invoiceModule) setActiveModule('Invoice Management'); else if (reportsModule) setActiveModule('Reports & Statistics'); }}
                 >
                   <span className="dashboard-nav-icon"><DashboardNavIcon name={item.icon} /></span>
                   <span>{item.label}</span>
@@ -790,7 +793,7 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
         >
           <div>
             <DashboardBreadcrumb homeTo={dashboardHomeByRole[currentRole]} currentPage={pageTitle} />
-            <p className="eyebrow eyebrow-soft">{currentRole === 'RECEPTIONIST' ? 'Receptionist' : currentRole === 'CUSTOMER' ? (customerProfile.email || 'Email tài khoản') : config.title}</p>
+            <p className="eyebrow eyebrow-soft">{currentRole === 'RECEPTIONIST' ? 'Receptionist' : currentRole === 'CUSTOMER' ? (customerProfile.email || 'Email tài khoản') : currentRole === 'ADMIN' && activeItem.label === 'Reports & Statistics' ? 'Admin' : config.title}</p>
             <h1 id="dashboard-page-title">{pageTitle}</h1>
             <p className="dashboard-header-subtitle">{currentRole === 'RECEPTIONIST' && activeItem.label === config.nav[3].label ? 'Manage payments, monitor transaction status and confirm payments at the front desk.' : ((currentRole === 'ADMIN' && activeItem.label === config.nav[0].label) || (currentRole === 'RECEPTIONIST' && activeItem.label === config.nav[6].label)) ? 'Quản lý thông tin, trạng thái và tình trạng phòng.' : activeItem.description}</p>
           </div>
@@ -842,6 +845,8 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
             <RoomStatusPanel role={currentRole} />
           ) : currentRole === 'ADMIN' && activeItem.label === 'Service Management' ? (
             <ServiceListPage role={currentRole} />
+          ) : currentRole === 'ADMIN' && activeItem.label === 'Reports & Statistics' ? (
+            <ReportsStatisticsPage />
           ) : currentRole === 'RECEPTIONIST' && activeItem.label === config.nav[5].label ? (
             <ServiceListPage role={currentRole} />
           ) : currentRole === 'CUSTOMER' && ['Đặt phòng'].includes(activeItem.label) ? (

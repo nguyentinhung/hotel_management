@@ -23,6 +23,7 @@ const { requireCustomer, requirePaymentStaff, requirePaymentActor } = require('.
 const { createPayment, getPaymentList, getCustomerPaymentList, getInvoiceList, getInvoiceDetail, getPaymentStatusRequest, confirmPaymentRequest, simulateDepositPaymentRequest } = require('./controllers/paymentController');
 const { handleVnpayReturn, handleVnpayIpn } = require('./controllers/vnpayController');
 const bookingServiceController = require('./controllers/bookingServiceController');
+const { getAdminStatistics } = require('./controllers/statisticsController');
 const app = express();
 const PORT = 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
@@ -69,6 +70,8 @@ app.use('/uploads', express.static(uploadsDir));
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, message: 'Hotel backend is running' });
 });
+
+app.get('/api/admin/statistics', requireAdmin, getAdminStatistics);
 
 // --- Authentication APIs ---
 // Đăng ký tài khoản mới cho khách hàng
