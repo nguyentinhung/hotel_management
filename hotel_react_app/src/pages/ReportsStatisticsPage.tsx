@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import api from '../services/api';
+import { getAdminStatistics } from '../services/statisticsService';
 
 type Range = { start: string; end: string };
 type PeriodRow = { period_start: string; period_label: string; [key: string]: string | number };
@@ -253,7 +253,7 @@ export default function ReportsStatisticsPage() {
     if (invalidRange) return;
     setLoading(true); setError('');
     try {
-      const result = await api.get<Stats>(`/api/admin/statistics?start=${range.start}&end=${range.end}&periodType=DAY`, token);
+      const result = await getAdminStatistics<Stats>(range.start, range.end, 'DAY', token);
       setData(result);
     } catch (cause) { setError(cause instanceof Error ? cause.message : 'Không thể tải báo cáo.'); }
     finally { setLoading(false); }

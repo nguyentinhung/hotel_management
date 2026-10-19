@@ -46,6 +46,19 @@ export interface Review {
   room_type_name?: string;
 }
 
+export interface ReviewBooking {
+  booking_id: number;
+  booking_code: string;
+  status: string;
+  check_in_date: string;
+  check_out_date: string;
+  room_type_count: number;
+  room_type_id: number | null;
+  room_type_name: string | null;
+  can_review: boolean;
+  review: { id: number; rating: number; comment: string } | null;
+}
+
 export interface AppUser {
   full_name: string;
   role: Role;

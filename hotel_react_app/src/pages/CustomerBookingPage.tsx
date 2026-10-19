@@ -5,7 +5,8 @@ import { createFinalPayment } from '../services/paymentService';
 import { resolveRole } from '../utils/role';
 import type { CustomerBookingResponse, Promotion, RoomAvailabilityItem, ServiceItem } from '../types';
 import { useToast } from '../components/ToastProvider';
-import { getActivePromotions } from '../services/homeService';
+import { getActivePromotions, getServices } from '../services/homeService';
+import { validatePromotion } from '../services/promotionValidationService';
 
 const vnpayEnabled = import.meta.env.VITE_VNPAY_ENABLED === 'true';
 const dateValue = (date: Date) => date.toISOString().slice(0, 10);
@@ -77,11 +78,8 @@ export default function CustomerBookingPage() {
       setIsLoading(false);
       return;
     }
-    fetch('http://localhost:5000/api/services?active=true')
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error('Không tải được danh sách dịch vụ.')))
-      .then((data: ServiceItem[]) => setServiceOptions(Array.isArray(data)
-        ? data.filter((service) => service.booking_policy === 'PREBOOK')
-        : []))
+    getServices()
+      .then((data) => setServiceOptions(data.filter((service) => service.booking_policy === 'PREBOOK')))
       .catch(() => setServiceOptions([]));
 
     if (params.has('room_type_id') && (!Number.isInteger(roomTypeId) || roomTypeId < 1)) {
@@ -144,12 +142,7 @@ export default function CustomerBookingPage() {
     setPromotionCode(code);
     setPromotionMessage('Đang kiểm tra mã khuyến mãi…');
     try {
-      const response = await fetch('http://localhost:5000/api/promotions/validate', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, subtotal: bookingSubtotal }),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.message || 'Mã khuyến mãi không hợp lệ.');
+      const result = await validatePromotion(code, bookingSubtotal);
       setAppliedPromotion({ promotion_code: result.promotion_code, discount_amount: Number(result.discount_amount), subtotal: bookingSubtotal });
       setPromotionMessage(`Đã áp dụng mã ${result.promotion_code}. Giảm ${new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(result.discount_amount)}.`);
       return true;

@@ -1,5 +1,8 @@
 import { FormEvent, useCallback, useEffect, useState } from 'react';
-import api from '../services/api';
+import {
+  createRoomType, deleteRoomType, getAmenities, getRoomTypeDetails, getRoomTypes,
+  updateRoomType, uploadRoomTypeImage,
+} from '../services/roomTypeService';
 import { useToast } from '../components/ToastProvider';
 import DataTable from '../components/DataTable';
 
@@ -84,7 +87,7 @@ export default function RoomTypesPage({ readOnly = false, roomCounts }: { readOn
     setAmenitiesError('');
     try {
       const token = localStorage.getItem('accessToken') || undefined;
-      setAmenities(await api.get<Amenity[]>('/api/admin/amenities', token));
+      setAmenities(await getAmenities(token));
     } catch (loadError) {
       const message = loadError instanceof Error ? loadError.message : 'Không thể tải danh sách tiện nghi.';
       setAmenities([]);
@@ -112,7 +115,7 @@ export default function RoomTypesPage({ readOnly = false, roomCounts }: { readOn
     setIsDetailsOpen(true);
     setIsDetailsLoading(true);
     try {
-      const details = await api.get<RoomType>(`/api/room-types/${roomTypeId}`);
+      const details = await getRoomTypeDetails(roomTypeId);
       setSelectedRoomType(details);
     } catch (detailsLoadError) {
       const message = detailsLoadError instanceof Error ? detailsLoadError.message : 'Không thể tải chi tiết loại phòng.';
@@ -126,7 +129,7 @@ export default function RoomTypesPage({ readOnly = false, roomCounts }: { readOn
   const loadRoomTypes = useCallback(async () => {
     setIsLoading(true);
     try {
-      const data = await api.get<RoomType[]>('/api/room-types');
+      const data = await getRoomTypes();
       setRoomTypes(data);
       setError('');
     } catch (loadError) {
@@ -170,7 +173,7 @@ export default function RoomTypesPage({ readOnly = false, roomCounts }: { readOn
     setDeleteError('');
     try {
       const token = localStorage.getItem('accessToken') || undefined;
-      const result = await api.deleteWithAuth<{ message: string }>(`/api/room-types/${roomTypeId}`, token);
+      const result = await deleteRoomType(roomTypeId, token);
       setRoomTypes((current) => current.filter((roomType) => roomType.id !== roomTypeId));
       setSuccess(result.message);
       showToast(result.message, 'success');
@@ -217,8 +220,8 @@ export default function RoomTypesPage({ readOnly = false, roomCounts }: { readOn
         amenity_ids: form.amenity_ids,
       };
       const result = editingRoomTypeId == null
-        ? await api.postWithAuth<{ message: string; roomType: RoomType }>('/api/room-types', payload, token)
-        : await api.putWithAuth<{ message: string; roomType: RoomType }>(`/api/room-types/${editingRoomTypeId}`, payload, token);
+        ? await createRoomType(payload, token)
+        : await updateRoomType(editingRoomTypeId, payload, token);
 
       savedRoomType = result.roomType;
       setEditingRoomTypeId(savedRoomType.id);
@@ -227,13 +230,7 @@ export default function RoomTypesPage({ readOnly = false, roomCounts }: { readOn
         : [...current, savedRoomType!]);
 
       if (selectedImage) {
-        const formData = new FormData();
-        formData.append('image', selectedImage);
-        const imageResult = await api.postFormWithAuth<{ image_url: string }>(
-          `/api/room-types/${savedRoomType.id}/image`,
-          formData,
-          token,
-        );
+        const imageResult = await uploadRoomTypeImage(savedRoomType.id, selectedImage, token);
         savedRoomType = { ...savedRoomType, image_url: imageResult.image_url };
       }
 

@@ -1,5 +1,5 @@
 const jwt = require('jsonwebtoken');
-const { createWalkInBooking, createCustomerBooking, checkInBooking, getRecentBookings, getActiveBookings, updateBooking, cancelBooking, checkOutBooking, updateRoomStatus, reportRoomMaintenance, getOpenRoomMaintenanceReports, resolveRoomMaintenanceReport, getRoomStatuses, getAssignableRooms, assignRoomToBooking } = require('../dao/bookingDao');
+const { createWalkInBooking, createCustomerBooking, checkInBooking, getRecentBookings, getActiveBookings, updateBooking, cancelBooking, checkOutBooking, updateRoomStatus, reportRoomMaintenance, getOpenRoomMaintenanceReports, resolveRoomMaintenanceReport, getRoomStatuses, getAssignableRooms, assignRoomToBooking } = require('../services/bookingService');
 const { makeReceptionCheckoutPayment, createReceptionInvoice } = require('../services/paymentService');
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
 const roleCodeById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };

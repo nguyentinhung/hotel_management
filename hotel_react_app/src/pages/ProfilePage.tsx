@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import api from '../services/api';
+import { getProfile, updateProfile } from '../services/profileService';
 
 type Profile = {
   id: number;
@@ -29,7 +29,7 @@ export default function ProfilePage() {
       return;
     }
     try {
-      const result = await api.get<{ user: Profile }>('/api/profile', token);
+      const result = await getProfile(token);
       setProfile(result.user);
       setFullName(result.user.full_name || '');
       setPhone(result.user.phone || '');
@@ -54,9 +54,7 @@ export default function ProfilePage() {
     setError('');
     setMessage('');
     try {
-      const result = await api.putWithAuth<{ user: Profile; message: string }>(
-        '/api/profile', { full_name: fullName.trim(), phone: phone.trim() }, token,
-      );
+      const result = await updateProfile(token, { full_name: fullName.trim(), phone: phone.trim() });
       setProfile(result.user);
       setFullName(result.user.full_name);
       setPhone(result.user.phone);

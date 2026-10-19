@@ -1,4 +1,18 @@
-const { getRoomTypes, getPromotions, getServices, getReviews } = require('../dao/homeDao');
+const {
+  getRoomTypes: getRoomTypesFromDao,
+  getRoomTypeById,
+  getPromotions: getPromotionsFromDao,
+  getServices: getServicesFromDao,
+  getActiveServiceById,
+  getReviews: getReviewsFromDao,
+} = require('../dao/homeDao');
+
+const getRoomTypes = () => getRoomTypesFromDao();
+const getRoomTypeDetails = (id) => getRoomTypeById(id);
+const getPromotions = () => getPromotionsFromDao();
+const getServices = (activeOnly) => getServicesFromDao(activeOnly);
+const getActiveService = (id) => getActiveServiceById(id);
+const getReviews = () => getReviewsFromDao();
 
 function toNumber(value) {
   const num = Number(value ?? 0);
@@ -81,4 +95,10 @@ async function fetchHomeData() {
 
 module.exports = {
   fetchHomeData,
+  getRoomTypes,
+  getRoomTypeDetails,
+  getPromotions,
+  getServices,
+  getActiveService,
+  getReviews,
 };

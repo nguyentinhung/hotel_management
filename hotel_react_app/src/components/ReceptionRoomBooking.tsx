@@ -22,7 +22,8 @@ import BookingRoomSelectionEditor, { type BookingRoomSelection } from './Booking
 import { createReceptionCheckout, createReceptionInvoice, getInvoiceDetails } from '../services/paymentService';
 import type { InvoiceDetail } from '../services/paymentService';
 import CheckoutPaymentSuccessModal, { type CheckoutPaymentSuccess } from './CheckoutPaymentSuccessModal';
-import { getActivePromotions } from '../services/homeService';
+import { getActivePromotions, getServices } from '../services/homeService';
+import { validatePromotion } from '../services/promotionValidationService';
 import type { Promotion } from '../types/Promotion';
 import { useToast } from './ToastProvider';
 import DataTable from './DataTable';
@@ -678,11 +679,8 @@ export default function ReceptionRoomBooking({
       void getActivePromotions()
         .then((promotions) => { setWalkInPromotions(promotions); setWalkInPromotionLoadError(''); })
         .catch(() => { setWalkInPromotions([]); setWalkInPromotionLoadError('Không tải được danh sách promotion. Bạn vẫn có thể nhập mã để kiểm tra.'); });
-      fetch('http://localhost:5000/api/services?active=true')
-        .then((response) => response.ok ? response.json() : Promise.reject(new Error('Không tải được danh sách dịch vụ.')))
-        .then((data: ServiceItem[]) => setServiceOptions(Array.isArray(data)
-          ? data.filter((service) => service.booking_policy === 'PREBOOK')
-          : []))
+      void getServices()
+        .then((data) => setServiceOptions(data.filter((service) => service.booking_policy === 'PREBOOK')))
         .catch(() => setServiceOptions([]));
     }
     if (mode === 'checkin') void fetchAttentionBookings();
@@ -825,12 +823,7 @@ export default function ReceptionRoomBooking({
     setWalkInPromotionCode(code);
     setWalkInPromotionMessage('Đang kiểm tra promotion…');
     try {
-      const response = await fetch('http://localhost:5000/api/promotions/validate', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, subtotal: walkInSubtotal }),
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.message || 'Promotion không hợp lệ.');
+      const result = await validatePromotion(code, walkInSubtotal);
       setWalkInPromotionId(result.promotion_code);
       setWalkInAppliedPromotion({ code: result.promotion_code, discount_amount: Number(result.discount_amount), subtotal: walkInSubtotal });
       setWalkInPromotionMessage(`Đã áp dụng mã ${result.promotion_code}. Giảm ${formatCurrency(Number(result.discount_amount))}.`);

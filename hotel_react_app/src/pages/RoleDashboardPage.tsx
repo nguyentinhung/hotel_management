@@ -24,6 +24,7 @@ import dashboardSidebarImage from '../assets/lumiere-dashboard-sidebar.png';
 import dashboardBannerImage from '../assets/lumiere-hero.png';
 import lotusLogo from '../assets/lumiere-lotus.png';
 import ReportsStatisticsPage from './ReportsStatisticsPage';
+import ReviewListPage from './ReviewListPage';
 
 /**
  * ============================================================================
@@ -92,6 +93,7 @@ const dashboardConfig: Record<
     accent: 'Customer',
     nav: [
       { label: 'My Bookings', description: 'View your booking history.' },
+      { label: 'Review Management', description: 'View and manage reviews for your bookings.' },
       { label: 'My Invoices', description: 'View invoices and payments.' },
       { label: 'My Profile', description: 'View your profile.' },
       { label: 'Change Password', description: 'Update your password.' },
@@ -102,7 +104,7 @@ const dashboardConfig: Record<
 type DashboardIconName = 'calendar' | 'checkIn' | 'checkOut' | 'payment' | 'room' | 'bedDouble' | 'service' | 'invoice' | 'profile' | 'maintenance' | 'dashboard' | 'promotion' | 'cleaning' | 'review' | 'staff' | 'settings' | 'logOut' | 'customer' | 'tag' | 'chart' | 'clipboard' | 'key' | 'shield' | 'equipment';
 const dashboardNavIcons: Record<Role, DashboardIconName[]> = {
   RECEPTIONIST: ['calendar', 'checkIn', 'checkOut', 'payment', 'room', 'service', 'profile', 'key'],
-  CUSTOMER: ['calendar', 'invoice', 'profile', 'key'],
+  CUSTOMER: ['calendar', 'review', 'invoice', 'profile', 'key'],
   ADMIN: ['bedDouble', 'room', 'service', 'payment'],
   HOUSEKEEPER: ['maintenance', 'profile', 'key'],
 };
@@ -687,7 +689,9 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
       ? { label: 'Booking History', description: 'Xem toàn bộ booking, bao gồm booking đã checkout hoặc đã hủy.' }
       : activeModule === 'Invoice Management'
         ? { label: 'Invoice Management', description: 'View the invoice list and payment status.' }
-        : config.nav[0]);
+        : activeModule === 'Review Management'
+          ? { label: 'Review Management', description: 'Review customer ratings and booking feedback.' }
+          : config.nav[0]);
 
   const pageTitle = currentRole === 'RECEPTIONIST' && activeItem.label === config.nav[3].label
     ? 'Payment Management'
@@ -801,15 +805,16 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
                 const module = item.moduleIndex === undefined ? undefined : config.nav[item.moduleIndex]?.label;
                 const invoiceModule = item.label === 'Invoice Management';
                 const reportsModule = item.label === 'Reports & Statistics';
-                const isActive = Boolean((module && module === activeItem.label) || (invoiceModule && activeItem.label === 'Invoice Management') || (reportsModule && activeItem.label === 'Reports & Statistics'));
-                const isDisabled = !module && !invoiceModule && !reportsModule;
+                const reviewModule = item.label === 'Review Management';
+                const isActive = Boolean((module && module === activeItem.label) || (invoiceModule && activeItem.label === 'Invoice Management') || (reportsModule && activeItem.label === 'Reports & Statistics') || (reviewModule && activeItem.label === 'Review Management'));
+                const isDisabled = !module && !invoiceModule && !reportsModule && !reviewModule;
                 return <button
                   key={item.label}
                   type="button"
                   className={`nav-item${isActive ? ' active' : ''}${isDisabled ? ' nav-item-disabled' : ''}`}
                   aria-disabled={isDisabled}
                   title={isDisabled ? 'This section is not available yet' : undefined}
-                  onClick={() => { if (module) setActiveModule(module); else if (invoiceModule) setActiveModule('Invoice Management'); else if (reportsModule) setActiveModule('Reports & Statistics'); }}
+                  onClick={() => { if (module) setActiveModule(module); else if (invoiceModule) setActiveModule('Invoice Management'); else if (reportsModule) setActiveModule('Reports & Statistics'); else if (reviewModule) setActiveModule('Review Management'); }}
                 >
                   <span className="dashboard-nav-icon"><DashboardNavIcon name={item.icon} /></span>
                   <span>{item.label}</span>
@@ -891,6 +896,8 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
             <ReceptionRoomBooking mode="checkout" />
           ) : currentRole === 'ADMIN' && activeItem.label === 'Promotion Management' ? (
             <div className="module-content"><PromotionListPage role="ADMIN" /></div>
+          ) : ['ADMIN', 'RECEPTIONIST', 'CUSTOMER'].includes(currentRole) && ['Review Management', 'Review'].includes(activeItem.label) ? (
+            <ReviewListPage role={currentRole} />
           ) : currentRole === 'ADMIN' && activeItem.label === 'Booking Management' ? (
             <ReceptionRoomBooking mode="management" />
           ) : currentRole === 'ADMIN' && activeItem.label === 'Check-in Guest' ? (

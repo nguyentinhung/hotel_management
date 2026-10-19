@@ -1,5 +1,5 @@
-const { fetchHomeData } = require('../services/homeService');
-const { getRoomTypeById: fetchRoomTypeById } = require('../dao/homeDao');
+const homeService = require('../services/homeService');
+const { fetchHomeData } = homeService;
 
 // Lấy dữ liệu tổng hợp cho trang chủ: room type, promotion, service, review
 async function getHomeData(req, res) {
@@ -18,8 +18,7 @@ async function getHomeData(req, res) {
 // Lấy danh sách loại phòng để hiển thị lên homepage / room listing
 async function getRoomTypes(req, res) {
   try {
-    const { getRoomTypes } = require('../dao/homeDao');
-    const roomTypes = await getRoomTypes();
+    const roomTypes = await homeService.getRoomTypes();
     res.json(roomTypes.map((item) => ({
       id: item.id,
       name: item.name,
@@ -46,7 +45,7 @@ async function getRoomTypeDetails(req, res) {
   }
 
   try {
-    const roomType = await fetchRoomTypeById(roomTypeId);
+    const roomType = await homeService.getRoomTypeDetails(roomTypeId);
     if (!roomType) {
       return res.status(404).json({ message: 'Không tìm thấy loại phòng.' });
     }
@@ -60,8 +59,7 @@ async function getRoomTypeDetails(req, res) {
 // Lấy thông tin khuyến mãi đang áp dụng để customer xem ở homepage
 async function getPromotions(req, res) {
   try {
-    const { getPromotions } = require('../dao/homeDao');
-    const promotions = await getPromotions();
+    const promotions = await homeService.getPromotions();
     res.json(promotions.map((item) => ({
       id: item.id,
       code: item.code,
@@ -83,9 +81,8 @@ async function getPromotions(req, res) {
 // Lấy danh sách dịch vụ khách sạn để render lên landing page hoặc booking
 async function getServices(req, res) {
   try {
-    const { getServices } = require('../dao/homeDao');
     const activeOnly = req.query.active === 'true' || req.query.active === undefined;
-    const services = await getServices(activeOnly);
+    const services = await homeService.getServices(activeOnly);
     res.json(services.map((item) => ({
       id: item.id,
       name: item.name,
@@ -105,8 +102,7 @@ async function getActiveServiceById(req, res) {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) return res.status(400).json({ message: 'Mã dịch vụ không hợp lệ.' });
   try {
-    const { getActiveServiceById } = require('../dao/homeDao');
-    const item = await getActiveServiceById(id);
+    const item = await homeService.getActiveService(id);
     if (!item) return res.status(404).json({ message: 'Không tìm thấy dịch vụ đang hoạt động.' });
     return res.json({ ...item, price: Number(item.price ?? 0), is_active: Boolean(item.is_active) });
   } catch (error) {
@@ -118,8 +114,7 @@ async function getActiveServiceById(req, res) {
 // Lấy review từ khách hàng để hiện lên homepage hoặc trang chi tiết phòng
 async function getReviews(req, res) {
   try {
-    const { getReviews } = require('../dao/homeDao');
-    const reviews = await getReviews();
+    const reviews = await homeService.getReviews();
     res.json(reviews.map((item) => ({
       id: item.id,
       room_type_id: item.room_type_id,

@@ -10,6 +10,8 @@ import VerifyEmailPage from './pages/VerifyEmailPage';
 import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import PaymentPage from './pages/PaymentPage';
+import ReviewCreatePage from './pages/ReviewCreatePage';
+import ReviewUpdatePage from './pages/ReviewUpdatePage';
 
 export default function App() {
   return (
@@ -27,6 +29,8 @@ export default function App() {
         <Route path="/reception" element={<RoleDashboardPage role="RECEPTIONIST" />} />
         <Route path="/housekeeping" element={<RoleDashboardPage role="HOUSEKEEPER" />} />
         <Route path="/my-bookings" element={<RoleDashboardPage role="CUSTOMER" />} />
+        <Route path="/reviews/new" element={<ReviewCreatePage />} />
+        <Route path="/reviews/:reviewId/edit" element={<ReviewUpdatePage />} />
       </Routes>
     </BrowserRouter>
   );

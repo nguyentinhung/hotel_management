@@ -247,6 +247,22 @@ async function ensureBookingCancellationReason() {
   `);
 }
 
+async function ensureReviewBookingColumn() {
+  const currentPool = await getPool();
+  await currentPool.request().query(`
+    IF OBJECT_ID(N'dbo.reviews', N'U') IS NULL
+      THROW 50001, 'dbo.reviews must exist before enabling review management.', 1;
+    IF COL_LENGTH(N'dbo.reviews', 'booking_id') IS NULL
+      ALTER TABLE dbo.reviews ADD booking_id BIGINT NULL;
+    IF NOT EXISTS (
+      SELECT 1 FROM sys.indexes
+      WHERE object_id = OBJECT_ID(N'dbo.reviews') AND name = N'UX_reviews_booking_id'
+    )
+      CREATE UNIQUE INDEX UX_reviews_booking_id ON dbo.reviews(booking_id)
+      WHERE booking_id IS NOT NULL;
+  `);
+}
+
 module.exports = {
   sql,
   getPool,
@@ -256,4 +272,5 @@ module.exports = {
   ensureInvoiceCreatorColumn,
   ensureBookingPromotionColumns,
   ensureBookingCancellationReason,
+  ensureReviewBookingColumn,
 };
