@@ -10,7 +10,7 @@ function requireAdmin(req, res, next) {
 
     try {
         const claims = jwt.verify(token, JWT_SECRET);
-        const roleCode = roleCodeById[Number(claims.role_id)] || String(claims.role_code || '').toUpperCase();
+        const roleCode = String(claims.role_code || '').toUpperCase() || roleCodeById[Number(claims.role_id)];
         if (roleCode !== 'ADMIN') {
             return res.status(403).json({ message: 'Chỉ quản trị viên được quản lý dịch vụ.' });
         }

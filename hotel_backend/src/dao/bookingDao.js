@@ -33,9 +33,29 @@ function generateBookingCode() {
 }
 
 function activeReservationPredicate(alias) {
-  return `(${alias}.status = 'CHECKED_IN' OR (${alias}.status = 'CONFIRMED' AND (
-    COALESCE(${alias}.deposit_amount, 0) >= CEILING(COALESCE((SELECT SUM(dbr.price_per_night) FROM dbo.booking_rooms dbr WHERE dbr.booking_id = ${alias}.id), 0) * DATEDIFF(day, ${alias}.check_in_date, ${alias}.check_out_date) * 0.30)
-  )))`;
+  // CONFIRMED bookings hold inventory regardless of deposit; online bookings only reach this state after deposit succeeds.
+  return `(${alias}.status = 'CHECKED_IN' OR (${alias}.status = 'PENDING_PAYMENT' AND ${alias}.created_at > DATEADD(minute, -15, SYSUTCDATETIME())) OR ${alias}.status = 'CONFIRMED')`;
+}
+
+async function expirePendingBookings() {
+  const pool = await getPool();
+  const result = await pool.request().query(`
+    DECLARE @expired TABLE (id BIGINT PRIMARY KEY);
+    UPDATE dbo.bookings
+    SET status = 'CANCELLED', cancellation_reason = 'PAYMENT_TIMEOUT'
+    OUTPUT INSERTED.id INTO @expired(id)
+    WHERE status = 'PENDING_PAYMENT'
+      AND created_at <= DATEADD(minute, -15, SYSUTCDATETIME());
+
+    UPDATE p
+    SET status = 'FAILED'
+    FROM dbo.payments p
+    JOIN @expired e ON e.id = p.booking_id
+    WHERE p.payment_type = 'DEPOSIT' AND p.status = 'PENDING';
+
+    SELECT COUNT(*) AS expired_count FROM @expired;
+  `);
+  return Number(result.recordset[0]?.expired_count ?? 0);
 }
 
 /**
@@ -56,8 +76,9 @@ async function createWalkInBooking(data) {
     guestIdCard = '',
     depositAmount = 0,
     serviceSelections = [],
+    promotionCode = '',
     specialRequest = '',
-    checkInNow = false,
+    checkInNow = true,
   } = data;
 
   const pool = await getPool();
@@ -81,6 +102,7 @@ async function createWalkInBooking(data) {
       .input('checkIn', sql.Date, checkInDate)
       .input('checkOut', sql.Date, checkOutDate);
     let roomFilter = 'r.room_type_id = @roomTypeId';
+    if (checkInNow) roomFilter += " AND r.status = 'AVAILABLE'";
     if (selection.roomId) {
       roomQuery.input('roomId', sql.Int, Number(selection.roomId));
       roomFilter += ' AND r.id = @roomId';
@@ -124,12 +146,26 @@ async function createWalkInBooking(data) {
     validServices.push({ serviceId, quantity, price: Number(serviceResult.recordset[0].price ?? 0) });
   }
   const serviceTotal = validServices.reduce((sum, service) => sum + service.price * service.quantity, 0) * selectedRooms.length;
-  const totalAmount = totalPerNight * nights + serviceTotal;
-  const requiredDepositAmount = Math.ceil(totalPerNight * nights * 0.3);
-  const finalDeposit = Number(depositAmount ?? 0);
-  if (checkInNow && finalDeposit < requiredDepositAmount) {
-    throw new Error(`A deposit of at least ${requiredDepositAmount} is required before check-in.`);
+  const originalTotalAmount = totalPerNight * nights + serviceTotal;
+  let discountAmount = 0;
+  let promotion = null;
+  if (promotionCode) {
+    const promotionResult = await pool.request()
+      .input('code', sql.VarChar(50), String(promotionCode).trim().toUpperCase())
+      .query(`SELECT TOP (1) id, code, discount_type, discount_value, max_discount
+        FROM dbo.promotions
+        WHERE UPPER(LTRIM(RTRIM(code))) = @code AND is_active = 1
+          AND CAST(GETDATE() AS date) BETWEEN valid_from AND valid_to;`);
+    promotion = promotionResult.recordset[0];
+    if (!promotion) throw new Error('Promotion code is invalid, inactive, or expired.');
+    discountAmount = promotion.discount_type === 'PERCENT'
+      ? Math.floor(originalTotalAmount * Number(promotion.discount_value) / 100)
+      : Number(promotion.discount_value);
+    if (promotion.max_discount != null) discountAmount = Math.min(discountAmount, Number(promotion.max_discount));
+    discountAmount = Math.max(0, Math.min(originalTotalAmount, discountAmount));
   }
+  const totalAmount = originalTotalAmount - discountAmount;
+  const finalDeposit = Number(depositAmount ?? 0);
 
   // 3. Tìm hoặc tạo khách hàng (customer) trong bảng users
   // Vì bảng bookings có FK customer_id NOT NULL -> bắt buộc cần user id
@@ -169,7 +205,7 @@ async function createWalkInBooking(data) {
   }
 
   // 4. Tạo mã booking và xác định trạng thái ban đầu
-  // Nếu lễ tân chọn "Nhận phòng ngay" -> CHECKED_IN, ngược lại CONFIRMED
+  // Walk-in bookings check guests in immediately; no online deposit is required at the desk.
   const bookingCode = generateBookingCode();
   const initialStatus = checkInNow ? 'CHECKED_IN' : 'CONFIRMED';
   if (checkInNow && selectedRooms.some(({ room }) => !room)) throw new Error('Cannot check in before every room is assigned and ready.');
@@ -187,19 +223,28 @@ async function createWalkInBooking(data) {
     .input('children', sql.TinyInt, Number(children))
     .input('status', sql.VarChar(20), initialStatus)
     .input('total_amount', sql.Decimal(12, 2), totalAmount)
+    .input('original_total_amount', sql.Decimal(12, 2), originalTotalAmount)
+    .input('discount_amount', sql.Decimal(12, 2), discountAmount)
+    .input('promotion_id', sql.Int, promotion?.id ?? null)
+    .input('promotion_code', sql.VarChar(50), promotion?.code ?? null)
+    .input('promotion_discount_type', sql.VarChar(20), promotion?.discount_type ?? null)
+    .input('promotion_discount_value', sql.Decimal(12, 2), promotion ? Number(promotion.discount_value) : null)
+    .input('promotion_max_discount', sql.Decimal(12, 2), promotion?.max_discount == null ? null : Number(promotion.max_discount))
     .input('deposit_amount', sql.Decimal(12, 2), finalDeposit)
     .input('special_request', sql.NVarChar(500), specialRequest ? specialRequest.trim() : null)
     .query(`
       INSERT INTO bookings (
         booking_code, customer_id, guest_full_name, guest_phone, guest_email,
         check_in_date, check_out_date, adults, children, status,
-        total_amount, deposit_amount, created_at, special_request
+        total_amount, deposit_amount, created_at, special_request, original_total_amount, discount_amount,
+        promotion_id, promotion_code, promotion_discount_type, promotion_discount_value, promotion_max_discount
       )
       OUTPUT INSERTED.id, INSERTED.booking_code, INSERTED.created_at
       VALUES (
         @booking_code, @customer_id, @guest_full_name, @guest_phone, @guest_email,
         @check_in_date, @check_out_date, @adults, @children, @status,
-        @total_amount, @deposit_amount, SYSUTCDATETIME(), @special_request
+        @total_amount, @deposit_amount, SYSUTCDATETIME(), @special_request, @original_total_amount, @discount_amount,
+        @promotion_id, @promotion_code, @promotion_discount_type, @promotion_discount_value, @promotion_max_discount
       );
     `);
 
@@ -269,6 +314,9 @@ async function createWalkInBooking(data) {
     check_out_date: checkOutDate,
     nights,
     price_per_night: totalPerNight,
+    original_total_amount: originalTotalAmount,
+    discount_amount: discountAmount,
+    promotion_code: promotion?.code ?? null,
     total_amount: totalAmount,
     deposit_amount: finalDeposit,
     remaining_balance: totalAmount - finalDeposit,
@@ -292,6 +340,7 @@ async function createCustomerBooking(data) {
     adults = 1,
     children = 0,
     specialRequest = '',
+    promotionCode = '',
   } = data;
   const pool = await getPool();
   const transaction = new sql.Transaction(pool);
@@ -331,9 +380,8 @@ async function createCustomerBooking(data) {
             (SELECT COUNT(*) FROM booking_rooms br WITH (UPDLOCK, HOLDLOCK)
              JOIN bookings b WITH (UPDLOCK, HOLDLOCK) ON b.id = br.booking_id
              WHERE br.room_type_id = @roomTypeId AND (
-               b.status = 'CHECKED_IN' OR (b.status = 'CONFIRMED' AND (
-                 COALESCE(b.deposit_amount, 0) >= CEILING(COALESCE((SELECT SUM(dbr.price_per_night) FROM dbo.booking_rooms dbr WHERE dbr.booking_id = b.id), 0) * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30)
-               ))
+               (b.status = 'PENDING_PAYMENT' AND b.created_at > DATEADD(minute, -15, SYSUTCDATETIME()))
+               OR b.status = 'CHECKED_IN' OR b.status = 'CONFIRMED'
              )
                AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn) AS reserved_count;
         `);
@@ -373,8 +421,25 @@ async function createCustomerBooking(data) {
 
     const selectedRoomCount = selectedTypes.reduce((count, roomType) => count + roomType.quantity, 0);
     const serviceTotal = validServices.reduce((sum, service) => sum + service.price * service.quantity, 0) * selectedRoomCount;
-    const totalAmount = totalPerNight * nights + serviceTotal;
-    const requiredDepositAmount = Math.ceil(totalPerNight * nights * 0.3);
+    const originalTotalAmount = totalPerNight * nights + serviceTotal;
+    let discountAmount = 0;
+    let promotion = null;
+    if (promotionCode) {
+      const promoResult = await transaction.request()
+        .input('code', sql.VarChar(50), String(promotionCode).trim().toUpperCase())
+        .query(`SELECT TOP 1 id, code, discount_type, discount_value, max_discount FROM dbo.promotions
+          WHERE UPPER(LTRIM(RTRIM(code))) = @code AND is_active = 1
+            AND CAST(GETDATE() AS date) BETWEEN valid_from AND valid_to;`);
+      promotion = promoResult.recordset[0];
+      if (!promotion) throw new Error('Promotion code is invalid, inactive, or expired.');
+      discountAmount = promotion.discount_type === 'PERCENT'
+        ? Math.floor(originalTotalAmount * Number(promotion.discount_value) / 100)
+        : Number(promotion.discount_value);
+      if (promotion.max_discount != null) discountAmount = Math.min(discountAmount, Number(promotion.max_discount));
+      discountAmount = Math.max(0, Math.min(originalTotalAmount, discountAmount));
+    }
+    const totalAmount = originalTotalAmount - discountAmount;
+    const requiredDepositAmount = promotion ? Math.ceil(totalAmount * 0.3) : Math.ceil(totalPerNight * nights * 0.3);
     const bookingCode = generateBookingCode();
     const bookingResult = await transaction.request()
       .input('booking_code', sql.VarChar(20), bookingCode)
@@ -387,18 +452,27 @@ async function createCustomerBooking(data) {
       .input('adults', sql.TinyInt, Number(adults))
       .input('children', sql.TinyInt, Number(children))
       .input('total_amount', sql.Decimal(12, 2), totalAmount)
+      .input('original_total_amount', sql.Decimal(12, 2), originalTotalAmount)
+      .input('discount_amount', sql.Decimal(12, 2), discountAmount)
+      .input('promotion_id', sql.Int, promotion?.id ?? null)
+      .input('promotion_code', sql.VarChar(50), promotion?.code ?? null)
+      .input('promotion_discount_type', sql.VarChar(20), promotion?.discount_type ?? null)
+      .input('promotion_discount_value', sql.Decimal(12, 2), promotion ? Number(promotion.discount_value) : null)
+      .input('promotion_max_discount', sql.Decimal(12, 2), promotion?.max_discount == null ? null : Number(promotion.max_discount))
       .input('special_request', sql.NVarChar(500), specialRequest ? String(specialRequest).trim() : null)
       .query(`
         INSERT INTO bookings (
           booking_code, customer_id, guest_full_name, guest_phone, guest_email,
           check_in_date, check_out_date, adults, children, status,
-          total_amount, deposit_amount, created_at, special_request
+          total_amount, deposit_amount, created_at, special_request, original_total_amount, discount_amount,
+          promotion_id, promotion_code, promotion_discount_type, promotion_discount_value, promotion_max_discount
         )
         OUTPUT INSERTED.id, INSERTED.booking_code, INSERTED.created_at
         VALUES (
           @booking_code, @customer_id, @guest_full_name, @guest_phone, @guest_email,
           @check_in_date, @check_out_date, @adults, @children, 'PENDING_PAYMENT',
-          @total_amount, 0, SYSUTCDATETIME(), @special_request
+          @total_amount, 0, SYSUTCDATETIME(), @special_request, @original_total_amount, @discount_amount,
+          @promotion_id, @promotion_code, @promotion_discount_type, @promotion_discount_value, @promotion_max_discount
         );
       `);
     const booking = bookingResult.recordset[0];
@@ -477,17 +551,17 @@ async function checkInBooking({ bookingId, idCardNumber = '' }) {
     const bookingResult = await transaction.request()
       .input('bookingId', sql.BigInt, Number(bookingId))
       .query(`
-        SELECT TOP 1
+        SELECT
           b.id, b.booking_code, b.status, b.check_in_date, b.check_out_date, b.deposit_amount,
           deposit_summary.required_deposit_amount, deposit_summary.requires_deposit_payment,
-          b.guest_full_name, b.guest_phone, br.room_id,
+          b.guest_full_name, b.guest_phone,
           guest_identity.id_card_number
         FROM bookings b WITH (UPDLOCK, HOLDLOCK)
-        LEFT JOIN booking_rooms br ON br.booking_id = b.id
         OUTER APPLY (
           SELECT
-            CEILING(COALESCE(SUM(br_deposit.price_per_night), 0)
-              * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30) AS required_deposit_amount,
+            CASE WHEN b.promotion_id IS NOT NULL THEN CEILING(b.total_amount * 0.30)
+              ELSE CEILING(COALESCE(SUM(br_deposit.price_per_night), 0)
+                * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30) END AS required_deposit_amount,
             CASE WHEN EXISTS (
               SELECT 1 FROM dbo.payments p
               WHERE p.booking_id = b.id AND p.payment_type = 'DEPOSIT'
@@ -506,7 +580,8 @@ async function checkInBooking({ bookingId, idCardNumber = '' }) {
     if (!bookingResult.recordset.length) throw new Error('Booking was not found.');
     const booking = bookingResult.recordset[0];
     if (booking.status !== 'CONFIRMED') throw new Error('Booking is not waiting for check-in.');
-    if (Number(booking.deposit_amount || 0) < Number(booking.required_deposit_amount || 0)) {
+    if (booking.requires_deposit_payment
+      && Number(booking.deposit_amount || 0) < Number(booking.required_deposit_amount || 0)) {
       throw new Error('Deposit payment is required before check-in.');
     }
 
@@ -521,12 +596,20 @@ async function checkInBooking({ bookingId, idCardNumber = '' }) {
       throw new Error('A valid 12-digit CCCD is required to check in this booking.');
     }
     const idCardToSave = normalizedIdCard || booking.id_card_number;
-    if (!booking.room_id) throw new Error('Assign a room before checking in this booking.');
-
-    const assignedRoom = await transaction.request()
-      .input('roomId', sql.Int, booking.room_id)
-      .query('SELECT status FROM rooms WITH (UPDLOCK, HOLDLOCK) WHERE id = @roomId;');
-    if (assignedRoom.recordset[0]?.status !== 'AVAILABLE') throw new Error('Assigned room is not ready for check-in.');
+    const bookingRooms = await transaction.request()
+      .input('bookingId', sql.BigInt, booking.id)
+      .query(`
+        SELECT br.id, br.room_id, r.status AS room_status
+        FROM booking_rooms br WITH (UPDLOCK, HOLDLOCK)
+        LEFT JOIN rooms r WITH (UPDLOCK, HOLDLOCK) ON r.id = br.room_id
+        WHERE br.booking_id = @bookingId;
+      `);
+    if (!bookingRooms.recordset.length || bookingRooms.recordset.some((room) => !room.room_id)) {
+      throw new Error('Assign a room to every booking room before checking in.');
+    }
+    if (bookingRooms.recordset.some((room) => room.room_status !== 'AVAILABLE')) {
+      throw new Error('Every assigned room must be available before check-in.');
+    }
 
     await transaction.request()
       .input('bookingId', sql.BigInt, booking.id)
@@ -540,7 +623,6 @@ async function checkInBooking({ bookingId, idCardNumber = '' }) {
 
     await transaction.request()
       .input('bookingId', sql.BigInt, booking.id)
-      .input('roomId', sql.Int, booking.room_id)
       .query(`
         UPDATE booking_rooms
         SET actual_check_in = SYSUTCDATETIME()
@@ -549,11 +631,16 @@ async function checkInBooking({ bookingId, idCardNumber = '' }) {
         UPDATE bookings
         SET status = 'CHECKED_IN'
         WHERE id = @bookingId AND status = 'CONFIRMED';
-
-        UPDATE rooms
-        SET status = 'OCCUPIED'
-        WHERE id = @roomId;
       `);
+    for (const room of bookingRooms.recordset) {
+      await transaction.request()
+        .input('roomId', sql.Int, room.room_id)
+        .query(`
+          UPDATE rooms
+          SET status = 'OCCUPIED'
+          WHERE id = @roomId AND status = 'AVAILABLE';
+        `);
+    }
 
     await transaction.commit();
     return { booking_id: booking.id, booking_code: booking.booking_code, status: 'CHECKED_IN' };
@@ -564,6 +651,7 @@ async function checkInBooking({ bookingId, idCardNumber = '' }) {
 }
 
 async function getRecentBookings(limit = 10, activeOnly = false, customerId = null) {
+  await expirePendingBookings();
   const pool = await getPool();
 
   await pool.request().query(`
@@ -582,7 +670,7 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
   const filters = [];
   if (activeOnly) filters.push(`(
     b.status = 'CHECKED_IN'
-    OR (b.status = 'CONFIRMED' AND COALESCE(b.deposit_amount, 0) >= deposit_summary.required_deposit_amount)
+    OR b.status = 'CONFIRMED'
     OR (b.status = 'CHECKED_OUT' AND b.total_amount > b.deposit_amount + COALESCE(payment_summary.final_paid_amount, 0))
   )`);
   if (customerId !== null) {
@@ -617,12 +705,15 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
         COALESCE(payment_summary.final_paid_amount, 0) AS final_paid_amount,
         COALESCE(payment_summary.has_pending_final_payment, 0) AS has_pending_final_payment,
         b.created_at,
+        DATEADD(minute, 15, b.created_at) AS payment_expires_at,
+        b.cancellation_reason,
         b.special_request,
         type_summary.room_type_name,
         type_summary.room_type_id,
         room_summary.room_number,
         room_summary.assigned_room_id,
         room_summary.room_status,
+        room_selection_summary.room_selections,
         CASE WHEN guest_identity.id_card_number IS NULL THEN CAST(0 AS bit) ELSE CAST(1 AS bit) END AS has_guest_id_card
       FROM bookings b
       OUTER APPLY (
@@ -638,6 +729,21 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
         ) type_counts
       ) type_summary
       OUTER APPLY (
+        SELECT (
+          SELECT br.room_type_id, rt.name AS room_type_name, COUNT(*) AS quantity,
+            MIN(br.price_per_night) AS price_per_night,
+            (SELECT TOP 1 rti.image_url
+             FROM dbo.room_type_images rti
+             WHERE rti.room_type_id = rt.id AND rti.is_primary = 1
+             ORDER BY rti.id) AS image_url
+          FROM dbo.booking_rooms br
+          JOIN dbo.room_types rt ON rt.id = br.room_type_id
+          WHERE br.booking_id = b.id
+          GROUP BY br.room_type_id, rt.id, rt.name
+          FOR JSON PATH
+        ) AS room_selections
+      ) room_selection_summary
+      OUTER APPLY (
         SELECT
           SUM(CASE WHEN p.payment_type = 'FINAL' AND p.status = 'SUCCESS' THEN p.amount ELSE 0 END) AS final_paid_amount,
           MAX(CASE WHEN p.payment_type = 'FINAL' AND p.status = 'PENDING' THEN 1 ELSE 0 END) AS has_pending_final_payment,
@@ -648,8 +754,9 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
       ) payment_summary
       OUTER APPLY (
         SELECT
-          CEILING(COALESCE(SUM(br_deposit.price_per_night), 0)
-            * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30) AS required_deposit_amount,
+          CASE WHEN b.promotion_id IS NOT NULL THEN CEILING(b.total_amount * 0.30)
+            ELSE CEILING(COALESCE(SUM(br_deposit.price_per_night), 0)
+              * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30) END AS required_deposit_amount,
           CASE WHEN EXISTS (
             SELECT 1 FROM dbo.payments p
             WHERE p.booking_id = b.id AND p.payment_type = 'DEPOSIT'
@@ -695,9 +802,12 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
     balance_due: Math.max(0, Number(item.total_amount ?? 0) - Number(item.deposit_amount ?? 0) - Number(item.final_paid_amount ?? 0)),
     has_pending_final_payment: Boolean(item.has_pending_final_payment),
     created_at: item.created_at,
+    payment_expires_at: item.payment_expires_at,
+    cancellation_reason: item.cancellation_reason,
     special_request: item.special_request,
     room_type_name: item.room_type_name,
     room_type_id: item.room_type_id,
+    room_selections: item.room_selections ? JSON.parse(item.room_selections) : [],
     room_number: item.room_number,
     assigned_room_id: item.assigned_room_id,
     room_status: item.room_status,
@@ -718,69 +828,98 @@ async function updateBooking({ bookingId, customerId, ...changes }) {
     const ownerFilter = customerId == null ? '' : 'AND b.customer_id = @customerId';
     if (customerId != null) request.input('customerId', sql.BigInt, Number(customerId));
     const currentResult = await request.query(`
-      SELECT b.id, b.customer_id, b.status, b.check_in_date, b.check_out_date,
-        b.guest_full_name, b.guest_phone, b.guest_email,
-        booking_rooms.max_adults, booking_rooms.max_children, booking_rooms.price_per_night
+      SELECT b.id, b.customer_id, b.status, b.check_in_date, b.check_out_date, b.deposit_amount,
+        b.guest_full_name, b.guest_phone, b.guest_email
       FROM bookings b WITH (UPDLOCK, HOLDLOCK)
-      OUTER APPLY (
-        SELECT SUM(rt.max_adults) AS max_adults, SUM(rt.max_children) AS max_children,
-          SUM(COALESCE(br.price_per_night, rt.base_price)) AS price_per_night
-        FROM booking_rooms br JOIN room_types rt ON rt.id = br.room_type_id
-        WHERE br.booking_id = b.id
-      ) booking_rooms
       WHERE b.id = @bookingId ${ownerFilter};
     `);
     const current = currentResult.recordset[0];
     if (!current) throw new Error('Booking not found.');
     if (current.status !== 'CONFIRMED') throw new Error('Only confirmed bookings can be updated.');
-    const vietnamToday = new Date(Date.now() + 7 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    if (new Date(current.check_in_date).toISOString().slice(0, 10) <= vietnamToday) {
-      throw new Error('Booking can only be changed before its check-in date.');
-    }
-    if (changes.checkInDate <= vietnamToday) {
-      throw new Error('New check-in date must be after today.');
-    }
     if (changes.checkOutDate <= changes.checkInDate) throw new Error('Check-out must be after check-in.');
-    if (Number(changes.adults) < 1 || Number(changes.adults) > current.max_adults || Number(changes.children) < 0 || Number(changes.children) > current.max_children) {
-      throw new Error('Guest count exceeds room capacity.');
+    if (customerId != null) {
+      const currentDateResult = await transaction.request().query(`
+        SELECT CONVERT(date, DATEADD(hour, 7, SYSUTCDATETIME())) AS vietnam_today;
+      `);
+      const vietnamToday = currentDateResult.recordset[0].vietnam_today.toISOString().slice(0, 10);
+      if (changes.checkInDate < vietnamToday) throw new Error('Check-in date cannot be in the past.');
+      const cutoffResult = await transaction.request()
+        .input('currentCheckIn', sql.Date, current.check_in_date)
+        .input('newCheckIn', sql.Date, changes.checkInDate)
+        .query(`
+          SELECT
+            CASE WHEN SYSUTCDATETIME() <= DATEADD(hour, 7, CONVERT(datetime2, DATEADD(day, -1, @currentCheckIn)))
+              THEN 1 ELSE 0 END AS may_change_current,
+            CASE WHEN SYSUTCDATETIME() <= DATEADD(hour, 7, CONVERT(datetime2, DATEADD(day, -1, @newCheckIn)))
+              THEN 1 ELSE 0 END AS may_change_to_new_date;
+        `);
+      if (!cutoffResult.recordset[0]?.may_change_current || !cutoffResult.recordset[0]?.may_change_to_new_date) {
+        throw new Error('Customers can only update a booking at least 24 hours before check-in.');
+      }
     }
-    const roomSelectionResult = await transaction.request()
+
+    const existingRoomsResult = await transaction.request()
       .input('bookingId', sql.BigInt, Number(bookingId))
-      .query('SELECT room_type_id, COUNT(*) AS quantity FROM booking_rooms WHERE booking_id = @bookingId GROUP BY room_type_id;');
-    for (const selection of roomSelectionResult.recordset) {
+      .query('SELECT id, room_type_id, room_id, price_per_night FROM booking_rooms WHERE booking_id = @bookingId ORDER BY id;');
+    const existingRooms = existingRoomsResult.recordset;
+    const existingQuantities = new Map();
+    for (const room of existingRooms) {
+      existingQuantities.set(room.room_type_id, (existingQuantities.get(room.room_type_id) || 0) + 1);
+    }
+    const requestedSelections = changes.roomSelections == null
+      ? [...existingQuantities.entries()].map(([roomTypeId, quantity]) => ({ roomTypeId, quantity }))
+      : [...changes.roomSelections.reduce((quantities, selection) => {
+        const roomTypeId = Number(selection.roomTypeId);
+        quantities.set(roomTypeId, (quantities.get(roomTypeId) || 0) + Number(selection.quantity));
+        return quantities;
+      }, new Map()).entries()].map(([roomTypeId, quantity]) => ({ roomTypeId, quantity }));
+    const requestedRoomCount = requestedSelections.reduce((sum, selection) => sum + selection.quantity, 0);
+    if (!requestedSelections.length || requestedRoomCount < existingRooms.length) {
+      throw new Error('Room selection quantities cannot be fewer than the existing number of rooms.');
+    }
+    const selectedRooms = [];
+    let totalPerNight = 0;
+    let totalCapacityAdults = 0;
+    let totalCapacityChildren = 0;
+    for (const selection of requestedSelections) {
+      const roomTypeResult = await transaction.request()
+        .input('roomTypeId', sql.Int, selection.roomTypeId)
+        .query(`
+          SELECT id, name, base_price, max_adults, max_children
+          FROM dbo.room_types WHERE id = @roomTypeId;
+        `);
+      const roomType = roomTypeResult.recordset[0];
+      if (!roomType) throw new Error('Selected room type was not found.');
       const inventoryResult = await transaction.request()
-        .input('roomTypeId', sql.Int, selection.room_type_id)
-        .input('quantity', sql.Int, selection.quantity)
+        .input('roomTypeId', sql.Int, selection.roomTypeId)
         .input('bookingId', sql.BigInt, Number(bookingId))
         .input('checkIn', sql.Date, changes.checkInDate)
         .input('checkOut', sql.Date, changes.checkOutDate)
         .query(`
           SELECT
-            (SELECT COUNT(*) FROM rooms WHERE room_type_id = @roomTypeId AND status <> 'MAINTENANCE') AS inventory_count,
+            (SELECT COUNT(*) FROM rooms WHERE room_type_id = @roomTypeId AND status NOT IN ('MAINTENANCE', 'CLEANING')) AS inventory_count,
             (SELECT COUNT(*) FROM booking_rooms br JOIN bookings b ON b.id = br.booking_id
              WHERE br.room_type_id = @roomTypeId AND b.id <> @bookingId AND ${activeReservationPredicate('b')}
-               AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn) AS reserved_count,
-            (SELECT COUNT(*) FROM booking_rooms own_br JOIN rooms own_room ON own_room.id = own_br.room_id
-             WHERE own_br.booking_id = @bookingId AND own_br.room_type_id = @roomTypeId) AS assigned_count;
+               AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn) AS reserved_count;
         `);
       const inventory = inventoryResult.recordset[0];
-      if (!inventory || Number(inventory.inventory_count) - Number(inventory.reserved_count) < Number(selection.quantity)) throw new Error('No rooms are available for those dates.');
-      if (Number(inventory.assigned_count) > 0) {
-        const assignedRoomConflict = await transaction.request()
-          .input('roomTypeId', sql.Int, selection.room_type_id)
-          .input('bookingId', sql.BigInt, Number(bookingId))
-          .input('checkIn', sql.Date, changes.checkInDate)
-          .input('checkOut', sql.Date, changes.checkOutDate)
-          .query(`
-            SELECT TOP 1 other_b.id FROM booking_rooms own_br
-            JOIN booking_rooms other_br ON other_br.room_id = own_br.room_id AND other_br.booking_id <> own_br.booking_id
-            JOIN bookings other_b ON other_b.id = other_br.booking_id
-            WHERE own_br.booking_id = @bookingId AND own_br.room_type_id = @roomTypeId
-              AND ${activeReservationPredicate('other_b')}
-              AND other_b.check_in_date < @checkOut AND other_b.check_out_date > @checkIn;
-          `);
-        if (assignedRoomConflict.recordset.length) throw new Error('The assigned room is unavailable for those dates.');
+      if (!inventory || Number(inventory.inventory_count) - Number(inventory.reserved_count) < selection.quantity) {
+        throw new Error(`Not enough rooms available for ${roomType.name} on those dates.`);
       }
+      const oldRoomsOfType = existingRooms.filter((room) => room.room_type_id === selection.roomTypeId);
+      for (let index = 0; index < selection.quantity; index += 1) {
+        const previousRoom = oldRoomsOfType[index];
+        const pricePerNight = previousRoom
+          ? Number(previousRoom.price_per_night ?? roomType.base_price)
+          : Number(roomType.base_price);
+        selectedRooms.push({ roomTypeId: selection.roomTypeId, pricePerNight });
+        totalPerNight += pricePerNight;
+        totalCapacityAdults += Number(roomType.max_adults);
+        totalCapacityChildren += Number(roomType.max_children);
+      }
+    }
+    if (Number(changes.adults) > totalCapacityAdults || Number(changes.children) > totalCapacityChildren) {
+      throw new Error('Guest count exceeds the selected rooms capacity.');
     }
 
     const nights = calculateNights(changes.checkInDate, changes.checkOutDate);
@@ -792,7 +931,53 @@ async function updateBooking({ bookingId, customerId, ...changes }) {
         JOIN booking_rooms br ON br.id = bs.booking_room_id
         WHERE br.booking_id = @bookingId;
       `);
-    const totalAmount = Number(current.price_per_night) * nights + Number(chargesResult.recordset[0].service_total ?? 0);
+    const totalAmount = totalPerNight * nights + Number(chargesResult.recordset[0].service_total ?? 0);
+    for (let index = 0; index < existingRooms.length; index += 1) {
+      const existingRoom = existingRooms[index];
+      const selectedRoom = selectedRooms[index];
+      await transaction.request()
+        .input('bookingRoomId', sql.BigInt, existingRoom.id)
+        .input('bookingId', sql.BigInt, Number(bookingId))
+        .input('roomTypeId', sql.Int, selectedRoom.roomTypeId)
+        .input('pricePerNight', sql.Decimal(12, 2), selectedRoom.pricePerNight)
+        .input('checkIn', sql.Date, changes.checkInDate)
+        .input('checkOut', sql.Date, changes.checkOutDate)
+        .query(`
+          UPDATE dbo.booking_rooms
+          SET room_type_id = @roomTypeId,
+            price_per_night = @pricePerNight,
+            room_id = CASE
+              WHEN room_type_id = @roomTypeId
+                AND room_id IS NOT NULL
+                AND EXISTS (
+                  SELECT 1 FROM dbo.rooms r
+                  WHERE r.id = dbo.booking_rooms.room_id
+                    AND r.status NOT IN ('MAINTENANCE', 'CLEANING')
+                    AND NOT EXISTS (
+                      SELECT 1 FROM dbo.booking_rooms other_br
+                      JOIN dbo.bookings other_b ON other_b.id = other_br.booking_id
+                      WHERE other_br.room_id = dbo.booking_rooms.room_id
+                        AND other_br.booking_id <> @bookingId
+                        AND ${activeReservationPredicate('other_b')}
+                        AND other_b.check_in_date < @checkOut
+                        AND other_b.check_out_date > @checkIn
+                    )
+                )
+              THEN room_id ELSE NULL END
+          WHERE id = @bookingRoomId AND booking_id = @bookingId;
+        `);
+    }
+    for (let index = existingRooms.length; index < selectedRooms.length; index += 1) {
+      const selectedRoom = selectedRooms[index];
+      await transaction.request()
+        .input('bookingId', sql.BigInt, Number(bookingId))
+        .input('roomTypeId', sql.Int, selectedRoom.roomTypeId)
+        .input('pricePerNight', sql.Decimal(12, 2), selectedRoom.pricePerNight)
+        .query(`
+          INSERT INTO dbo.booking_rooms (booking_id, room_type_id, room_id, price_per_night)
+          VALUES (@bookingId, @roomTypeId, NULL, @pricePerNight);
+        `);
+    }
     await transaction.request()
       .input('bookingId', sql.BigInt, Number(bookingId))
       .input('checkInDate', sql.Date, changes.checkInDate)
@@ -813,7 +998,13 @@ async function updateBooking({ bookingId, customerId, ...changes }) {
         UPDATE booking_guests SET full_name = @guestName, phone = @guestPhone WHERE booking_id = @bookingId;
       `);
     await transaction.commit();
-    return { booking_id: bookingId, check_in_date: changes.checkInDate, check_out_date: changes.checkOutDate, total_amount: totalAmount };
+    return {
+      booking_id: bookingId,
+      check_in_date: changes.checkInDate,
+      check_out_date: changes.checkOutDate,
+      total_amount: totalAmount,
+      deposit_amount: Number(current.deposit_amount ?? 0),
+    };
   } catch (error) {
     await transaction.rollback();
     throw error;
@@ -1125,6 +1316,7 @@ async function getRoomStatuses() {
 module.exports = {
   createWalkInBooking,
   createCustomerBooking,
+  expirePendingBookings,
   checkInBooking,
   getRecentBookings,
   updateBooking,

@@ -1,55 +1,19 @@
-import api from './api';
+import api, { API_BASE_URL } from './api';
 import type {
   CustomerBookingPayload,
   CustomerBookingResponse,
   RecentBooking,
   RoomAvailabilityItem,
-  RoomType,
   WalkInBookingPayload,
   WalkInBookingResponse,
 } from '../types';
-
-export type RoomTypeOption = Pick<RoomType, 'id' | 'name'>;
-
-export interface AddRoomPayload {
-  room_number: string;
-  room_type_id: number;
-  floor: number;
-}
-
-export interface UpdateRoomPayload {
-  room_number: string;
-  room_type_id: number;
-  floor: number;
-}
-
-export const getRoomTypesForRoomForm = async (): Promise<RoomTypeOption[]> => {
-  const roomTypes = await api.get<RoomType[]>('/api/room-types');
-  return roomTypes.map(({ id, name }) => ({ id, name }));
-};
-
-export const addRoom = (payload: AddRoomPayload, accessToken: string) =>
-  api.postWithAuth<{ success: boolean; message: string; room: RoomStatusRecord }>(
-    '/api/rooms',
-    payload,
-    accessToken,
-  );
-
-export const updateRoom = (roomId: number, payload: UpdateRoomPayload, accessToken: string) =>
-  api.putWithAuth<{ success: boolean; message: string; room: RoomStatusRecord }>(
-    `/api/rooms/${roomId}`,
-    payload,
-    accessToken,
-  );
-
-export const deleteRoom = (roomId: number, accessToken: string) =>
-  api.deleteWithAuth<{ success: boolean; message: string }>(`/api/rooms/${roomId}`, accessToken);
 
 export interface CheckAvailabilityParams {
   check_in_date: string;
   check_out_date: string;
   adults: number;
   children: number;
+  exclude_booking_id?: string | number;
 }
 
 export const checkRoomAvailability = async (
@@ -61,6 +25,7 @@ export const checkRoomAvailability = async (
     adults: String(params.adults),
     children: String(params.children),
   });
+  if (params.exclude_booking_id != null) query.set('exclude_booking_id', String(params.exclude_booking_id));
 
   return api.get<{ success: boolean; data: RoomAvailabilityItem[] }>(`/api/rooms/availability?${query.toString()}`);
 };
@@ -102,14 +67,16 @@ export const checkOutBooking = async (bookingId: string | number, accessToken: s
 
 export interface RoomStatusRecord {
   id: number;
+  room_type_id?: number;
   room_number: string;
-  room_type_id: number;
-  floor: number | null;
+  floor: number;
   status: 'AVAILABLE' | 'OCCUPIED' | 'CLEANING' | 'MAINTENANCE';
   has_open_maintenance_report?: boolean;
   room_type_name: string;
 }
 
+export type RoomTypeOption = { id: number; name: string };
+export type RoomFormPayload = { room_number: string; room_type_id: number; floor: number };
 export interface RoomDetails extends RoomStatusRecord {
   room_type_description: string | null;
   base_price: number;
@@ -117,11 +84,23 @@ export interface RoomDetails extends RoomStatusRecord {
   max_children: number;
 }
 
+export const getRoomTypesForRoomForm = async () =>
+  (await api.get<RoomTypeOption[]>('/api/room-types')).map(({ id, name }) => ({ id, name }));
+
 export const getRoomList = (accessToken: string) =>
   api.get<{ success: boolean; rooms: RoomStatusRecord[] }>('/api/rooms', accessToken);
 
 export const getRoomDetails = (roomId: number, accessToken: string) =>
-  api.getWithAuth<{ success: boolean; room: RoomDetails }>(`/api/rooms/${roomId}`, accessToken);
+  api.get<{ success: boolean; room: RoomDetails }>(`/api/rooms/${roomId}`, accessToken);
+
+export const addRoom = (payload: RoomFormPayload, accessToken: string) =>
+  api.postWithAuth<{ success: boolean; message: string; room: RoomStatusRecord }>('/api/rooms', payload, accessToken);
+
+export const updateRoom = (roomId: number, payload: RoomFormPayload, accessToken: string) =>
+  api.putWithAuth<{ success: boolean; message: string; room: RoomStatusRecord }>(`/api/rooms/${roomId}`, payload, accessToken);
+
+export const deleteRoom = (roomId: number, accessToken: string) =>
+  api.deleteWithAuth<{ success: boolean; message: string }>(`/api/rooms/${roomId}`, accessToken);
 
 export const getRoomStatuses = (accessToken: string) =>
   api.get<{ success: boolean; rooms: RoomStatusRecord[] }>('/api/rooms/statuses', accessToken);
@@ -132,12 +111,8 @@ export const getAssignableRooms = (bookingId: string | number, accessToken: stri
 export const assignRoomToBooking = (bookingId: string | number, roomAssignments: { booking_room_id: number; room_id: number }[], accessToken: string) =>
   api.post<{ success: boolean; message: string }>(`/api/bookings/${bookingId}/assign-room`, { room_assignments: roomAssignments }, accessToken);
 
-export const finishRoomCleaning = (roomId: number, accessToken: string, currentStatus: RoomStatusRecord['status'] = 'CLEANING', status: 'AVAILABLE' | 'MAINTENANCE' = 'AVAILABLE') =>
-  api.post<{ success: boolean; message: string; room: { room_id: number; status: RoomStatusRecord['status'] } }>(
-    `/api/rooms/${roomId}/cleaning-complete`,
-    { status, current_status: currentStatus },
-    accessToken,
-  );
+export const finishRoomCleaning = (roomId: number, accessToken: string, currentStatus: 'AVAILABLE' | 'OCCUPIED' | 'CLEANING' | 'MAINTENANCE' = 'CLEANING', status: 'AVAILABLE' | 'MAINTENANCE' = 'AVAILABLE') =>
+  api.post<{ success: boolean; message: string }>(`/api/rooms/${roomId}/cleaning-complete`, { status, current_status: currentStatus }, accessToken);
 
 export interface RoomMaintenanceReport {
   id: number;
@@ -168,6 +143,9 @@ export const getRecentBookings = async (limit = 10, accessToken?: string): Promi
 export const getBookingHistory = (accessToken: string) =>
   api.get<{ success: boolean; count: number; bookings: RecentBooking[] }>('/api/bookings/history', accessToken);
 
+export const getRoomTypeImageUrl = (roomTypeId: number) =>
+  `${API_BASE_URL}/api/room-types/${roomTypeId}/image`;
+
 export interface UpdateBookingPayload {
   check_in_date: string;
   check_out_date: string;
@@ -177,10 +155,15 @@ export interface UpdateBookingPayload {
   adults: number;
   children: number;
   special_request?: string;
+  room_selections?: { room_type_id: number; quantity: number }[];
 }
 
 export const updateBooking = (bookingId: string | number, payload: UpdateBookingPayload, accessToken: string) =>
-  api.patch<{ success: boolean; message: string }>(`/api/bookings/${bookingId}`, payload, accessToken);
+  api.patch<{
+    success: boolean;
+    message: string;
+    booking: { booking_id: string | number; check_in_date: string; check_out_date: string; total_amount: number; deposit_amount: number };
+  }>(`/api/bookings/${bookingId}`, payload, accessToken);
 
 export const cancelBooking = (bookingId: string | number, accessToken: string) =>
   api.post<{ success: boolean; message: string }>(`/api/bookings/${bookingId}/cancel`, {}, accessToken);

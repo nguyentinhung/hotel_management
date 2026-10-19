@@ -202,10 +202,58 @@ async function ensureGuestIdCardOptional() {
   `);
 }
 
+async function ensureInvoiceCreatorColumn() {
+  const currentPool = await getPool();
+  await currentPool.request().query(`
+    IF COL_LENGTH('dbo.invoices', 'created_by_user_id') IS NULL
+      ALTER TABLE dbo.invoices ADD created_by_user_id BIGINT NULL;
+
+    IF NOT EXISTS (
+      SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_invoices_created_by_user'
+    )
+      ALTER TABLE dbo.invoices WITH CHECK
+        ADD CONSTRAINT FK_invoices_created_by_user
+        FOREIGN KEY (created_by_user_id) REFERENCES dbo.users(id);
+  `);
+}
+
+async function ensureBookingPromotionColumns() {
+  const currentPool = await getPool();
+  await currentPool.request().query(`
+    IF COL_LENGTH(N'dbo.bookings', 'original_total_amount') IS NULL
+      ALTER TABLE dbo.bookings ADD original_total_amount DECIMAL(12, 2) NULL;
+    IF COL_LENGTH(N'dbo.bookings', 'discount_amount') IS NULL
+      ALTER TABLE dbo.bookings ADD discount_amount DECIMAL(12, 2) NOT NULL
+        CONSTRAINT DF_bookings_discount_amount DEFAULT (0) WITH VALUES;
+    IF COL_LENGTH(N'dbo.bookings', 'promotion_id') IS NULL
+      ALTER TABLE dbo.bookings ADD promotion_id INT NULL;
+    IF COL_LENGTH(N'dbo.bookings', 'promotion_code') IS NULL
+      ALTER TABLE dbo.bookings ADD promotion_code VARCHAR(50) NULL;
+    IF COL_LENGTH(N'dbo.bookings', 'promotion_discount_type') IS NULL
+      ALTER TABLE dbo.bookings ADD promotion_discount_type VARCHAR(20) NULL;
+    IF COL_LENGTH(N'dbo.bookings', 'promotion_discount_value') IS NULL
+      ALTER TABLE dbo.bookings ADD promotion_discount_value DECIMAL(12, 2) NULL;
+    IF COL_LENGTH(N'dbo.bookings', 'promotion_max_discount') IS NULL
+      ALTER TABLE dbo.bookings ADD promotion_max_discount DECIMAL(12, 2) NULL;
+    EXEC sys.sp_executesql N'UPDATE dbo.bookings SET original_total_amount = total_amount WHERE original_total_amount IS NULL;';
+  `);
+}
+
+async function ensureBookingCancellationReason() {
+  const currentPool = await getPool();
+  await currentPool.request().query(`
+    IF COL_LENGTH(N'dbo.bookings', 'cancellation_reason') IS NULL
+      ALTER TABLE dbo.bookings ADD cancellation_reason VARCHAR(30) NULL;
+  `);
+}
+
 module.exports = {
   sql,
   getPool,
   ensureAuthTables,
   ensureBookingStatusConstraint,
   ensureGuestIdCardOptional,
+  ensureInvoiceCreatorColumn,
+  ensureBookingPromotionColumns,
+  ensureBookingCancellationReason,
 };

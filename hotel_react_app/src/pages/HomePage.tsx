@@ -2,8 +2,11 @@
 import deluxeCityView from '../assets/deluxe-city-view.jpg';
 import executiveGarden from '../assets/executive-garden.webp';
 import familySuite from '../assets/family-suite.jpg';
+import heroImage from '../assets/lumiere-hero.png';
+import lotusLogo from '../assets/lumiere-lotus.png';
 import presidentialVilla from '../assets/presidential-villa.jpg';
 import skyLounge from '../assets/sky-lounge.jpg';
+import sunsetImage from '../assets/lumiere-sunset.png';
 import {
   getActivePromotions,
   getCurrentRoleFromQuery,
@@ -42,6 +45,11 @@ const addDays = (date: string, amount: number) => {
 
 const formatCurrency = (value: number) =>
   new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(value);
+
+const formatPromotionDate = (value: string) => {
+  const [year, month, day] = value.slice(0, 10).split('-');
+  return year && month && day ? `${day}/${month}/${year}` : value;
+};
 
 const renderStars = (rating: number) => {
   const full = Math.round(rating);
@@ -86,6 +94,7 @@ export default function HomePage() {
   const [filteredRoomTypes, setFilteredRoomTypes] = useState<RoomAvailabilityItem[]>([]);
   const [isFiltered, setIsFiltered] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [selectedRoomDetails, setSelectedRoomDetails] = useState<RoomTypeDetails | null>(null);
   const [isRoomDetailsOpen, setIsRoomDetailsOpen] = useState(false);
   const [isRoomDetailsLoading, setIsRoomDetailsLoading] = useState(false);
@@ -314,7 +323,9 @@ export default function HomePage() {
       <header className="topbar">
         <div className="container nav-shell">
           <div className="brand-wrap">
-            <div className="brand-badge">H</div>
+            <div className="brand-badge">
+              <img src={lotusLogo} alt="" />
+            </div>
             <div>
               <div className="brand-name">Hotel Lumière</div>
               <small>Stay in comfort</small>
@@ -326,6 +337,7 @@ export default function HomePage() {
             <a href="#promotions" onClick={() => setMenuOpen(false)}>Ưu đãi</a>
             <a href="#services" onClick={() => setMenuOpen(false)}>Dịch vụ</a>
             <a href="#reviews" onClick={() => setMenuOpen(false)}>Đánh giá</a>
+            <a href="#rooms" onClick={() => setMenuOpen(false)}>Khám phá</a>
             <a href="#contact" onClick={() => setMenuOpen(false)}>Liên hệ</a>
           </nav>
 
@@ -341,13 +353,39 @@ export default function HomePage() {
               </>
             ) : (
               <>
-                <span className="welcome-text">Xin chào, {user.full_name}</span>
-                <a className="btn btn-outline" href={getRolePath(user.role)}>
-                  {dashboardLabel[user.role]}
-                </a>
-                <button type="button" className="btn btn-primary" onClick={() => void handleLogout()}>
-                  Đăng xuất
-                </button>
+                <div className="user-menu-wrap">
+                  <button
+                    type="button"
+                    className="user-menu-trigger"
+                    aria-expanded={userMenuOpen}
+                    aria-haspopup="menu"
+                    onClick={() => setUserMenuOpen((open) => !open)}
+                  >
+                    <span className="user-avatar" aria-hidden="true">{user.full_name.trim().charAt(0).toLocaleUpperCase() || 'U'}</span>
+                    <span className="user-greeting">Xin chào, {user.full_name}</span>
+                    <svg className="user-menu-chevron" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      {userMenuOpen
+                        ? <path d="m6 15 6-6 6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        : <path d="m6 9 6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />}
+                    </svg>
+                  </button>
+                  {userMenuOpen && (
+                    <div className="user-menu-panel" role="menu">
+                      <div className="user-menu-identity">
+                        <span className="user-avatar" aria-hidden="true">{user.full_name.trim().charAt(0).toLocaleUpperCase() || 'U'}</span>
+                        <span><strong>{user.full_name}</strong><small>{user.role === 'CUSTOMER' ? 'Khách hàng' : user.role}</small></span>
+                      </div>
+                      <a href={getRolePath(user.role)} role="menuitem" className="user-menu-account" onClick={() => setUserMenuOpen(false)}>
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.8" /><path d="M4.5 21c.5-4.2 3-6.3 7.5-6.3s7 2.1 7.5 6.3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
+                        <span>{user.role === 'CUSTOMER' ? 'Tài khoản của tôi' : dashboardLabel[user.role]}</span><span className="account-arrow" aria-hidden="true">›</span>
+                      </a>
+                      <button type="button" role="menuitem" className="user-menu-logout" onClick={() => void handleLogout()}>
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M10 17l5-5-5-5M15 12H3m9-8h7a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+                        <span>Đăng xuất</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
               </>
             )}
           </div>
@@ -359,7 +397,10 @@ export default function HomePage() {
       </header>
 
       <main>
-        <section className="hero-section">
+        <section
+          className="hero-section"
+          style={{ backgroundImage: `linear-gradient(90deg, rgba(255, 250, 239, .58) 0%, rgba(255, 250, 239, .36) 40%, rgba(255, 250, 239, .04) 78%), url(${heroImage})` }}
+        >
           <div className="container hero-grid">
             <div className="hero-copy">
               <span className="eyebrow">Khách sạn nghỉ dưỡng và lưu trú</span>
@@ -368,11 +409,7 @@ export default function HomePage() {
                 Tận hưởng không gian nghỉ dưỡng lý tưởng cho các chuyến đi công tác, nghỉ dưỡng
                 và gia đình với dịch vụ tận tâm ngay trong trung tâm thành phố.
               </p>
-              <div className="benefits">
-                <div>Đặt phòng trực tuyến nhanh chóng</div>
-                <div>Nhận mã xác nhận ngay sau khi đặt</div>
-                <div>Thanh toán tại quầy lễ tân khi nhận phòng</div>
-              </div>
+              <a className="btn btn-hero" href="#rooms">Khám phá phòng <span aria-hidden="true">→</span></a>
             </div>
 
             <div className="booking-box" aria-label="Tìm phòng">
@@ -454,6 +491,15 @@ export default function HomePage() {
           </div>
         </section>
 
+        <section className="feature-strip" aria-label="Điểm nổi bật">
+          <div className="container feature-strip-inner">
+            <div><span aria-hidden="true">⌖</span><p><strong>Vị trí tuyệt đẹp</strong><small>Gần thiên nhiên, yên bình</small></p></div>
+            <div><span aria-hidden="true">▱</span><p><strong>Phòng nghỉ sang trọng</strong><small>Thiết kế tinh tế, tiện nghi</small></p></div>
+            <div><span aria-hidden="true">♧</span><p><strong>Dịch vụ tận tâm</strong><small>Đội ngũ chuyên nghiệp</small></p></div>
+            <div><span aria-hidden="true">◇</span><p><strong>Đặt phòng an toàn</strong><small>Thanh toán linh hoạt</small></p></div>
+          </div>
+        </section>
+
         <section id="rooms" className="container section-block">
           <div className="section-heading">
             <div>
@@ -466,7 +512,7 @@ export default function HomePage() {
               </button>
             )}
             <a className="btn btn-primary" href={`/booking?${new URLSearchParams({ check_in_date: search.check_in_date, check_out_date: search.check_out_date, adults: String(search.adults), children: String(search.children) }).toString()}`}>
-              Booking Now
+              Xem tất cả phòng
             </a>
           </div>
 
@@ -604,7 +650,7 @@ export default function HomePage() {
                       : `Giảm ${formatCurrency(promotion.discount_value)}`}
                   </div>
                   <small>
-                    Hạn dùng: {promotion.valid_from} đến {promotion.valid_to}
+                    Hạn dùng: {formatPromotionDate(promotion.valid_from)} đến {formatPromotionDate(promotion.valid_to)}
                   </small>
                 </article>
               ))}
@@ -685,6 +731,15 @@ export default function HomePage() {
                 </div>
               </article>
             ))}
+          </div>
+        </section>
+
+        <section className="special-offer" style={{ backgroundImage: `url(${sunsetImage})` }}>
+          <div className="container special-offer-content">
+            <span className="eyebrow">Ưu đãi đặc biệt</span>
+            <h2>Kỳ nghỉ hoàn hảo<br />đang chờ bạn</h2>
+            <p>Khám phá các gói ưu đãi hấp dẫn dành riêng cho kỳ nghỉ tiếp theo.</p>
+            <a className="btn btn-light" href="#promotions">Xem ưu đãi <span aria-hidden="true">→</span></a>
           </div>
         </section>
       </main>

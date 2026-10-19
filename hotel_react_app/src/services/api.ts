@@ -1,4 +1,4 @@
-const API_BASE_URL = 'http://localhost:5000';
+export const API_BASE_URL = 'http://localhost:5000';
 
 export class ApiError extends Error {
   constructor(message: string, public readonly status: number) {

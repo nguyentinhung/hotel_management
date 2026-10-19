@@ -5,9 +5,7 @@ function quoteSqlIdentifier(identifier) {
 }
 
 function activeReservationPredicate(alias) {
-  return `(${alias}.status = 'CHECKED_IN' OR (${alias}.status = 'CONFIRMED' AND (
-    COALESCE(${alias}.deposit_amount, 0) >= CEILING(COALESCE((SELECT SUM(dbr.price_per_night) FROM dbo.booking_rooms dbr WHERE dbr.booking_id = ${alias}.id), 0) * DATEDIFF(day, ${alias}.check_in_date, ${alias}.check_out_date) * 0.30)
-  )))`;
+  return `(${alias}.status = 'CHECKED_IN' OR (${alias}.status = 'PENDING_PAYMENT' AND ${alias}.created_at > DATEADD(minute, -15, SYSUTCDATETIME())) OR ${alias}.status = 'CONFIRMED')`;
 }
 
 /**
@@ -31,7 +29,7 @@ function activeReservationPredicate(alias) {
  * @param {number} [params.children] - Số trẻ em
  * @returns {Promise<Array>} Danh sách loại phòng kèm tình trạng phòng trống
  */
-async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, children = 0 }) {
+async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, children = 0, excludeBookingId = null }) {
   const pool = await getPool();
 
   // 1. Truy vấn thông tin cơ bản của tất cả các loại phòng
@@ -79,6 +77,7 @@ async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, ch
   const roomsResult = await pool.request()
     .input('checkIn', sql.Date, checkInDate)
     .input('checkOut', sql.Date, checkOutDate)
+    .input('excludeBookingId', sql.BigInt, excludeBookingId == null ? null : Number(excludeBookingId))
     .query(`
       SELECT
         r.id,
@@ -97,6 +96,7 @@ async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, ch
         JOIN bookings b ON b.id = br.booking_id
         WHERE br.room_id IS NOT NULL
           AND ${activeReservationPredicate('b')}
+          AND (@excludeBookingId IS NULL OR b.id <> @excludeBookingId)
           AND b.check_in_date < @checkOut
           AND b.check_out_date > @checkIn
       ) bk ON bk.room_id = r.id
@@ -107,25 +107,25 @@ async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, ch
 
   // 3. Truy vấn các booking đã đặt nhưng chưa được gán số phòng cụ thể (room_id IS NULL)
   // để trừ vào số lượng phòng trống của loại phòng tương ứng
-  const unassignedBookingsResult = await pool.request()
+  // Count all active booking room rows by type, assigned or unassigned.
+  const reservedBookingsResult = await pool.request()
     .input('checkIn', sql.Date, checkInDate)
     .input('checkOut', sql.Date, checkOutDate)
+    .input('excludeBookingId', sql.BigInt, excludeBookingId == null ? null : Number(excludeBookingId))
     .query(`
-      SELECT
-        br.room_type_id,
-        COUNT(*) AS unassigned_count
+      SELECT br.room_type_id, COUNT(*) AS reserved_count
       FROM booking_rooms br
       JOIN bookings b ON b.id = br.booking_id
-      WHERE br.room_id IS NULL
-        AND ${activeReservationPredicate('b')}
+      WHERE ${activeReservationPredicate('b')}
+        AND (@excludeBookingId IS NULL OR b.id <> @excludeBookingId)
         AND b.check_in_date < @checkOut
         AND b.check_out_date > @checkIn
       GROUP BY br.room_type_id;
     `);
 
-  const unassignedMap = new Map();
-  for (const row of unassignedBookingsResult.recordset) {
-    unassignedMap.set(row.room_type_id, row.unassigned_count);
+  const reservedCountByType = new Map();
+  for (const row of reservedBookingsResult.recordset) {
+    reservedCountByType.set(row.room_type_id, Number(row.reserved_count));
   }
 
   // 4. Tổng hợp dữ liệu tình trạng phòng theo từng loại phòng
@@ -138,11 +138,11 @@ async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, ch
     const availablePhysicalRooms = typeRooms.filter((r) => r.is_booked === 0);
 
     // Số lượng phòng đã đặt chưa gán số phòng
-    const unassignedCount = unassignedMap.get(type.id) || 0;
+    const reservedCount = reservedCountByType.get(type.id) || 0;
 
     // Số phòng đã được đặt thực tế (gồm có phòng chỉ định + phòng chưa gán số)
-    const assignedBookedCount = typeRooms.filter((r) => r.is_booked === 1).length;
-    const bookedRoomsCount = assignedBookedCount + unassignedCount;
+    // Each active booking room row consumes one unit of the room type inventory.
+    const bookedRoomsCount = reservedCount;
 
     // Số lượng phòng thực sự còn trống cho khách đặt
     const availableCount = Math.max(0, totalRooms - bookedRoomsCount);

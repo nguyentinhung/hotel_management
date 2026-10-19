@@ -1,10 +1,10 @@
 const jwt = require('jsonwebtoken');
 const { createWalkInBooking, createCustomerBooking, checkInBooking, getRecentBookings, getActiveBookings, updateBooking, cancelBooking, checkOutBooking, updateRoomStatus, reportRoomMaintenance, getOpenRoomMaintenanceReports, resolveRoomMaintenanceReport, getRoomStatuses, getAssignableRooms, assignRoomToBooking } = require('../dao/bookingDao');
-const { makeReceptionCheckoutPayment } = require('../services/paymentService');
+const { makeReceptionCheckoutPayment, createReceptionInvoice } = require('../services/paymentService');
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
 const roleCodeById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
 const hasRole = (claims, ...roles) => {
-  const roleCode = roleCodeById[Number(claims.role_id)] || String(claims.role_code || '').toUpperCase();
+  const roleCode = String(claims.role_code || '').toUpperCase() || roleCodeById[Number(claims.role_id)];
   return roles.includes(roleCode);
 };
 const isCustomerClaims = (claims) => hasRole(claims, 'CUSTOMER');
@@ -25,7 +25,7 @@ async function createCustomerBookingHandler(req, res) {
     return res.status(403).json({ success: false, message: 'Chỉ tài khoản khách hàng mới có thể đặt phòng trực tuyến.' });
   }
 
-  const { room_type_id, room_selections, service_selections, check_in_date, check_out_date, adults, children = 0, special_request = '' } = req.body || {};
+  const { room_type_id, room_selections, service_selections, promotion_code, check_in_date, check_out_date, adults, children = 0, special_request = '' } = req.body || {};
   const selections = Array.isArray(room_selections) && room_selections.length
     ? room_selections
     : [{ room_type_id, quantity: 1 }];
@@ -64,6 +64,7 @@ async function createCustomerBookingHandler(req, res) {
       customerId: claims.user_id,
       roomSelections: selections.map((selection) => ({ roomTypeId: Number(selection.room_type_id), quantity: Number(selection.quantity) })),
       serviceSelections: services.map((selection) => ({ serviceId: Number(selection.service_id), quantity: Number(selection.quantity) })),
+      promotionCode: promotion_code,
       checkInDate: check_in_date,
       checkOutDate: check_out_date,
       adults: Number(adults),
@@ -79,7 +80,7 @@ async function createCustomerBookingHandler(req, res) {
         ? 403
         : /room type was not found/i.test(error.message)
           ? 404
-          : /guest count exceeds|only prebook services/i.test(error.message)
+          : /guest count exceeds|only prebook services|promotion code/i.test(error.message)
             ? 400
             : 500;
     const message = /no rooms are available|not enough rooms available/i.test(error.message)
@@ -175,6 +176,7 @@ async function createWalkInBookingHandler(req, res) {
       guest_id_card,
       deposit_amount,
       service_selections,
+      promotion_code,
       special_request,
       check_in_now,
     } = req.body || {};
@@ -228,6 +230,7 @@ async function createWalkInBookingHandler(req, res) {
       guestIdCard: normalizedIdCard,
       depositAmount: Number(deposit_amount || 0),
       serviceSelections: services.map((selection) => ({ serviceId: Number(selection.service_id), quantity: Number(selection.quantity) })),
+      promotionCode: promotion_code,
       specialRequest: special_request,
       checkInNow: Boolean(check_in_now),
     });
@@ -242,9 +245,12 @@ async function createWalkInBookingHandler(req, res) {
   } catch (error) {
     console.error('Create walk-in booking error:', error);
     const isInvalidServicePolicy = /only prebook services/i.test(error.message);
-    return res.status(isInvalidServicePolicy ? 400 : 500).json({
+    const isInvalidPromotion = /promotion code is invalid/i.test(error.message);
+    return res.status(isInvalidServicePolicy || isInvalidPromotion ? 400 : 500).json({
       success: false,
-      message: isInvalidServicePolicy
+      message: isInvalidPromotion
+        ? 'Promotion không hợp lệ, chưa hoạt động hoặc đã hết hạn.'
+        : isInvalidServicePolicy
         ? 'Chỉ có thể chọn dịch vụ được cấu hình cho phép đặt trước.'
         : error.message || 'Không thể tạo đơn đặt phòng tại quầy.',
     });
@@ -315,7 +321,7 @@ async function updateBookingHandler(req, res) {
   }
   const customer = isCustomerClaims(claims);
   if (!customer && !hasRole(claims, 'RECEPTIONIST', 'ADMIN')) return res.status(403).json({ success: false, message: 'Bạn không có quyền cập nhật booking.' });
-  const { check_in_date, check_out_date, guest_full_name, guest_phone, guest_email, adults, children, special_request } = req.body || {};
+  const { check_in_date, check_out_date, guest_full_name, guest_phone, guest_email, adults, children, special_request, room_selections } = req.body || {};
   const datePattern = /^\d{4}-\d{2}-\d{2}$/;
   const isRealDate = (value) => {
     if (!datePattern.test(value || '')) return false;
@@ -327,6 +333,19 @@ async function updateBookingHandler(req, res) {
   }
   if (!Number.isInteger(Number(adults)) || Number(adults) < 1 || !Number.isInteger(Number(children)) || Number(children) < 0) {
     return res.status(400).json({ success: false, message: 'Sá»‘ lÆ°á»£ng khÃ¡ch khÃ´ng há»£p lá»‡.' });
+  }
+  if (room_selections !== undefined && (
+    !Array.isArray(room_selections)
+    || room_selections.length === 0
+    || room_selections.length > 20
+    || room_selections.some((selection) =>
+      !Number.isSafeInteger(Number(selection?.room_type_id))
+      || Number(selection.room_type_id) < 1
+      || !Number.isInteger(Number(selection.quantity))
+      || Number(selection.quantity) < 1
+    )
+  )) {
+    return res.status(400).json({ success: false, message: 'Danh sách loại phòng hoặc số lượng phòng không hợp lệ.' });
   }
   if (String(special_request || '').length > 500) return res.status(400).json({ success: false, message: 'Yêu cầu thêm không được vượt quá 500 ký tự.' });
   try {
@@ -341,11 +360,15 @@ async function updateBookingHandler(req, res) {
       adults: Number(adults),
       children: Number(children),
       specialRequest: special_request,
+      roomSelections: room_selections?.map((selection) => ({
+        roomTypeId: Number(selection.room_type_id),
+        quantity: Number(selection.quantity),
+      })),
     });
     return res.json({ success: true, message: 'Đã cập nhật booking.', booking });
   } catch (error) {
     const message = error.message;
-    const status = /not found/i.test(message) ? 404 : /cannot be updated|capacity|available|check-in date/i.test(message) ? 409 : 400;
+    const status = /not found/i.test(message) ? 404 : /cannot be updated|capacity|available|check-in date|24 hours|past|quantities cannot be fewer/i.test(message) ? 409 : 400;
     return res.status(status).json({ success: false, message });
   }
 }
@@ -394,6 +417,7 @@ async function checkOutBookingHandler(req, res) {
       bookingId: req.params.bookingId,
       method: req.body?.payment_method,
       ipAddress: req.ip,
+      createdByUserId: claims.user_id,
     });
     return res.json({
       success: true,
@@ -405,6 +429,25 @@ async function checkOutBookingHandler(req, res) {
     if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
     const notFound = /not found/i.test(error.message);
     return res.status(notFound ? 404 : 409).json({ success: false, message: notFound ? 'Không tìm thấy booking.' : 'Booking này chưa check-in hoặc không thể check-out.' });
+  }
+}
+
+async function createReceptionInvoiceHandler(req, res) {
+  const token = (req.headers.authorization || '').replace(/^Bearer\s+/, '');
+  let claims;
+  try { claims = jwt.verify(token, JWT_SECRET); } catch {
+    return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
+  }
+  if (!hasRole(claims, 'RECEPTIONIST', 'ADMIN')) return res.status(403).json({ success: false, message: 'Chỉ lễ tân hoặc quản trị viên mới được tạo hóa đơn.' });
+  const bookingId = Number(req.params.bookingId);
+  if (!Number.isSafeInteger(bookingId) || bookingId < 1) return res.status(400).json({ success: false, message: 'Mã booking không hợp lệ.' });
+  try {
+    const invoice = await createReceptionInvoice(bookingId, claims.user_id);
+    return res.json({ success: true, message: invoice.created ? 'Đã tạo hóa đơn.' : 'Booking đã có hóa đơn.', ...invoice });
+  } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
+    console.error('Create reception invoice error:', error);
+    return res.status(500).json({ success: false, message: 'Không thể tạo hóa đơn.' });
   }
 }
 
@@ -550,6 +593,7 @@ module.exports = {
   cancelBookingHandler,
   getActiveBookingsHandler,
   checkOutBookingHandler,
+  createReceptionInvoiceHandler,
   finishRoomCleaningHandler,
   reportRoomMaintenanceHandler,
   getRoomMaintenanceReportsHandler,
