@@ -3,9 +3,9 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
 const { sql, getPool } = require('../config/db');
+const authService = require('../services/authService');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
-const DEFAULT_CUSTOMER_ROLE = 1;
 
 const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
 
@@ -58,6 +58,7 @@ const buildUserResponse = (user) => ({
   phone: user.phone,
   status: String(user.status || '').toUpperCase(),
   role_id: user.role_id,
+  role_code: user.role_code,
   role_name: user.role_name || 'Khách hàng',
 });
 
@@ -158,7 +159,8 @@ async function register(req, res) {
     }
 
     const roleQuery = await pool.request().query("SELECT TOP 1 id, code, name FROM roles WHERE code = 'CUSTOMER';");
-    const customerRole = roleQuery.recordset[0] || { id: DEFAULT_CUSTOMER_ROLE, code: 'CUSTOMER', name: 'Khách hàng' };
+    const customerRole = roleQuery.recordset[0];
+    if (!customerRole) throw new Error('Customer role is not configured.');
 
     const passwordHash = await bcrypt.hash(password, 10);
     const insertResult = await pool.request()
@@ -276,48 +278,23 @@ async function login(req, res) {
     const { email, password } = req.body || {};
 
     if (!email || !password) {
-      return res.status(400).json({ message: 'Vui lòng nhập email và mật khẩu.' });
+      return res.status(400).json({
+        message: 'Vui lòng nhập email và mật khẩu.',
+      });
     }
 
-    const pool = await getPool();
-    const result = await pool.request()
-      .input('email', sql.VarChar(150), normalizeEmail(email))
-      .query(`
-        SELECT u.id, u.email, u.password_hash, u.full_name, u.phone, u.status, u.role_id,
-               r.code AS role_code, r.name AS role_name
-        FROM users u
-        LEFT JOIN roles r ON r.id = u.role_id
-        WHERE LOWER(u.email) = LOWER(@email);
-      `);
+    const result = await authService.login(
+      normalizeEmail(email),
+      password
+    );
 
-    if (!result.recordset.length) {
-      return res.status(401).json({ message: 'Email hoặc mật khẩu không chính xác.' });
+    if (result.status) {
+      return res.status(result.status).json({
+        message: result.message,
+      });
     }
 
-    const user = result.recordset[0];
-    const legacyPasswordMatch = user.password_hash === password;
-    const isMatch = legacyPasswordMatch || (await bcrypt.compare(password, user.password_hash).catch(() => false));
-
-    if (!isMatch) {
-      return res.status(401).json({ message: 'Email hoặc mật khẩu không chính xác.' });
-    }
-
-    if (String(user.status).toUpperCase() !== 'ACTIVE') {
-      return res.status(403).json({ message: 'Tài khoản đang chờ xác thực hoặc đã bị khóa.' });
-    }
-
-    const accessToken = createAccessToken(user);
-    const refreshToken = crypto.randomBytes(32).toString('hex');
-    const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-    await pool.request()
-      .input('user_id', sql.BigInt, user.id)
-      .input('token', sql.VarChar(255), refreshToken)
-      .input('expires_at', sql.DateTimeOffset, refreshExpiresAt)
-      .query(`
-        INSERT INTO refresh_tokens (user_id, token, expires_at)
-        VALUES (@user_id, @token, @expires_at);
-      `);
+    const { user, accessToken, refreshToken } = result;
 
     return res.json({
       accessToken,
@@ -326,6 +303,7 @@ async function login(req, res) {
     });
   } catch (error) {
     console.error('Login error:', error);
+
     return res.status(500).json({
       message: 'Đăng nhập thất bại.',
       error: error.message,
@@ -361,6 +339,15 @@ async function logout(req, res) {
   }
 }
 
+module.exports = {
+  register,
+  login,
+  logout,
+  verifyEmail,
+  forgotPassword,
+  resetPassword,
+  changePassword,
+};
 async function forgotPassword(req, res) {
   try {
     const email = normalizeEmail(req.body?.email);
@@ -597,105 +584,44 @@ async function resetPassword(req, res) {
     });
   }
 }
-const changePassword = async (req, res) => {
+
+async function changePassword(req, res) {
   try {
-    const userId = req.auth?.userId;
-
-    if (!userId) {
-      return res.status(401).json({
-        message: 'Vui lòng đăng nhập lại.'
-      });
+    const userId = Number(req.auth?.userId);
+    const { currentPassword, newPassword } = req.body || {};
+    if (!userId) return res.status(401).json({ message: 'Vui lòng đăng nhập lại.' });
+    if (typeof currentPassword !== 'string' || !currentPassword || typeof newPassword !== 'string' || !newPassword) {
+      return res.status(400).json({ message: 'Vui lòng nhập mật khẩu hiện tại và mật khẩu mới.' });
     }
-
-    const { currentPassword, newPassword } = req.body;
-
-    if (!currentPassword || !newPassword) {
-      return res.status(400).json({
-        message: 'Vui lòng nhập đầy đủ mật khẩu hiện tại và mật khẩu mới.'
-      });
-    }
-
-    if (String(newPassword).length < 6) {
-      return res.status(400).json({
-        message: 'Mật khẩu mới phải có ít nhất 6 ký tự.'
-      });
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: 'Mật khẩu mới phải có ít nhất 6 ký tự.' });
     }
 
     const pool = await getPool();
-
     const result = await pool.request()
       .input('userId', sql.BigInt, userId)
-      .query(`
-        SELECT id, password_hash, status
-        FROM users
-        WHERE id = @userId
-      `);
-
-    if (!result.recordset.length) {
-      return res.status(404).json({
-        message: 'Không tìm thấy tài khoản.'
-      });
-    }
-
+      .query('SELECT password_hash, status FROM users WHERE id = @userId;');
     const user = result.recordset[0];
-
-    if (user.status !== 'ACTIVE') {
-      return res.status(403).json({
-        message: 'Tài khoản chưa được kích hoạt hoặc đã bị khóa.'
-      });
+    if (!user) return res.status(404).json({ message: 'Không tìm thấy tài khoản.' });
+    if (String(user.status).toUpperCase() !== 'ACTIVE') {
+      return res.status(403).json({ message: 'Tài khoản chưa được kích hoạt hoặc đã bị khóa.' });
     }
 
-    const passwordCorrect = await bcrypt.compare(
-      currentPassword,
-      user.password_hash
-    );
-
-    if (!passwordCorrect) {
-      return res.status(400).json({
-        message: 'Mật khẩu hiện tại không đúng.'
-      });
+    const matches = user.password_hash === currentPassword
+      || await bcrypt.compare(currentPassword, user.password_hash).catch(() => false);
+    if (!matches) return res.status(400).json({ message: 'Mật khẩu hiện tại không đúng.' });
+    if (await bcrypt.compare(newPassword, user.password_hash).catch(() => false)) {
+      return res.status(400).json({ message: 'Mật khẩu mới phải khác mật khẩu hiện tại.' });
     }
 
-    const samePassword = await bcrypt.compare(
-      newPassword,
-      user.password_hash
-    );
-
-    if (samePassword) {
-      return res.status(400).json({
-        message: 'Mật khẩu mới phải khác mật khẩu hiện tại.'
-      });
-    }
-
-    const newPasswordHash = await bcrypt.hash(newPassword, 10);
-
+    const passwordHash = await bcrypt.hash(newPassword, 10);
     await pool.request()
       .input('userId', sql.BigInt, userId)
-      .input('passwordHash', sql.VarChar, newPasswordHash)
-      .query(`
-        UPDATE users
-        SET password_hash = @passwordHash
-        WHERE id = @userId
-      `);
-
-    return res.json({
-      message: 'Đổi mật khẩu thành công.'
-    });
-
+      .input('passwordHash', sql.VarChar(255), passwordHash)
+      .query('UPDATE users SET password_hash = @passwordHash WHERE id = @userId;');
+    return res.json({ message: 'Đổi mật khẩu thành công.' });
   } catch (error) {
     console.error('Change password error:', error);
-
-    return res.status(500).json({
-      message: 'Không thể đổi mật khẩu.'
-    });
+    return res.status(500).json({ message: 'Không thể đổi mật khẩu lúc này.' });
   }
-};
-module.exports = {
-  register,
-  login,
-  logout,
-  verifyEmail,
-  forgotPassword,
-  resetPassword,
-  changePassword,
-};
+}
