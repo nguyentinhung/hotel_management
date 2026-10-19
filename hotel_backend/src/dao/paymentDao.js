@@ -1,4 +1,5 @@
 const { sql, getPool } = require('../config/db');
+const { expirePendingBookings } = require('./bookingDao');
 
 function paymentError(code, statusCode, message) {
   const error = new Error(message);
@@ -102,6 +103,7 @@ async function createFinalPayment({ customerId, bookingCode, paymentCode, method
 }
 
 async function createCustomerDepositPayment({ customerId, bookingCode, paymentCode, method = 'CASH', simulated = false }) {
+  await expirePendingBookings();
   const pool = await getPool();
   const transaction = new sql.Transaction(pool);
   await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
@@ -110,24 +112,62 @@ async function createCustomerDepositPayment({ customerId, bookingCode, paymentCo
       .input('customerId', sql.BigInt, customerId)
       .input('bookingCode', sql.VarChar(20), bookingCode)
       .query(`
-        SELECT TOP (1) b.id, b.status, b.deposit_amount,
-          CEILING(SUM(br.price_per_night) * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30) AS required_deposit
+        SELECT TOP (1) b.id, b.status, b.deposit_amount, b.check_in_date, b.check_out_date,
+          CASE WHEN b.promotion_id IS NOT NULL THEN CEILING(b.total_amount * 0.30)
+            ELSE CEILING(SUM(br.price_per_night) * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30) END AS required_deposit
         FROM dbo.bookings b WITH (UPDLOCK, HOLDLOCK)
         JOIN dbo.booking_rooms br ON br.booking_id = b.id
         WHERE b.customer_id = @customerId AND b.booking_code = @bookingCode
-        GROUP BY b.id, b.status, b.deposit_amount, b.check_in_date, b.check_out_date;
+        GROUP BY b.id, b.status, b.deposit_amount, b.check_in_date, b.check_out_date, b.promotion_id, b.total_amount;
       `);
     const booking = bookingResult.recordset[0];
     if (!booking) throw paymentError('BOOKING_NOT_FOUND', 404, 'Không tìm thấy booking của bạn.');
     if (['CANCELLED', 'NO_SHOW'].includes(String(booking.status).toUpperCase())) throw paymentError('BOOKING_UNPAYABLE', 409, 'Booking này không thể thanh toán.');
+    if (String(booking.status).toUpperCase() !== 'PENDING_PAYMENT') throw paymentError('BOOKING_UNPAYABLE', 409, 'Booking is no longer awaiting payment.');
     const amount = Number(booking.required_deposit);
     if (!Number.isFinite(amount) || amount < 1) throw paymentError('INVALID_DEPOSIT', 409, 'Không tính được khoản cọc cho booking.');
     if (Number(booking.deposit_amount || 0) >= amount) throw paymentError('DEPOSIT_ALREADY_PAID', 409, 'Booking đã đủ tiền cọc.');
+    if (String(booking.status).toUpperCase() !== 'PENDING_PAYMENT') throw paymentError('BOOKING_UNPAYABLE', 409, 'Booking is no longer awaiting payment.');
+    const selectedTypes = await transaction.request().input('bookingId', sql.BigInt, booking.id).query(`
+      SELECT room_type_id, COUNT(*) AS required_count FROM dbo.booking_rooms WITH (UPDLOCK, HOLDLOCK)
+      WHERE booking_id = @bookingId GROUP BY room_type_id;
+    `);
+    let unavailable = false;
+    for (const selection of selectedTypes.recordset) {
+      const inventory = await transaction.request()
+        .input('bookingId', sql.BigInt, booking.id).input('roomTypeId', sql.Int, selection.room_type_id)
+        .input('checkIn', sql.Date, booking.check_in_date).input('checkOut', sql.Date, booking.check_out_date)
+        .query(`
+          SELECT
+            (SELECT COUNT(*) FROM dbo.rooms r WITH (UPDLOCK, HOLDLOCK) WHERE r.room_type_id = @roomTypeId AND r.status <> 'MAINTENANCE') AS inventory_count,
+            (SELECT COUNT(*) FROM dbo.booking_rooms br WITH (UPDLOCK, HOLDLOCK)
+             JOIN dbo.bookings b WITH (UPDLOCK, HOLDLOCK) ON b.id = br.booking_id
+             WHERE br.room_type_id = @roomTypeId AND b.id <> @bookingId
+               AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn
+               AND (b.status = 'CHECKED_IN'
+                 OR (b.status = 'PENDING_PAYMENT' AND b.created_at > DATEADD(minute, -15, SYSUTCDATETIME()))
+                 OR b.status = 'CONFIRMED')
+             ) AS reserved_count;
+        `);
+      const row = inventory.recordset[0];
+      if (!row || Number(row.inventory_count) - Number(row.reserved_count) < Number(selection.required_count)) { unavailable = true; break; }
+    }
+    if (unavailable) {
+      await transaction.request().input('bookingId', sql.BigInt, booking.id).query(`
+        UPDATE dbo.bookings SET status = 'CANCELLED', cancellation_reason = 'ROOMS_UNAVAILABLE' WHERE id = @bookingId;
+        UPDATE dbo.payments SET status = 'FAILED' WHERE booking_id = @bookingId AND payment_type = 'DEPOSIT' AND status = 'PENDING';
+      `);
+      await transaction.commit();
+      throw paymentError('ROOMS_UNAVAILABLE', 409, 'The room type sold out while payment was pending. This booking was cancelled. Please choose another date or room type.');
+    }
     const pending = await transaction.request().input('bookingId', sql.BigInt, booking.id).query(`
-      SELECT TOP (1) id FROM dbo.payments WITH (UPDLOCK, HOLDLOCK)
+      SELECT TOP (1) payment_code, amount, status FROM dbo.payments WITH (UPDLOCK, HOLDLOCK)
       WHERE booking_id = @bookingId AND payment_type = 'DEPOSIT' AND status = 'PENDING';
     `);
-    if (pending.recordset.length) throw paymentError('PAYMENT_ALREADY_PENDING', 409, 'Booking đã có giao dịch cọc đang chờ xử lý.');
+    if (pending.recordset.length) {
+      await transaction.commit();
+      return pending.recordset[0];
+    }
     const result = await transaction.request()
       .input('paymentCode', sql.VarChar(30), paymentCode)
       .input('bookingId', sql.BigInt, booking.id)
@@ -148,6 +188,7 @@ async function createCustomerDepositPayment({ customerId, bookingCode, paymentCo
 }
 
 async function completeSimulatedDepositPayment({ paymentCode, customerId, succeeded }) {
+  await expirePendingBookings();
   const pool = await getPool();
   const transaction = new sql.Transaction(pool);
   let transactionStarted = false;
@@ -574,6 +615,7 @@ async function createReceptionInvoice(bookingId, createdByUserId) {
 }
 
 async function completeVnpayPayment({ paymentCode, amountMinor, transactionNo, payDate, succeeded }) {
+  await expirePendingBookings();
   const pool = await getPool();
   const transaction = new sql.Transaction(pool);
   let transactionStarted = false;

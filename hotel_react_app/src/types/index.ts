@@ -46,6 +46,19 @@ export interface Review {
   room_type_name?: string;
 }
 
+export interface ReviewBooking {
+  booking_id: number;
+  booking_code: string;
+  status: string;
+  check_in_date: string;
+  check_out_date: string;
+  room_type_count: number;
+  room_type_id: number | null;
+  room_type_name: string | null;
+  can_review: boolean;
+  review: { id: number; rating: number; comment: string } | null;
+}
+
 export interface AppUser {
   full_name: string;
   role: Role;
@@ -88,6 +101,7 @@ export interface WalkInBookingPayload {
   room_id?: number | null;
   room_selections?: { room_type_id: number; room_id?: number | null }[];
   service_selections?: { service_id: number; quantity: number }[];
+  promotion_code?: string;
   check_in_date: string;
   check_out_date: string;
   adults: number;
@@ -113,6 +127,9 @@ export interface WalkInBookingResponse {
   check_out_date: string;
   nights: number;
   price_per_night: number;
+  original_total_amount?: number;
+  discount_amount?: number;
+  promotion_code?: string | null;
   total_amount: number;
   deposit_amount: number;
   remaining_balance: number;
@@ -129,6 +146,7 @@ export interface CustomerBookingPayload {
   adults: number;
   children: number;
   special_request?: string;
+  promotion_code?: string;
 }
 
 export interface CustomerBookingResponse extends WalkInBookingResponse {
@@ -151,6 +169,8 @@ export interface RecentBooking {
   total_amount: number;
   deposit_amount: number;
   required_deposit_amount?: number;
+  payment_expires_at?: string;
+  cancellation_reason?: string | null;
   requires_deposit_payment?: boolean;
   deposit_payment_status?: 'NOT_REQUIRED' | 'PAID' | 'PENDING' | 'PARTIAL' | 'FAILED' | 'UNPAID';
   final_paid_amount?: number;

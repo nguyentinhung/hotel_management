@@ -1847,6 +1847,10 @@ a:focus-visible {
 .customer-booking-payment small { color: #6b7e82; font-size: .73rem; }
 .customer-booking-details { white-space: nowrap; }
 .customer-booking-actions { display: flex; flex-direction: column; gap: 7px; }
+.customer-booking-payment-deadline, .customer-booking-expired-notice { grid-column: 2 / -1; margin: 0; padding: 8px 10px; border-radius: 8px; font-size: .76rem; line-height: 1.45; }
+.customer-booking-payment-deadline { background: #fff8e9; color: #8a5b12; }
+.customer-booking-expired-notice { background: #fff1ef; color: #a43d32; }
+.customer-booking-continue-payment { white-space: nowrap; }
 .customer-booking-cancel { min-height: 34px; padding: 0 9px; border: 1px solid #e6a49b; border-radius: 8px; background: #fff; color: #b83c32; font: inherit; font-size: .72rem; font-weight: 650; white-space: nowrap; cursor: pointer; }
 .customer-booking-cancel:hover { background: #fff2f0; }
 .customer-booking-cancel:disabled { opacity: .6; cursor: wait; }
@@ -1896,6 +1900,7 @@ a:focus-visible {
   .customer-booking-status { grid-column: 2; grid-row: 2; justify-self: start; }
   .customer-booking-primary { grid-column: 2; grid-row: 1; }
   .customer-booking-payment, .customer-booking-actions { grid-column: 1 / -1; }
+  .customer-booking-payment-deadline, .customer-booking-expired-notice { grid-column: 1 / -1; }
   .customer-booking-actions { justify-self: stretch; }
 }
 @media (max-width: 600px) {
@@ -9636,3 +9641,111 @@ a:focus-visible {
   .invoice-list-filters { grid-template-columns: 1fr 1fr; }
   .invoice-list-footer { align-items: flex-start; flex-direction: column; }
 }
+.account-profile { display: grid; gap: 18px; max-width: 760px; }
+.account-profile-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.account-profile-heading h3 { margin: 0; }
+.account-profile-heading p { margin: 6px 0 0; color: var(--text-muted, #64748b); }
+.account-profile-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; }
+.account-profile-grid > div, .account-password-form label { display: grid; gap: 7px; padding: 14px; border: 1px solid #e2e8f0; border-radius: 12px; background: #fff; }
+.account-profile-grid dt { color: #64748b; font-size: .86rem; }
+.account-profile-grid dd { margin: 0; font-weight: 600; }
+.account-profile-grid input, .account-password-form input { width: 100%; min-height: 40px; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font: inherit; }
+.account-profile-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.account-password-form { display: grid; gap: 12px; max-width: 480px; }
+.account-password-form label { font-weight: 600; }
+.account-profile-success { margin: 0; color: #087443; }
+@media (max-width: 640px) { .account-profile-heading { flex-direction: column; } .account-profile-grid { grid-template-columns: 1fr; } }
+.room-management-header-actions { display: flex; align-items: center; gap: 14px; }
+.room-crud-backdrop { position: fixed; inset: 0; z-index: 4050; display: grid; place-items: center; overflow-y: auto; padding: 20px; background: rgba(13, 32, 32, .54); }
+.room-crud-dialog { display: grid; gap: 18px; width: min(560px, 100%); max-height: 92vh; overflow-y: auto; padding: 24px; border: 1px solid var(--line); border-radius: 18px; background: #fff; box-shadow: 0 24px 70px rgba(5, 25, 25, .28); }
+.room-crud-dialog > header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.room-crud-dialog h2 { margin: 0; color: var(--primary); }
+.room-crud-dialog header p { margin: 5px 0 0; color: var(--muted); }
+.room-crud-dialog header small { color: var(--muted); font-weight: 700; text-transform: uppercase; }
+.room-crud-close { flex: 0 0 auto; width: 36px; height: 36px; border: 0; border-radius: 9px; background: #f1f5f4; color: var(--primary); font-size: 1.5rem; cursor: pointer; }
+.room-crud-dialog form { display: grid; gap: 14px; }
+.room-crud-dialog form label { display: grid; gap: 7px; color: var(--primary); font-weight: 600; }
+.room-crud-dialog form input, .room-crud-dialog form select { width: 100%; min-height: 44px; padding: 9px 12px; border: 1px solid rgba(15, 61, 62, .2); border-radius: 9px; background: #fff; font: inherit; }
+.room-crud-dialog footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 9px; }
+.room-detail-dialog dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; }
+.room-detail-dialog dl > div { padding: 13px; border: 1px solid var(--line); border-radius: 10px; }
+.room-detail-dialog dt { color: var(--muted); font-size: .84rem; }
+.room-detail-dialog dd { margin: 5px 0 0; color: var(--primary); font-weight: 650; }
+.room-detail-dialog .room-detail-wide { grid-column: 1 / -1; }
+.room-delete-confirm { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 9px; }
+.room-delete-confirm p { flex: 1 0 100%; margin: 0; color: #9b2c2c; }
+@media (max-width: 600px) { .room-crud-backdrop { align-items: end; padding: 10px; } .room-crud-dialog { max-height: 94vh; padding: 18px; } .room-detail-dialog dl { grid-template-columns: 1fr; } .room-detail-dialog .room-detail-wide { grid-column: auto; } .room-management-header-actions { align-items: flex-end; flex-direction: column; gap: 8px; } }
+
+.customer-promotion-controls { display: flex; align-items: stretch; flex-wrap: wrap; gap: 10px; }
+.customer-promotion-controls input { flex: 1 1 260px; min-width: 0; }
+.customer-promotion-controls button:disabled { cursor: not-allowed; opacity: .55; }
+.booking-promotion-list { display: grid; gap: 10px; margin: 12px 0 16px; }
+.booking-promotion-option { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 14px; border: 1px solid #dce8e4; border-radius: 11px; background: #fbfdfc; }
+.booking-promotion-option > div { display: grid; gap: 4px; }
+.booking-promotion-option strong { color: var(--primary); }
+.booking-promotion-option span, .booking-promotion-option small, .customer-promotion-empty { color: var(--muted); }
+.booking-promotion-option small { line-height: 1.4; }
+.booking-promotion-selection { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.booking-promotion-selection > div { display: grid; gap: 4px; }
+.booking-promotion-selection > div span { color: var(--muted); }
+.promotion-modal-backdrop { z-index: 1300; }
+.promotion-picker-modal { width: min(100%, 700px); max-height: min(88vh, 760px); display: flex; flex-direction: column; overflow: hidden; border-radius: 18px; background: #fff; box-shadow: 0 25px 60px rgba(15, 23, 42, .25); }
+.promotion-picker-modal .modal-header { padding: 20px 22px; border-bottom: 1px solid var(--line); }
+.promotion-picker-modal .modal-header h3 { margin: 0 0 5px; color: var(--primary); }
+.promotion-picker-modal .modal-header p { margin: 0; color: var(--muted); font-size: .88rem; }
+.promotion-picker-content { overflow-y: auto; padding: 18px 22px 22px; }
+.promotion-picker-content .booking-promotion-list { max-height: 340px; overflow-y: auto; }
+.promotion-picker-manual { display: grid; gap: 9px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.promotion-picker-manual > label { color: var(--primary); font-weight: 650; }
+.customer-promotion-message { margin: 10px 0 0; padding: 10px 12px; border: 1px solid #f0d59f; border-radius: 9px; background: #fff9ec; color: #79520b; }
+.customer-promotion-message.is-success { border-color: #b9dfca; background: #effaf3; color: #17633a; }
+@media (max-width: 600px) { .booking-promotion-option { align-items: flex-start; flex-direction: column; } .promotion-picker-content { padding: 14px; } .promotion-picker-modal .modal-header { padding: 16px; } .booking-promotion-selection { align-items: flex-start; flex-direction: column; } }
+.review-management { display: grid; gap: 16px; }
+.review-actions { display: flex; justify-content: flex-end; margin: -8px 0 4px; }
+.review-admin-card { min-width: 0; }
+.review-list-filters { display: grid; grid-template-columns: minmax(260px, 2fr) minmax(150px, 1fr) minmax(150px, 1fr) auto; align-items: end; gap: 9px; margin: 0 0 15px; }
+.review-list-filters label { display: grid; gap: 4px; color: #73849b; font-size: 12px; }
+.review-list-filters input, .review-list-filters select { width: 100%; height: 38px; padding: 0 11px; color: #31465e; background: #fff; border: 1px solid #dce4eb; border-radius: 6px; font: inherit; font-size: 13px; }
+.review-table tbody tr { cursor: default; }
+.review-table tbody tr:hover { background: #f8fbfa; }
+.review-table .review-customer-cell { color: #174d56; font-weight: 650; }
+.review-table .review-comment-cell { min-width: 260px; max-width: 640px; white-space: normal; line-height: 1.55; }
+.review-table-rating { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.review-table-rating > span { color: #e89a28; font-size: 15px; letter-spacing: 1px; }
+.review-table-rating small { color: #71849e; font-size: 11px; }
+.review-delete-button { padding: 6px 11px; border: 1px solid #f0c5c5; border-radius: 6px; color: #a62d32; background: #fff; font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
+.review-delete-button:hover:not(:disabled) { color: #fff; border-color: #b82b32; background: #b82b32; }
+.review-delete-button:disabled { cursor: wait; opacity: .6; }
+.review-customer-delete-button { margin-left: 12px; }
+@media (max-width: 1000px) { .review-list-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } .review-list-filters label:first-child { grid-column: 1 / -1; } }
+@media (max-width: 600px) { .review-list-filters { grid-template-columns: 1fr; } .review-list-filters label:first-child { grid-column: auto; } }
+.review-modal-backdrop { position: fixed; inset: 0; z-index: 1400; display: grid; place-items: center; padding: 20px; background: rgba(9, 29, 29, .58); }
+.review-modal { width: min(100%, 620px); max-height: min(90vh, 820px); overflow-y: auto; padding: 24px; border: 1px solid var(--line); border-radius: 18px; background: #fff; box-shadow: 0 24px 70px rgba(0, 0, 0, .25); }
+.review-delete-confirmation { width: min(100%, 480px); }
+.review-delete-confirmation > p { margin: 0 0 24px; color: var(--text-muted, #53616b); line-height: 1.6; }
+.review-delete-confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.review-delete-confirm-actions .review-delete-button { min-height: 40px; padding: 8px 16px; font-size: 14px; }
+.review-modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+.review-modal-header h2 { margin: 5px 0 0; color: var(--primary); }
+.review-modal-close { width: 38px; height: 38px; border: 0; border-radius: 50%; background: #f2f5f4; color: var(--primary); font-size: 1.6rem; cursor: pointer; }
+.review-modal-content { display: grid; gap: 14px; }
+.review-modal-content > label { color: var(--primary); font-weight: 650; }
+.review-modal-content select { width: 100%; min-height: 44px; }
+.review-modal-empty, .review-modal-success { padding: 12px 0; }
+.review-modal-empty p, .review-modal-success p { margin: 0 0 8px; }
+.review-modal-empty small { color: var(--muted); }
+.review-management-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.review-management-heading h2, .review-management-heading p { margin: 0 0 6px; }
+.review-booking-list { display: grid; gap: 12px; }
+.review-booking-card { padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.review-booking-card-actionable { cursor: pointer; transition: border-color .15s ease, box-shadow .15s ease; }
+.review-booking-card-actionable:hover, .review-booking-card-actionable:focus-visible { border-color: var(--primary); box-shadow: 0 6px 20px rgba(15, 70, 67, .12); outline: none; }
+.review-booking-card h3, .review-booking-card p { margin: 0 0 8px; }
+.review-inline-action { padding: 0; border: 0; background: none; color: var(--primary); font: inherit; text-decoration: underline; cursor: pointer; }
+.review-form { display: grid; gap: 14px; max-width: 680px; }
+.review-form fieldset { display: grid; gap: 10px; border: 0; padding: 0; }
+.review-rating-picker { display: flex; gap: 6px; }
+.review-star { border: 0; padding: 2px 4px; color: #c68b20; background: transparent; font-size: 1.8rem; cursor: pointer; }
+.review-form textarea, #review-booking { width: 100%; }
+.review-page { display: grid; gap: 14px; }
+@media (max-width: 600px) { .review-management-heading { align-items: flex-start; flex-direction: column; } }

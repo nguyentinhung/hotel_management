@@ -75,6 +75,33 @@ export interface RoomStatusRecord {
   room_type_name: string;
 }
 
+export type RoomTypeOption = { id: number; name: string };
+export type RoomFormPayload = { room_number: string; room_type_id: number; floor: number };
+export interface RoomDetails extends RoomStatusRecord {
+  room_type_description: string | null;
+  base_price: number;
+  max_adults: number;
+  max_children: number;
+}
+
+export const getRoomTypesForRoomForm = async () =>
+  (await api.get<RoomTypeOption[]>('/api/room-types')).map(({ id, name }) => ({ id, name }));
+
+export const getRoomList = (accessToken: string) =>
+  api.get<{ success: boolean; rooms: RoomStatusRecord[] }>('/api/rooms', accessToken);
+
+export const getRoomDetails = (roomId: number, accessToken: string) =>
+  api.get<{ success: boolean; room: RoomDetails }>(`/api/rooms/${roomId}`, accessToken);
+
+export const addRoom = (payload: RoomFormPayload, accessToken: string) =>
+  api.postWithAuth<{ success: boolean; message: string; room: RoomStatusRecord }>('/api/rooms', payload, accessToken);
+
+export const updateRoom = (roomId: number, payload: RoomFormPayload, accessToken: string) =>
+  api.putWithAuth<{ success: boolean; message: string; room: RoomStatusRecord }>(`/api/rooms/${roomId}`, payload, accessToken);
+
+export const deleteRoom = (roomId: number, accessToken: string) =>
+  api.deleteWithAuth<{ success: boolean; message: string }>(`/api/rooms/${roomId}`, accessToken);
+
 export const getRoomStatuses = (accessToken: string) =>
   api.get<{ success: boolean; rooms: RoomStatusRecord[] }>('/api/rooms/statuses', accessToken);
 

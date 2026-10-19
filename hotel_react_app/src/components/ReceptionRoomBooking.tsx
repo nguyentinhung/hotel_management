@@ -22,6 +22,9 @@ import BookingRoomSelectionEditor, { type BookingRoomSelection } from './Booking
 import { createReceptionCheckout, createReceptionInvoice, getInvoiceDetails } from '../services/paymentService';
 import type { InvoiceDetail } from '../services/paymentService';
 import CheckoutPaymentSuccessModal, { type CheckoutPaymentSuccess } from './CheckoutPaymentSuccessModal';
+import { getActivePromotions, getServices } from '../services/homeService';
+import { validatePromotion } from '../services/promotionValidationService';
+import type { Promotion } from '../types/Promotion';
 import { useToast } from './ToastProvider';
 import DataTable from './DataTable';
 
@@ -147,6 +150,14 @@ export default function ReceptionRoomBooking({
   const [additionalWalkInTypes, setAdditionalWalkInTypes] = useState<RoomAvailabilityItem[]>([]);
   const [additionalWalkInRoomIds, setAdditionalWalkInRoomIds] = useState<Record<number, string>>({});
   const [serviceOptions, setServiceOptions] = useState<ServiceItem[]>([]);
+  const [walkInPromotions, setWalkInPromotions] = useState<Promotion[]>([]);
+  const [walkInPromotionId, setWalkInPromotionId] = useState('');
+  const [walkInPromotionCode, setWalkInPromotionCode] = useState('');
+  const [walkInAppliedPromotion, setWalkInAppliedPromotion] = useState<{ code: string; discount_amount: number; subtotal: number } | null>(null);
+  const [walkInPromotionMessage, setWalkInPromotionMessage] = useState('Chọn promotion hoặc nhập mã để áp dụng.');
+  const [isWalkInPromotionModalOpen, setIsWalkInPromotionModalOpen] = useState(false);
+  const [isApplyingWalkInPromotion, setIsApplyingWalkInPromotion] = useState(false);
+  const [walkInPromotionLoadError, setWalkInPromotionLoadError] = useState('');
   const [selectedServiceQuantities, setSelectedServiceQuantities] = useState<Record<number, number>>({});
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [isRoomPickerOpen, setIsRoomPickerOpen] = useState(false);
@@ -167,7 +178,7 @@ export default function ReceptionRoomBooking({
     guest_id_card: '',
     room_id: '',
     deposit_amount: 0,
-    check_in_now: false,
+    check_in_now: true,
     special_request: '',
   });
   const [isSubmittingBooking, setIsSubmittingBooking] = useState<boolean>(false);
@@ -265,6 +276,11 @@ export default function ReceptionRoomBooking({
   const walkInServiceTotal = selectedRoomType
     ? serviceOptions.reduce((sum, service) => sum + Number(service.price) * (selectedServiceQuantities[service.id] || 0), 0) * (1 + additionalWalkInTypes.length)
     : 0;
+  const walkInSubtotal = walkInRoomTotal + walkInServiceTotal;
+  const selectedWalkInPromotion = walkInPromotions.find((promotion) => promotion.code === walkInPromotionId) || null;
+  const isWalkInPromotionApplied = walkInAppliedPromotion?.subtotal === walkInSubtotal;
+  const walkInDiscount = isWalkInPromotionApplied ? Number(walkInAppliedPromotion.discount_amount) : 0;
+  const walkInTotal = Math.max(0, walkInSubtotal - walkInDiscount);
 
   /**
    * 1. HÀM GỌI API KIỂM TRA PHÒNG TRỐNG (CHECK AVAILABILITY)
@@ -660,11 +676,11 @@ export default function ReceptionRoomBooking({
     void fetchRecent();
     if (mode === 'management') {
       void fetchAvailability();
-      fetch('http://localhost:5000/api/services?active=true')
-        .then((response) => response.ok ? response.json() : Promise.reject(new Error('Không tải được danh sách dịch vụ.')))
-        .then((data: ServiceItem[]) => setServiceOptions(Array.isArray(data)
-          ? data.filter((service) => service.booking_policy === 'PREBOOK')
-          : []))
+      void getActivePromotions()
+        .then((promotions) => { setWalkInPromotions(promotions); setWalkInPromotionLoadError(''); })
+        .catch(() => { setWalkInPromotions([]); setWalkInPromotionLoadError('Không tải được danh sách promotion. Bạn vẫn có thể nhập mã để kiểm tra.'); });
+      void getServices()
+        .then((data) => setServiceOptions(data.filter((service) => service.booking_policy === 'PREBOOK')))
         .catch(() => setServiceOptions([]));
     }
     if (mode === 'checkin') void fetchAttentionBookings();
@@ -745,18 +761,15 @@ export default function ReceptionRoomBooking({
     setAdditionalWalkInRoomIds(Object.fromEntries(additionalTypes.map((type, index) => {
       const occurrence = roomTypeOccurrences[type.id] || 0;
       roomTypeOccurrences[type.id] = occurrence + 1;
-      const assignableRooms = type.available_room_list.filter((room) => room.status !== 'CLEANING');
+      const assignableRooms = type.available_room_list.filter((room) => room.status === 'AVAILABLE');
       return [index, assignableRooms[occurrence] ? String(assignableRooms[occurrence].id) : ''];
     })));
 
     // Mặc định chọn phòng vật lý đầu tiên trong danh sách phòng trống nếu có
-    const assignableRooms = roomType.available_room_list.filter((room) => room.status !== 'CLEANING');
+    const assignableRooms = roomType.available_room_list.filter((room) => room.status === 'AVAILABLE');
     const defaultRoomId = assignableRooms.length > 0
       ? String(assignableRooms[0].id)
       : '';
-
-    // Tiền phòng dự kiến
-    const estimatedTotal = roomTypes.reduce((sum, type) => sum + type.base_price, 0) * nights;
 
     setWalkInForm({
       guest_full_name: '',
@@ -764,11 +777,15 @@ export default function ReceptionRoomBooking({
       guest_email: '',
       guest_id_card: '',
       room_id: defaultRoomId,
-      deposit_amount: estimatedTotal,
-      check_in_now: false,
+      deposit_amount: 0,
+      check_in_now: true,
       special_request: 'Khách đặt trực tiếp tại quầy lễ tân',
     });
     setSelectedServiceQuantities({});
+    setWalkInPromotionId('');
+    setWalkInPromotionCode('');
+    setWalkInAppliedPromotion(null);
+    setWalkInPromotionMessage('Chọn promotion hoặc nhập mã để áp dụng.');
 
     setIsModalOpen(true);
   };
@@ -790,6 +807,35 @@ export default function ReceptionRoomBooking({
     setIsModalOpen(false);
     setSelectedRoomType(null);
     setAdditionalWalkInTypes([]);
+  };
+
+  const applyWalkInPromotion = async (codeToApply = walkInPromotionCode) => {
+    const code = codeToApply.trim().toUpperCase();
+    if (!code) {
+      setWalkInPromotionMessage('Vui lòng nhập mã promotion trước khi áp dụng.');
+      return false;
+    }
+    if (walkInSubtotal <= 0) {
+      setWalkInPromotionMessage('Hãy chọn phòng và ngày lưu trú hợp lệ trước.');
+      return false;
+    }
+    setIsApplyingWalkInPromotion(true);
+    setWalkInPromotionCode(code);
+    setWalkInPromotionMessage('Đang kiểm tra promotion…');
+    try {
+      const result = await validatePromotion(code, walkInSubtotal);
+      setWalkInPromotionId(result.promotion_code);
+      setWalkInAppliedPromotion({ code: result.promotion_code, discount_amount: Number(result.discount_amount), subtotal: walkInSubtotal });
+      setWalkInPromotionMessage(`Đã áp dụng mã ${result.promotion_code}. Giảm ${formatCurrency(Number(result.discount_amount))}.`);
+      return true;
+    } catch (error) {
+      setWalkInPromotionId('');
+      setWalkInAppliedPromotion(null);
+      setWalkInPromotionMessage(error instanceof Error ? error.message : 'Không thể xác thực promotion.');
+      return false;
+    } finally {
+      setIsApplyingWalkInPromotion(false);
+    }
   };
 
   /**
@@ -842,6 +888,7 @@ export default function ReceptionRoomBooking({
         service_selections: Object.entries(selectedServiceQuantities)
           .filter(([, quantity]) => Number(quantity) > 0)
           .map(([serviceId, quantity]) => ({ service_id: Number(serviceId), quantity: Number(quantity) })),
+        promotion_code: isWalkInPromotionApplied ? walkInAppliedPromotion?.code : undefined,
         check_in_date: checkInDate,
         check_out_date: checkOutDate,
         adults,
@@ -852,12 +899,12 @@ export default function ReceptionRoomBooking({
         guest_id_card: walkInForm.guest_id_card || undefined,
         deposit_amount: Number(walkInForm.deposit_amount || 0),
         special_request: walkInForm.special_request,
-        check_in_now: false,
+        check_in_now: true,
       };
 
       const res = await createWalkInBooking(payload);
 
-      showToast(`${res.message} (Khách: ${res.booking.guest_full_name}, Phòng: ${res.booking.room_number || 'Tự gán'}, Tổng: ${formatCurrency(res.booking.total_amount)})`, 'success');
+      showToast(`${res.message} (Khách: ${res.booking.guest_full_name}, Phòng: ${res.booking.room_number || 'Tự gán'}${Number(res.booking.discount_amount || 0) > 0 ? `, Promotion ${res.booking.promotion_code}: giảm ${formatCurrency(Number(res.booking.discount_amount))}` : ''}, Tổng: ${formatCurrency(res.booking.total_amount)})`, 'success');
       setIsModalOpen(false);
       void fetchAvailability();
       void fetchRecent();
@@ -1205,7 +1252,24 @@ export default function ReceptionRoomBooking({
                   </span>
                 </div>
                 <div><strong>Tổng tiền dịch vụ:</strong> <span className="text-highlight">{formatCurrency(walkInServiceTotal)}</span></div>
-                <div><strong>Tổng booking dự kiến:</strong> <span className="text-highlight">{formatCurrency(walkInRoomTotal + walkInServiceTotal)}</span></div>
+                <div><strong>Tổng trước promotion:</strong> <span>{formatCurrency(walkInSubtotal)}</span></div>
+                {selectedWalkInPromotion && <div><strong>Promotion {selectedWalkInPromotion.code}:</strong> <span className="text-highlight">− {formatCurrency(walkInDiscount)}</span></div>}
+                <div><strong>Tổng booking dự kiến:</strong> <span className="text-highlight">{formatCurrency(walkInTotal)}</span></div>
+              </div>
+
+              <div className="booking-room-summary">
+                <h3>Khuyến mãi</h3>
+                <div className="booking-promotion-selection">
+                  <div>{isWalkInPromotionApplied
+                    ? <><strong>{walkInAppliedPromotion.code}</strong><span>Đã giảm {formatCurrency(walkInDiscount)}</span></>
+                    : <span>{walkInAppliedPromotion ? 'Tạm tính đã thay đổi, vui lòng áp dụng lại mã.' : 'Chưa chọn mã khuyến mãi'}</span>}
+                  </div>
+                  <button type="button" className="btn btn-outline" onClick={() => setIsWalkInPromotionModalOpen(true)}>
+                    {isWalkInPromotionApplied ? 'Đổi promotion' : 'Chọn promotion'}
+                  </button>
+                </div>
+                <p className={`customer-promotion-message${isWalkInPromotionApplied ? ' is-success' : ''}`} role="status" aria-live="polite">{walkInPromotionMessage}</p>
+                <p>Tạm tính: {formatCurrency(walkInSubtotal)}{isWalkInPromotionApplied ? ` · Giảm ${formatCurrency(walkInDiscount)} · Còn ${formatCurrency(walkInTotal)}` : ''}</p>
               </div>
 
               {/* Thông tin khách hàng đến quầy */}
@@ -1284,7 +1348,7 @@ export default function ReceptionRoomBooking({
                     value={walkInForm.room_id}
                     onChange={(e) => setWalkInForm({ ...walkInForm, room_id: e.target.value })}
                   >
-                    {selectedRoomType.available_room_list.filter((room) => room.status !== 'CLEANING' && !additionalWalkInTypes.some((type, index) => type.id === selectedRoomType.id && additionalWalkInRoomIds[index] === String(room.id))).map((r: AvailableRoom) => (
+                    {selectedRoomType.available_room_list.filter((room) => room.status === 'AVAILABLE' && !additionalWalkInTypes.some((type, index) => type.id === selectedRoomType.id && additionalWalkInRoomIds[index] === String(room.id))).map((r: AvailableRoom) => (
                       <option key={r.id} value={r.id}>
                         Phòng {r.room_number} (Tầng {r.floor || 1})
                       </option>
@@ -1293,7 +1357,7 @@ export default function ReceptionRoomBooking({
                 </div>
 
                 <div className="form-group">
-                  <label htmlFor="deposit_amount">Số tiền khách thanh toán trước (VNĐ)</label>
+                  <label htmlFor="deposit_amount">Số tiền khách đã thanh toán trước (VNĐ, nếu có)</label>
                   <input
                     id="deposit_amount"
                     type="number"
@@ -1310,28 +1374,10 @@ export default function ReceptionRoomBooking({
                 const usedRoomIds = additionalWalkInTypes.flatMap((otherType, otherIndex) => otherIndex !== index && otherType.id === type.id && additionalWalkInRoomIds[otherIndex] ? [additionalWalkInRoomIds[otherIndex]] : []);
                 if (selectedRoomType.id === type.id && walkInForm.room_id) usedRoomIds.push(walkInForm.room_id);
                 return <div className="form-row-2 walkin-extra-room" key={`${type.id}-${index}`}>
-                <div className="form-group"><label htmlFor={`walkin-room-${index}`}>{type.name} · {formatCurrency(type.base_price)} / đêm</label><select id={`walkin-room-${index}`} value={additionalWalkInRoomIds[index] || ''} onChange={(event) => setAdditionalWalkInRoomIds({ ...additionalWalkInRoomIds, [index]: event.target.value })}>{type.available_room_list.filter((availableRoom) => availableRoom.status !== 'CLEANING' && String(availableRoom.id) !== walkInForm.room_id && (String(availableRoom.id) === additionalWalkInRoomIds[index] || !usedRoomIds.includes(String(availableRoom.id)))).map((availableRoom) => <option key={availableRoom.id} value={availableRoom.id}>Phòng {availableRoom.room_number} (Tầng {availableRoom.floor || 1})</option>)}</select></div>
+                <div className="form-group"><label htmlFor={`walkin-room-${index}`}>{type.name} · {formatCurrency(type.base_price)} / đêm</label><select id={`walkin-room-${index}`} value={additionalWalkInRoomIds[index] || ''} onChange={(event) => setAdditionalWalkInRoomIds({ ...additionalWalkInRoomIds, [index]: event.target.value })}>{type.available_room_list.filter((availableRoom) => availableRoom.status === 'AVAILABLE' && String(availableRoom.id) !== walkInForm.room_id && (String(availableRoom.id) === additionalWalkInRoomIds[index] || !usedRoomIds.includes(String(availableRoom.id)))).map((availableRoom) => <option key={availableRoom.id} value={availableRoom.id}>Phòng {availableRoom.room_number} (Tầng {availableRoom.floor || 1})</option>)}</select></div>
                 <div className="form-group"><label>Phòng trong booking</label><span>{index + 2}</span></div>
               </div>;
               })}
-
-              {/* Tạm ẩn thao tác check-in ngay theo yêu cầu; walk-in luôn tạo booking chờ xác nhận. */}
-              {/*
-              <div className="form-group checkbox-group">
-                <label className="checkbox-styled">
-                  <input
-                    type="checkbox"
-                    checked={walkInForm.check_in_now}
-                    onChange={(e) =>
-                      setWalkInForm({ ...walkInForm, check_in_now: e.target.checked })
-                    }
-                  />
-                  <span>
-                    <strong>Check-in nhận phòng ngay lập tức</strong> (Trạng thái đơn: CHECKED_IN, phòng chuyển sang OCCUPIED)
-                  </span>
-                </label>
-              </div>
-              */}
 
               <div className="form-sub-header">Dịch vụ đi kèm</div>
               {serviceOptions.length > 0 ? (
@@ -1393,6 +1439,46 @@ export default function ReceptionRoomBooking({
           </div>
         </div>
       )}
+      {isWalkInPromotionModalOpen && <div className="modal-backdrop promotion-modal-backdrop" onClick={() => setIsWalkInPromotionModalOpen(false)}>
+        <section className="promotion-picker-modal" role="dialog" aria-modal="true" aria-labelledby="walkin-promotion-picker-title" onClick={(event) => event.stopPropagation()}>
+          <header className="modal-header">
+            <div><h3 id="walkin-promotion-picker-title">Chọn promotion</h3><p>Chọn ưu đãi có sẵn hoặc nhập mã promotion.</p></div>
+            <button type="button" className="modal-close-btn" onClick={() => setIsWalkInPromotionModalOpen(false)}>Đóng</button>
+          </header>
+          <div className="promotion-picker-content">
+            {walkInPromotions.length > 0 ? <div className="booking-promotion-list" aria-label="Danh sách promotion">
+              {walkInPromotions.map((promotion) => <article className="booking-promotion-option" key={promotion.id}>
+                <div><strong>{promotion.name}</strong>
+                  <span>Mã: <b>{promotion.code}</b> · {promotion.discount_type === 'PERCENT'
+                    ? `Giảm ${promotion.discount_value}%${promotion.max_discount ? `, tối đa ${new Intl.NumberFormat('vi-VN').format(promotion.max_discount)} ₫` : ''}`
+                    : `Giảm ${new Intl.NumberFormat('vi-VN').format(promotion.discount_value)} ₫`}</span>
+                  {promotion.description && <small>{promotion.description}</small>}
+                </div>
+                <button type="button" className="btn btn-outline btn-sm" disabled={isApplyingWalkInPromotion} onClick={async () => {
+                  if (await applyWalkInPromotion(promotion.code)) setIsWalkInPromotionModalOpen(false);
+                }}>{isApplyingWalkInPromotion ? 'Đang kiểm tra…' : 'Chọn mã này'}</button>
+              </article>)}
+            </div> : <p className="customer-promotion-empty">{walkInPromotionLoadError || 'Hiện không có promotion đang áp dụng.'}</p>}
+            <form className="promotion-picker-manual" onSubmit={async (event) => {
+              event.preventDefault();
+              if (await applyWalkInPromotion()) setIsWalkInPromotionModalOpen(false);
+            }}>
+              <label htmlFor="walkin-promotion-manual-code">Hoặc nhập mã promotion</label>
+              <div className="customer-promotion-controls">
+                <input id="walkin-promotion-manual-code" value={walkInPromotionCode} placeholder="Nhập mã khuyến mãi" onChange={(event) => {
+                  const value = event.target.value.toUpperCase();
+                  setWalkInPromotionCode(value);
+                  setWalkInAppliedPromotion(null);
+                  setWalkInPromotionId('');
+                  setWalkInPromotionMessage(value.trim() ? 'Nhấn Áp dụng để kiểm tra mã.' : 'Chọn promotion hoặc nhập mã để áp dụng.');
+                }} />
+                <button type="submit" className="btn btn-primary" disabled={isApplyingWalkInPromotion}>{isApplyingWalkInPromotion ? 'Đang kiểm tra…' : 'Áp dụng mã'}</button>
+              </div>
+            </form>
+            <p className={`customer-promotion-message${isWalkInPromotionApplied ? ' is-success' : ''}`} role="status" aria-live="polite">{walkInPromotionMessage}</p>
+          </div>
+        </section>
+      </div>}
       </>}
 
       {/* =========================================================================

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { Service } from '../types/Service';
 import { useToast } from './ToastProvider';
 import DataTable from './DataTable';
+import { addBookingService, getBookingServiceData, getOnDemandServices } from '../services/bookingAddonService';
 
 type ServiceRoom = { booking_room_id: number; room_id: number | null; room_number: string | null };
 type UsedService = { id: number; room_number: string | null; service_name: string; unit: string; quantity: number; unit_price: number; amount: number; used_at: string };
@@ -25,19 +26,12 @@ export default function BookingServicePanel({ bookingId, canAddServices = false,
     const token = localStorage.getItem('accessToken');
     if (!token) { showToast('Vui lòng đăng nhập lại.', 'error'); return; }
     try {
-      const [bookingResponse, serviceResponse] = await Promise.all([
-        fetch(`http://localhost:5000/api/bookings/${bookingId}/services`, { headers: { Authorization: `Bearer ${token}` } }),
-        fetch('http://localhost:5000/api/services?active=true'),
+      const [bookingData, onDemandServices] = await Promise.all([
+        getBookingServiceData(bookingId, token),
+        getOnDemandServices(),
       ]);
-      const bookingData = await bookingResponse.json().catch(() => ({}));
-      const serviceData = await serviceResponse.json().catch(() => ({}));
-      if (!bookingResponse.ok) throw new Error(bookingData.message || 'Không tải được dịch vụ của booking.');
-      if (!serviceResponse.ok) throw new Error(serviceData.message || 'Không tải được danh sách dịch vụ.');
       setRooms(bookingData.rooms || []);
       setUsedServices(bookingData.services || []);
-      const onDemandServices = Array.isArray(serviceData)
-        ? serviceData.filter((service: Service) => service.booking_policy === 'ON_DEMAND')
-        : [];
       setServices(onDemandServices);
       setRoomId((previous) => bookingData.rooms?.some((room: ServiceRoom) => String(room.booking_room_id) === previous)
         ? previous : String(bookingData.rooms?.[0]?.booking_room_id || ''));
@@ -58,13 +52,9 @@ export default function BookingServicePanel({ bookingId, canAddServices = false,
     setBusy(true);
     setMessage('');
     try {
-      const response = await fetch(`http://localhost:5000/api/bookings/${bookingId}/services`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ booking_room_id: Number(roomId), service_id: Number(serviceId), quantity }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.message || 'Không thể thêm dịch vụ vào booking.');
+      const data = await addBookingService(bookingId, {
+        booking_room_id: Number(roomId), service_id: Number(serviceId), quantity,
+      }, token);
       if (data.service?.total_amount != null) onTotalChange?.(Number(data.service.total_amount));
       await load();
       setMessage('');

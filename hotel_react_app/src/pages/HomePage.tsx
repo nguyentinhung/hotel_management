@@ -15,13 +15,16 @@ import {
   getServices,
 } from '../services/homeService';
 import { logout } from '../services/authService';
-import api from '../services/api';
+import { getRoomTypeDetails } from '../services/roomTypeService';
 import { checkRoomAvailability } from '../services/roomService';
+import { createReview, getMyReviewBookings } from '../services/reviewService';
+import ReviewForm from '../components/ReviewForm';
 import { resolveRole } from '../utils/role';
 import type {
   AppUser,
   Promotion,
   Review,
+  ReviewBooking,
   RoomAvailabilityItem,
   RoomType,
   SearchFormState,
@@ -80,6 +83,12 @@ export default function HomePage() {
   const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [services, setServices] = useState<ServiceItem[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
+  const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
+  const [reviewBookings, setReviewBookings] = useState<ReviewBooking[]>([]);
+  const [selectedReviewBookingId, setSelectedReviewBookingId] = useState<number | null>(null);
+  const [isReviewBookingsLoading, setIsReviewBookingsLoading] = useState(false);
+  const [reviewModalError, setReviewModalError] = useState('');
+  const [reviewSubmitted, setReviewSubmitted] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isCheckingAvailability, setIsCheckingAvailability] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -101,13 +110,41 @@ export default function HomePage() {
   const [roomDetailsError, setRoomDetailsError] = useState('');
   const [selectedService, setSelectedService] = useState<ServiceItem | null>(null);
 
+  const openReviewModal = async () => {
+    setIsReviewModalOpen(true);
+    setIsReviewBookingsLoading(true);
+    setReviewModalError('');
+    setReviewSubmitted(false);
+    try {
+      const bookings = await getMyReviewBookings();
+      const eligibleBookings = bookings.filter((booking) => booking.can_review && !booking.review && booking.room_type_count === 1 && booking.room_type_id != null);
+      setReviewBookings(eligibleBookings);
+      setSelectedReviewBookingId(eligibleBookings[0]?.booking_id ?? null);
+    } catch (value) {
+      setReviewModalError(value instanceof Error ? value.message : 'Không thể tải booking để đánh giá.');
+    } finally {
+      setIsReviewBookingsLoading(false);
+    }
+  };
+
+  const submitReview = async (rating: number, comment: string) => {
+    if (!selectedReviewBookingId) return;
+    await createReview(selectedReviewBookingId, rating, comment);
+    setReviewSubmitted(true);
+    try {
+      setReviews(await getReviews());
+    } catch (refreshError) {
+      console.error('Could not refresh public reviews:', refreshError);
+    }
+  };
+
   const openRoomDetails = async (roomTypeId: number) => {
     setIsRoomDetailsOpen(true);
     setIsRoomDetailsLoading(true);
     setSelectedRoomDetails(null);
     setRoomDetailsError('');
     try {
-      setSelectedRoomDetails(await api.get<RoomTypeDetails>(`/api/room-types/${roomTypeId}`));
+      setSelectedRoomDetails(await getRoomTypeDetails<RoomTypeDetails>(roomTypeId));
     } catch (detailsError) {
       setRoomDetailsError(detailsError instanceof Error ? detailsError.message : 'Không thể tải chi tiết loại phòng.');
     } finally {
@@ -720,6 +757,16 @@ export default function HomePage() {
             </div>
           </div>
 
+          <div className="review-actions">
+            {user?.role === 'CUSTOMER' ? (
+              <button className="btn btn-primary" type="button" onClick={() => void openReviewModal()}>Viết đánh giá</button>
+            ) : user ? (
+              <a className="btn btn-outline" href={getRolePath(user.role)}>Quản lý đánh giá</a>
+            ) : (
+              <a className="btn btn-outline" href="/login">Đăng nhập để đánh giá</a>
+            )}
+          </div>
+
           <div className="review-grid">
             {reviews.map((review) => (
               <article key={review.id} className="review-card">
@@ -743,6 +790,28 @@ export default function HomePage() {
           </div>
         </section>
       </main>
+
+      {isReviewModalOpen && (
+        <div className="review-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setIsReviewModalOpen(false); }}>
+          <section className="review-modal" role="dialog" aria-modal="true" aria-labelledby="review-modal-title">
+            <header className="review-modal-header">
+              <div><span className="eyebrow">Chia sẻ trải nghiệm</span><h2 id="review-modal-title">Viết đánh giá</h2></div>
+              <button type="button" className="review-modal-close" aria-label="Đóng" onClick={() => setIsReviewModalOpen(false)}>×</button>
+            </header>
+            {isReviewBookingsLoading ? <p role="status">Đang tải booking của bạn…</p>
+              : reviewModalError ? <p className="error-text" role="alert">{reviewModalError}</p>
+                : reviewSubmitted ? <div className="review-modal-success" role="status"><strong>Cảm ơn bạn đã đánh giá!</strong><p>Đánh giá đã được gửi thành công.</p><button type="button" className="btn btn-primary" onClick={() => setIsReviewModalOpen(false)}>Đóng</button></div>
+                  : reviewBookings.length === 0 ? <div className="review-modal-empty"><p>Bạn chưa có booking đủ điều kiện để đánh giá.</p><small>Mỗi booking chỉ được đánh giá một lần và hiện cần gắn với đúng một loại phòng.</small></div>
+                    : <div className="review-modal-content">
+                      <label htmlFor="review-modal-booking">Chọn booking</label>
+                      <select id="review-modal-booking" value={selectedReviewBookingId ?? ''} onChange={(event) => setSelectedReviewBookingId(Number(event.target.value))}>
+                        {reviewBookings.map((booking) => <option key={booking.booking_id} value={booking.booking_id}>{booking.booking_code} · {booking.room_type_name} · {String(booking.check_in_date).slice(0, 10)}</option>)}
+                      </select>
+                      <ReviewForm submitLabel="Gửi đánh giá" onSubmit={submitReview} />
+                    </div>}
+          </section>
+        </div>
+      )}
 
       <footer id="contact" className="site-footer">
         <div className="container footer-grid">

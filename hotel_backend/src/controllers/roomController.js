@@ -1,4 +1,36 @@
-const { checkRoomAvailability, getAvailableRoomsForType } = require('../dao/roomDao');
+const { checkRoomAvailability, createRoom: saveRoom, updateRoom: updateExistingRoom, deleteRoom: deleteExistingRoom, getAvailableRoomsForType, getRoomList: fetchRoomList, getRoomDetails: fetchRoomDetails } = require('../services/roomService');
+
+function validateRoomNumber(value) {
+  if (value != null && typeof value !== 'string') {
+    return { roomNumber: '', error: 'Số phòng phải là số nguyên dương.' };
+  }
+  const roomNumber = typeof value === 'string' ? value.trim() : '';
+  if (!roomNumber) return { roomNumber, error: 'Vui lòng nhập số phòng.' };
+  if (roomNumber.length > 10) return { roomNumber, error: 'Số phòng không được vượt quá 10 ký tự.' };
+  if (!/^[0-9]+$/.test(roomNumber) || /^0+$/.test(roomNumber)) {
+    return { roomNumber, error: 'Số phòng phải là số nguyên dương.' };
+  }
+  return { roomNumber, error: '' };
+}
+
+function validateFloor(value) {
+  if (value == null || (typeof value === 'string' && !value.trim())) {
+    return { floor: NaN, error: 'Vui lòng nhập số tầng.' };
+  }
+
+  const normalized = typeof value === 'string' ? value.trim() : value;
+  if (
+    (typeof normalized === 'string' && !/^-?\d+$/.test(normalized))
+    || (typeof normalized !== 'string' && (typeof normalized !== 'number' || !Number.isInteger(normalized)))
+  ) {
+    return { floor: NaN, error: 'Số tầng phải là số nguyên.' };
+  }
+
+  const floor = Number(normalized);
+  if (floor < 0) return { floor, error: 'Số tầng không được nhỏ hơn 0.' };
+  if (floor > 255) return { floor, error: 'Số tầng không được lớn hơn 255.' };
+  return { floor, error: '' };
+}
 
 /**
  * ============================================================================
@@ -13,6 +45,155 @@ const { checkRoomAvailability, getAvailableRoomsForType } = require('../dao/room
  */
 function formatDate(d) {
   return d.toISOString().slice(0, 10);
+}
+
+async function getRoomList(req, res) {
+  try {
+    const rooms = await fetchRoomList();
+    return res.json({ success: true, rooms });
+  } catch (error) {
+    console.error('Get room list error:', error);
+    return res.status(500).json({ success: false, message: 'Không thể tải danh sách phòng.' });
+  }
+}
+
+async function getRoomDetails(req, res) {
+  const roomId = Number(req.params.roomId);
+  if (!Number.isInteger(roomId) || roomId < 1) {
+    return res.status(400).json({ success: false, message: 'Mã phòng không hợp lệ.' });
+  }
+
+  try {
+    const room = await fetchRoomDetails(roomId);
+    if (!room) {
+      return res.status(404).json({ success: false, message: 'Phòng không còn tồn tại hoặc không thể tìm thấy.' });
+    }
+    return res.json({ success: true, room });
+  } catch (error) {
+    console.error('Get room details error:', error);
+    return res.status(500).json({ success: false, message: 'Không thể tải chi tiết phòng.' });
+  }
+}
+
+async function createRoom(req, res) {
+  const body = req.body || {};
+  const { roomNumber, error: roomNumberError } = validateRoomNumber(body.room_number);
+  const roomTypeId = Number(body.room_type_id);
+  const { floor, error: floorError } = validateFloor(body.floor);
+
+  if (roomNumberError) {
+    return res.status(400).json({ success: false, message: roomNumberError });
+  }
+  if (!Number.isInteger(roomTypeId) || roomTypeId < 1) {
+    return res.status(400).json({ success: false, message: 'Vui lòng chọn loại phòng hợp lệ.' });
+  }
+  if (floorError) {
+    return res.status(400).json({ success: false, message: floorError });
+  }
+
+  try {
+    const result = await saveRoom({ roomNumber, roomTypeId, floor });
+    if (result.reason === 'ROOM_TYPE_NOT_FOUND') {
+      return res.status(404).json({ message: 'Loại phòng đã chọn không còn khả dụng.' });
+    }
+    if (result.reason === 'ROOM_NUMBER_EXISTS') {
+      return res.status(409).json({ success: false, message: 'Số phòng đã tồn tại.' });
+    }
+    return res.status(201).json({
+      success: true,
+      message: 'Thêm phòng thành công.',
+      room: result.room,
+    });
+  } catch (error) {
+    if (error.number === 2601 || error.number === 2627) {
+      return res.status(409).json({ success: false, message: 'Số phòng đã tồn tại.' });
+    }
+    if (error.number === 547) {
+      return res.status(404).json({ success: false, message: 'Loại phòng đã chọn không còn khả dụng.' });
+    }
+    console.error('Create room error:', error);
+    return res.status(500).json({ message: 'Không thể thêm phòng.' });
+  }
+}
+
+async function updateRoom(req, res) {
+  const roomId = Number(req.params.roomId);
+  const body = req.body || {};
+  const { roomNumber, error: roomNumberError } = validateRoomNumber(body.room_number);
+  const roomTypeId = Number(body.room_type_id);
+  const { floor, error: floorError } = validateFloor(body.floor);
+
+  if (!Number.isInteger(roomId) || roomId < 1) {
+    return res.status(400).json({ success: false, message: 'Mã phòng không hợp lệ.' });
+  }
+  if (roomNumberError) {
+    return res.status(400).json({ success: false, message: roomNumberError });
+  }
+  if (!Number.isInteger(roomTypeId) || roomTypeId < 1) {
+    return res.status(400).json({ success: false, message: 'Vui lòng chọn loại phòng hợp lệ.' });
+  }
+  if (floorError) {
+    return res.status(400).json({ success: false, message: floorError });
+  }
+
+  try {
+    const result = await updateExistingRoom({ roomId, roomNumber, roomTypeId, floor });
+
+    if (result.reason === 'ROOM_NOT_FOUND') {
+      return res.status(404).json({ success: false, message: 'Phòng không còn tồn tại hoặc không thể tìm thấy.' });
+    }
+    if (result.reason === 'ROOM_TYPE_NOT_FOUND') {
+      return res.status(404).json({ success: false, message: 'Loại phòng đã chọn không còn khả dụng.' });
+    }
+    if (result.reason === 'ROOM_NUMBER_EXISTS') {
+      return res.status(409).json({ success: false, message: 'Số phòng đã tồn tại.' });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Cập nhật phòng thành công.',
+      room: result.room,
+    });
+  } catch (error) {
+    if (error.number === 2601 || error.number === 2627) {
+      return res.status(409).json({ success: false, message: 'Số phòng đã tồn tại.' });
+    }
+    if (error.number === 547) {
+      return res.status(404).json({ success: false, message: 'Loại phòng đã chọn không còn khả dụng.' });
+    }
+    console.error('Update room error:', error);
+    return res.status(500).json({ success: false, message: 'Không thể cập nhật phòng.' });
+  }
+}
+
+async function deleteRoom(req, res) {
+  const roomId = Number(req.params.roomId);
+  if (!Number.isInteger(roomId) || roomId < 1) {
+    return res.status(400).json({ success: false, message: 'Mã phòng không hợp lệ.' });
+  }
+
+  try {
+    const result = await deleteExistingRoom(roomId);
+    if (result.reason === 'ROOM_NOT_FOUND') {
+      return res.status(404).json({ success: false, message: 'Không tìm thấy phòng cần xóa.' });
+    }
+    if (result.reason === 'ROOM_REFERENCED') {
+      return res.status(409).json({
+        success: false,
+        message: 'Không thể xóa phòng vì phòng đang được booking hoặc báo cáo bảo trì tham chiếu.',
+      });
+    }
+    return res.json({ success: true, message: 'Đã xóa phòng thành công.' });
+  } catch (error) {
+    if (error.number === 547) {
+      return res.status(409).json({
+        success: false,
+        message: 'Không thể xóa phòng vì phòng đang được dữ liệu khác sử dụng.',
+      });
+    }
+    console.error('Delete room error:', error);
+    return res.status(500).json({ success: false, message: 'Không thể xóa phòng.' });
+  }
 }
 
 /**
@@ -128,6 +309,13 @@ async function getAvailableRooms(req, res) {
 }
 
 module.exports = {
+  validateRoomNumber,
+  validateFloor,
+  getRoomList,
+  getRoomDetails,
+  createRoom,
+  updateRoom,
+  deleteRoom,
   checkAvailability,
   getAvailableRooms,
 };

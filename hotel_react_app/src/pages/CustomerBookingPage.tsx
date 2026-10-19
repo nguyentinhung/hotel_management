@@ -3,8 +3,10 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { createCustomerBooking, checkRoomAvailability } from '../services/roomService';
 import { createFinalPayment } from '../services/paymentService';
 import { resolveRole } from '../utils/role';
-import type { CustomerBookingResponse, RoomAvailabilityItem, ServiceItem } from '../types';
+import type { CustomerBookingResponse, Promotion, RoomAvailabilityItem, ServiceItem } from '../types';
 import { useToast } from '../components/ToastProvider';
+import { getActivePromotions, getServices } from '../services/homeService';
+import { validatePromotion } from '../services/promotionValidationService';
 
 const vnpayEnabled = import.meta.env.VITE_VNPAY_ENABLED === 'true';
 const dateValue = (date: Date) => date.toISOString().slice(0, 10);
@@ -36,6 +38,13 @@ export default function CustomerBookingPage() {
   const [serviceOptions, setServiceOptions] = useState<ServiceItem[]>([]);
   const [selectedServiceQuantities, setSelectedServiceQuantities] = useState<Record<number, number>>({});
   const [booking, setBooking] = useState<CustomerBookingResponse | null>(null);
+  const [promotionCode, setPromotionCode] = useState('');
+  const [appliedPromotion, setAppliedPromotion] = useState<{ promotion_code: string; discount_amount: number; subtotal: number } | null>(null);
+  const [promotionMessage, setPromotionMessage] = useState('Nhập mã khuyến mãi trước, sau đó nhấn Áp dụng.');
+  const [isApplyingPromotion, setIsApplyingPromotion] = useState(false);
+  const [promotionOptions, setPromotionOptions] = useState<Promotion[]>([]);
+  const [promotionOptionsError, setPromotionOptionsError] = useState('');
+  const [isPromotionModalOpen, setIsPromotionModalOpen] = useState(false);
 
   const roomTypeId = Number(params.get('room_type_id'));
   const accessToken = localStorage.getItem('accessToken');
@@ -57,15 +66,20 @@ export default function CustomerBookingPage() {
   const currentRole = resolveRole(localUser);
 
   useEffect(() => {
+    let active = true;
+    getActivePromotions()
+      .then((items) => { if (active) setPromotionOptions(items); })
+      .catch(() => { if (active) setPromotionOptionsError('Không tải được danh sách ưu đãi. Bạn vẫn có thể nhập mã để kiểm tra.'); });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
     if (!accessToken || (currentRole && currentRole !== 'CUSTOMER')) {
       setIsLoading(false);
       return;
     }
-    fetch('http://localhost:5000/api/services?active=true')
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error('Không tải được danh sách dịch vụ.')))
-      .then((data: ServiceItem[]) => setServiceOptions(Array.isArray(data)
-        ? data.filter((service) => service.booking_policy === 'PREBOOK')
-        : []))
+    getServices()
+      .then((data) => setServiceOptions(data.filter((service) => service.booking_policy === 'PREBOOK')))
       .catch(() => setServiceOptions([]));
 
     if (params.has('room_type_id') && (!Number.isInteger(roomTypeId) || roomTypeId < 1)) {
@@ -108,6 +122,36 @@ export default function CustomerBookingPage() {
   const selectedCapacityMatched = selectedRoomTypes.reduce((total, { room: selectedRoom, quantity }) => total + selectedRoom.max_adults * quantity, 0) >= adults
     && selectedRoomTypes.reduce((total, { room: selectedRoom, quantity }) => total + selectedRoom.max_children * quantity, 0) >= children;
   const totalPricePerNight = selectedRoomTypes.reduce((total, { room: selectedRoom, quantity }) => total + selectedRoom.base_price * quantity, 0);
+  const selectedRoomCount = selectedRoomTypes.reduce((total, { quantity }) => total + quantity, 0);
+  const selectedServiceTotal = Object.entries(selectedServiceQuantities).reduce((sum, [id, quantity]) => {
+    const service = serviceOptions.find((item) => item.id === Number(id));
+    return sum + (service?.price ?? 0) * Number(quantity);
+  }, 0) * selectedRoomCount;
+  const bookingSubtotal = totalPricePerNight * nights + selectedServiceTotal;
+  const validatePromotion = async (codeToApply = promotionCode) => {
+    const code = codeToApply.trim().toUpperCase();
+    if (!code) {
+      setPromotionMessage('Vui lòng nhập mã khuyến mãi trước khi áp dụng.');
+      return false;
+    }
+    if (bookingSubtotal <= 0) {
+      setPromotionMessage('Hãy chọn phòng và ngày lưu trú hợp lệ trước khi áp dụng mã.');
+      return false;
+    }
+    setIsApplyingPromotion(true);
+    setPromotionCode(code);
+    setPromotionMessage('Đang kiểm tra mã khuyến mãi…');
+    try {
+      const result = await validatePromotion(code, bookingSubtotal);
+      setAppliedPromotion({ promotion_code: result.promotion_code, discount_amount: Number(result.discount_amount), subtotal: bookingSubtotal });
+      setPromotionMessage(`Đã áp dụng mã ${result.promotion_code}. Giảm ${new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(result.discount_amount)}.`);
+      return true;
+    } catch (err) {
+      setAppliedPromotion(null);
+      setPromotionMessage(err instanceof Error ? err.message : 'Không thể xác thực mã khuyến mãi.');
+      return false;
+    } finally { setIsApplyingPromotion(false); }
+  };
   const additionalRoomCount = Object.values(additionalRoomQuantities).reduce((total, quantity) => total + quantity, 0);
   const confirmAdditionalRooms = () => {
     const additions = Object.fromEntries(Object.entries(additionalRoomQuantities).filter(([, quantity]) => quantity > 0));
@@ -119,6 +163,12 @@ export default function CustomerBookingPage() {
 
   const handleSubmit = async () => {
     if (!accessToken) return;
+    if (appliedPromotion && appliedPromotion.subtotal !== bookingSubtotal) {
+      const message = 'Tổng tiền đã thay đổi. Vui lòng áp dụng lại mã khuyến mãi trước khi đặt phòng.';
+      setError(message);
+      showToast(message, 'error');
+      return;
+    }
     if (new Date(`${checkIn}T00:00:00`) < new Date(`${dateValue(new Date())}T00:00:00`)) {
       setError('Ngày nhận phòng không thể ở quá khứ.');
       showToast('Ngày nhận phòng không thể ở quá khứ.', 'error');
@@ -144,6 +194,7 @@ export default function CustomerBookingPage() {
           service_selections: Object.entries(selectedServiceQuantities)
             .filter(([, quantity]) => Number(quantity) > 0)
             .map(([serviceId, quantity]) => ({ service_id: Number(serviceId), quantity: Number(quantity) })),
+          promotion_code: appliedPromotion?.subtotal === bookingSubtotal ? appliedPromotion.promotion_code : undefined,
           check_in_date: checkIn,
           check_out_date: checkOut,
           adults,
@@ -293,6 +344,22 @@ export default function CustomerBookingPage() {
           </div>
 
           <div className="booking-room-summary">
+            <h3>Khuyến mãi</h3>
+            <div className="booking-promotion-selection">
+              <div>
+                {appliedPromotion?.subtotal === bookingSubtotal
+                  ? <><strong>{appliedPromotion.promotion_code}</strong><span>Đã giảm {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(appliedPromotion.discount_amount)}</span></>
+                  : <span>Chưa chọn mã khuyến mãi</span>}
+              </div>
+              <button type="button" className="btn btn-outline" onClick={() => setIsPromotionModalOpen(true)}>
+                {appliedPromotion?.subtotal === bookingSubtotal ? 'Đổi promotion' : 'Chọn promotion'}
+              </button>
+            </div>
+            <p className={`customer-promotion-message${appliedPromotion?.subtotal === bookingSubtotal ? ' is-success' : ''}`} role="status" aria-live="polite">{promotionMessage}</p>
+            <p>Tạm tính: {new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(bookingSubtotal)}{appliedPromotion?.subtotal === bookingSubtotal ? ` · Giảm ${new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(appliedPromotion.discount_amount)} · Còn ${new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(Math.max(0, bookingSubtotal - appliedPromotion.discount_amount))}` : appliedPromotion ? ' · Tạm tính đã đổi, vui lòng áp dụng lại mã.' : ''}</p>
+          </div>
+
+          <div className="booking-room-summary">
             <h3>Thông tin khách đặt</h3>
             <p>{localUser.full_name || 'Khách hàng'} · {localUser.email || ''} · {localUser.phone || 'Chưa có số điện thoại trong tài khoản'}</p>
             <label><span>Yêu cầu thêm (không bắt buộc)</span><textarea maxLength={500} value={specialRequest} onChange={(event) => setSpecialRequest(event.target.value)} /></label>
@@ -316,6 +383,45 @@ export default function CustomerBookingPage() {
           })}</div>
           <div className="room-picker-footer"><span>{additionalRoomCount} phòng được chọn thêm</span><div><button type="button" className="btn btn-outline" onClick={() => setIsRoomPickerOpen(false)}>Hủy</button><button type="button" className="btn btn-primary" disabled={!additionalRoomCount} onClick={confirmAdditionalRooms}>Thêm phòng</button></div></div>
         </div>
+      </div>}
+      {isPromotionModalOpen && <div className="modal-backdrop promotion-modal-backdrop" onClick={() => setIsPromotionModalOpen(false)}>
+        <section className="promotion-picker-modal" role="dialog" aria-modal="true" aria-labelledby="promotion-picker-title" onClick={(event) => event.stopPropagation()}>
+          <header className="modal-header">
+            <div><h3 id="promotion-picker-title">Chọn promotion</h3><p>Chọn một ưu đãi có sẵn hoặc nhập mã bạn muốn dùng.</p></div>
+            <button type="button" className="modal-close-btn" onClick={() => setIsPromotionModalOpen(false)}>Đóng</button>
+          </header>
+          <div className="promotion-picker-content">
+            {promotionOptions.length > 0 ? <div className="booking-promotion-list" aria-label="Danh sách promotion">
+              {promotionOptions.map((promotion) => <article className="booking-promotion-option" key={promotion.id}>
+                <div><strong>{promotion.name}</strong>
+                  <span>Mã: <b>{promotion.code}</b> · {promotion.discount_type === 'PERCENT'
+                    ? `Giảm ${promotion.discount_value}%${promotion.max_discount ? `, tối đa ${new Intl.NumberFormat('vi-VN').format(promotion.max_discount)} ₫` : ''}`
+                    : `Giảm ${new Intl.NumberFormat('vi-VN').format(promotion.discount_value)} ₫`}</span>
+                  {promotion.description && <small>{promotion.description}</small>}
+                </div>
+                <button type="button" className="btn btn-outline btn-sm" disabled={isApplyingPromotion} onClick={async () => {
+                  if (await validatePromotion(promotion.code)) setIsPromotionModalOpen(false);
+                }}>{isApplyingPromotion ? 'Đang kiểm tra…' : 'Chọn mã này'}</button>
+              </article>)}
+            </div> : <p className="customer-promotion-empty">{promotionOptionsError || 'Hiện không có promotion đang áp dụng.'}</p>}
+            <form className="promotion-picker-manual" onSubmit={async (event) => {
+              event.preventDefault();
+              if (await validatePromotion()) setIsPromotionModalOpen(false);
+            }}>
+              <label htmlFor="promotion-manual-code">Hoặc nhập mã promotion</label>
+              <div className="customer-promotion-controls">
+                <input id="promotion-manual-code" value={promotionCode} placeholder="Nhập mã khuyến mãi" onChange={(event) => {
+                  const value = event.target.value.toUpperCase();
+                  setPromotionCode(value);
+                  setAppliedPromotion(null);
+                  setPromotionMessage(value.trim() ? 'Nhấn Áp dụng để kiểm tra mã.' : 'Nhập mã khuyến mãi trước, sau đó nhấn Áp dụng.');
+                }} />
+                <button type="submit" className="btn btn-primary" disabled={isApplyingPromotion}>{isApplyingPromotion ? 'Đang kiểm tra…' : 'Áp dụng mã'}</button>
+              </div>
+            </form>
+            <p className={`customer-promotion-message${appliedPromotion?.subtotal === bookingSubtotal ? ' is-success' : ''}`} role="status" aria-live="polite">{promotionMessage}</p>
+          </div>
+        </section>
       </div>}
     </main>
   );
