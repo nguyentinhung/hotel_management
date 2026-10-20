@@ -294,12 +294,13 @@ async function login(req, res) {
       });
     }
 
-    const { user, accessToken, refreshToken } = result;
+    const { user, refreshToken } = result;
+    const accessToken = createAccessToken(user);
 
     return res.json({
       accessToken,
       refreshToken,
-      user: buildUserResponse(user),
+      user: buildUserResponse(user)
     });
   } catch (error) {
     console.error('Login error:', error);
