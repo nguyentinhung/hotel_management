@@ -49,4 +49,12 @@ async function login(email, password) {
     };
 }
 
-module.exports = { login };
+async function logout(token) {
+    if (!token) {
+        return;
+    }
+
+    await userDAO.revokeRefreshToken(token);
+}
+
+module.exports = { login, logout };

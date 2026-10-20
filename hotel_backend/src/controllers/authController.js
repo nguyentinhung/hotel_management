@@ -1,10 +1,9 @@
-const crypto = require('crypto');
+﻿const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
 const { sql, getPool } = require('../config/db');
 const authService = require('../services/authService');
-
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
 
 const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
@@ -17,21 +16,21 @@ function createMailTransporter() {
   const user = process.env.SMTP_USER?.trim();
   const pass = process.env.SMTP_PASS?.trim();
   if (!user || !pass) {
-    const error = new Error('Email chưa được cấu hình. Hãy đặt SMTP_USER và SMTP_PASS trong hotel_backend/.env rồi khởi động lại backend.');
+    const error = new Error('Email chÆ°a Ä‘Æ°á»£c cáº¥u hÃ¬nh. HÃ£y Ä‘áº·t SMTP_USER vÃ  SMTP_PASS trong hotel_backend/.env rá»“i khá»Ÿi Ä‘á»™ng láº¡i backend.');
     error.code = 'SMTP_NOT_CONFIGURED';
     throw error;
   }
 
   const port = Number(process.env.SMTP_PORT || 587);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    const error = new Error('SMTP_PORT không hợp lệ.');
+    const error = new Error('SMTP_PORT khÃ´ng há»£p lá»‡.');
     error.code = 'SMTP_CONFIG_INVALID';
     throw error;
   }
 
   const secureSetting = process.env.SMTP_SECURE?.trim().toLowerCase();
   if (secureSetting && secureSetting !== 'true' && secureSetting !== 'false') {
-    const error = new Error('SMTP_SECURE chỉ nhận giá trị true hoặc false.');
+    const error = new Error('SMTP_SECURE chá»‰ nháº­n giÃ¡ trá»‹ true hoáº·c false.');
     error.code = 'SMTP_CONFIG_INVALID';
     throw error;
   }
@@ -59,7 +58,7 @@ const buildUserResponse = (user) => ({
   status: String(user.status || '').toUpperCase(),
   role_id: user.role_id,
   role_code: user.role_code,
-  role_name: user.role_name || 'Khách hàng',
+  role_name: user.role_name || 'KhÃ¡ch hÃ ng',
 });
 
 async function sendVerificationEmail(user, token, transporter) {
@@ -69,17 +68,17 @@ async function sendVerificationEmail(user, token, transporter) {
     `${baseUrl}/verify-email?token=${encodeURIComponent(token)}`;
 
   await sendEmail({
-    // QUAN TRỌNG: gửi tới email người vừa đăng ký
+    // QUAN TRá»ŒNG: gá»­i tá»›i email ngÆ°á»i vá»«a Ä‘Äƒng kÃ½
     to: user.email,
 
-    subject: 'Xác nhận tài khoản Hotel Management',
+    subject: 'XÃ¡c nháº­n tÃ i khoáº£n Hotel Management',
 
     html: `
-      <h2>Chào ${user.full_name}</h2>
+      <h2>ChÃ o ${user.full_name}</h2>
 
-      <p>Cảm ơn bạn đã đăng ký tài khoản Hotel Management.</p>
+      <p>Cáº£m Æ¡n báº¡n Ä‘Ã£ Ä‘Äƒng kÃ½ tÃ i khoáº£n Hotel Management.</p>
 
-      <p>Vui lòng bấm vào nút bên dưới để xác nhận email:</p>
+      <p>Vui lÃ²ng báº¥m vÃ o nÃºt bÃªn dÆ°á»›i Ä‘á»ƒ xÃ¡c nháº­n email:</p>
 
       <p>
         <a href="${verificationUrl}"
@@ -91,13 +90,13 @@ async function sendVerificationEmail(user, token, transporter) {
              text-decoration:none;
              border-radius:5px;
            ">
-          Xác nhận email
+          XÃ¡c nháº­n email
         </a>
       </p>
 
-      <p>Liên kết có hiệu lực trong 24 giờ.</p>
+      <p>LiÃªn káº¿t cÃ³ hiá»‡u lá»±c trong 24 giá».</p>
 
-      <p>Nếu bạn không đăng ký tài khoản này, hãy bỏ qua email.</p>
+      <p>Náº¿u báº¡n khÃ´ng Ä‘Äƒng kÃ½ tÃ i khoáº£n nÃ y, hÃ£y bá» qua email.</p>
     `,
   }, transporter);
 
@@ -105,7 +104,7 @@ async function sendVerificationEmail(user, token, transporter) {
 
   return true;
 }
-// Tạo access token để client dùng cho request tiếp theo trong vòng 1 giờ
+// Táº¡o access token Ä‘á»ƒ client dÃ¹ng cho request tiáº¿p theo trong vÃ²ng 1 giá»
 const createAccessToken = (user) => jwt.sign(
   {
     user_id: user.id,
@@ -117,13 +116,13 @@ const createAccessToken = (user) => jwt.sign(
   { expiresIn: '1h' },
 );
 
-// Đăng ký tài khoản mới, hash mật khẩu, tạo token xác thực email
+// ÄÄƒng kÃ½ tÃ i khoáº£n má»›i, hash máº­t kháº©u, táº¡o token xÃ¡c thá»±c email
 async function register(req, res) {
   try {
     const { email, password, full_name, phone_number } = req.body || {};
 
     if (!email || !password || !full_name || !phone_number) {
-      return res.status(400).json({ message: 'Vui lòng nhập đầy đủ email, mật khẩu, họ tên và số điện thoại.' });
+      return res.status(400).json({ message: 'Vui lÃ²ng nháº­p Ä‘áº§y Ä‘á»§ email, máº­t kháº©u, há» tÃªn vÃ  sá»‘ Ä‘iá»‡n thoáº¡i.' });
     }
 
     const normalizedEmail = normalizeEmail(email);
@@ -131,11 +130,11 @@ async function register(req, res) {
     const normalizedPhone = String(phone_number).trim();
 
     if (!isValidEmail(normalizedEmail)) {
-      return res.status(400).json({ message: 'Email không đúng định dạng.' });
+      return res.status(400).json({ message: 'Email khÃ´ng Ä‘Ãºng Ä‘á»‹nh dáº¡ng.' });
     }
 
     if (!isValidPhone(normalizedPhone)) {
-      return res.status(400).json({ message: 'Số điện thoại không đúng định dạng.' });
+      return res.status(400).json({ message: 'Sá»‘ Ä‘iá»‡n thoáº¡i khÃ´ng Ä‘Ãºng Ä‘á»‹nh dáº¡ng.' });
     }
 
     // Validate mail settings before creating an account that cannot be verified.
@@ -147,7 +146,7 @@ async function register(req, res) {
       .query('SELECT TOP 1 id FROM users WHERE LOWER(email) = LOWER(@email);');
 
     if (existingEmail.recordset.length > 0) {
-      return res.status(409).json({ message: 'Email đã tồn tại trong hệ thống.' });
+      return res.status(409).json({ message: 'Email Ä‘Ã£ tá»“n táº¡i trong há»‡ thá»‘ng.' });
     }
 
     const existingPhone = await pool.request()
@@ -155,7 +154,7 @@ async function register(req, res) {
       .query('SELECT TOP 1 id FROM users WHERE phone = @phone;');
 
     if (existingPhone.recordset.length > 0) {
-      return res.status(409).json({ message: 'Số điện thoại đã được sử dụng.' });
+      return res.status(409).json({ message: 'Sá»‘ Ä‘iá»‡n thoáº¡i Ä‘Ã£ Ä‘Æ°á»£c sá»­ dá»¥ng.' });
     }
 
     const roleQuery = await pool.request().query("SELECT TOP 1 id, code, name FROM roles WHERE code = 'CUSTOMER';");
@@ -207,7 +206,7 @@ async function register(req, res) {
     }
 
     return res.status(201).json({
-      message: 'Đăng ký tài khoản thành công. Vui lòng kiểm tra email để xác thực tài khoản.',
+      message: 'ÄÄƒng kÃ½ tÃ i khoáº£n thÃ nh cÃ´ng. Vui lÃ²ng kiá»ƒm tra email Ä‘á»ƒ xÃ¡c thá»±c tÃ i khoáº£n.',
       user: buildUserResponse(user),
     });
   } catch (error) {
@@ -215,18 +214,18 @@ async function register(req, res) {
     return res.status(500).json({
       message: error.code === 'SMTP_NOT_CONFIGURED' || error.code === 'SMTP_CONFIG_INVALID'
         ? error.message
-        : 'Đăng ký thất bại. Hãy kiểm tra kết nối cơ sở dữ liệu và email.',
+        : 'ÄÄƒng kÃ½ tháº¥t báº¡i. HÃ£y kiá»ƒm tra káº¿t ná»‘i cÆ¡ sá»Ÿ dá»¯ liá»‡u vÃ  email.',
     });
   }
 }
 
-// Xác thực email người dùng bằng token đã gửi qua mail
+// XÃ¡c thá»±c email ngÆ°á»i dÃ¹ng báº±ng token Ä‘Ã£ gá»­i qua mail
 async function verifyEmail(req, res) {
   try {
     const { token } = req.query || {};
 
     if (!token) {
-      return res.status(400).json({ message: 'Thiếu token xác thực.' });
+      return res.status(400).json({ message: 'Thiáº¿u token xÃ¡c thá»±c.' });
     }
 
     const pool = await getPool();
@@ -241,7 +240,7 @@ async function verifyEmail(req, res) {
       `);
 
     if (!verification.recordset.length) {
-      return res.status(400).json({ message: 'Token xác thực không hợp lệ hoặc đã hết hạn.' });
+      return res.status(400).json({ message: 'Token xÃ¡c thá»±c khÃ´ng há»£p lá»‡ hoáº·c Ä‘Ã£ háº¿t háº¡n.' });
     }
 
     const record = verification.recordset[0];
@@ -262,24 +261,24 @@ async function verifyEmail(req, res) {
         WHERE token = @token;
       `);
 
-    return res.json({ message: 'Xác thực email thành công.' });
+    return res.json({ message: 'XÃ¡c thá»±c email thÃ nh cÃ´ng.' });
   } catch (error) {
     console.error('Verify email error:', error);
     return res.status(500).json({
-      message: 'Xác thực email thất bại.',
+      message: 'XÃ¡c thá»±c email tháº¥t báº¡i.',
       error: error.message,
     });
   }
 }
 
-// Đăng nhập hệ thống: kiểm tra email, mật khẩu, trạng thái và tạo JWT
+// ÄÄƒng nháº­p há»‡ thá»‘ng: kiá»ƒm tra email, máº­t kháº©u, tráº¡ng thÃ¡i vÃ  táº¡o JWT
 async function login(req, res) {
   try {
     const { email, password } = req.body || {};
 
     if (!email || !password) {
       return res.status(400).json({
-        message: 'Vui lòng nhập email và mật khẩu.',
+        message: 'Vui lÃ²ng nháº­p email vÃ  máº­t kháº©u.',
       });
     }
 
@@ -306,63 +305,47 @@ async function login(req, res) {
     console.error('Login error:', error);
 
     return res.status(500).json({
-      message: 'Đăng nhập thất bại.',
+      message: 'ÄÄƒng nháº­p tháº¥t báº¡i.',
       error: error.message,
     });
   }
 }
 
-// Đăng xuất: vô hiệu hóa refresh token đang sử dụng để khóa session hiện tại
+// ÄÄƒng xuáº¥t: vÃ´ hiá»‡u hÃ³a refresh token Ä‘ang sá»­ dá»¥ng
 async function logout(req, res) {
   try {
-    const token = req.body?.refreshToken || req.headers['x-refresh-token'];
+    const token = req.body?.refreshToken
+      || req.headers['x-refresh-token'];
 
-    if (!token) {
-      return res.json({ message: 'Đăng xuất thành công.' });
-    }
+    await authService.logout(token);
 
-    const pool = await getPool();
-    await pool.request()
-      .input('token', sql.VarChar(255), String(token))
-      .query(`
-        UPDATE refresh_tokens
-        SET revoked_at = SYSUTCDATETIME()
-        WHERE token = @token AND revoked_at IS NULL;
-      `);
-
-    return res.json({ message: 'Đăng xuất thành công.' });
+    return res.json({
+      message: 'ÄÄƒng xuáº¥t thÃ nh cÃ´ng.'
+    });
   } catch (error) {
     console.error('Logout error:', error);
+
     return res.status(500).json({
-      message: 'Đăng xuất thất bại.',
-      error: error.message,
+      message: 'ÄÄƒng xuáº¥t tháº¥t báº¡i.',
+      error: error.message
     });
   }
 }
 
-module.exports = {
-  register,
-  login,
-  logout,
-  verifyEmail,
-  forgotPassword,
-  resetPassword,
-  changePassword,
-};
 async function forgotPassword(req, res) {
   try {
     const email = normalizeEmail(req.body?.email);
 
     if (!isValidEmail(email)) {
       return res.status(400).json({
-        message: 'Email không hợp lệ.',
+        message: 'Email khÃ´ng há»£p lá»‡.',
       });
     }
 
     const mailTransporter = createMailTransporter();
     const pool = await getPool();
 
-    // Chỉ cho phép tài khoản ACTIVE
+    // Chá»‰ cho phÃ©p tÃ i khoáº£n ACTIVE
     const userResult = await pool.request()
       .input('email', sql.VarChar(150), email)
       .query(`
@@ -376,16 +359,16 @@ async function forgotPassword(req, res) {
           AND status = 'ACTIVE';
       `);
 
-    // Không tiết lộ email có tồn tại hay không
+    // KhÃ´ng tiáº¿t lá»™ email cÃ³ tá»“n táº¡i hay khÃ´ng
     if (!userResult.recordset.length) {
       return res.json({
-        message: 'Nếu email tồn tại, mã OTP đã được gửi.',
+        message: 'Náº¿u email tá»“n táº¡i, mÃ£ OTP Ä‘Ã£ Ä‘Æ°á»£c gá»­i.',
       });
     }
 
     const user = userResult.recordset[0];
 
-    // Vô hiệu hóa OTP cũ
+    // VÃ´ hiá»‡u hÃ³a OTP cÅ©
     await pool.request()
       .input('userId', sql.BigInt, user.id)
       .query(`
@@ -395,12 +378,12 @@ async function forgotPassword(req, res) {
           AND is_used = 0;
       `);
 
-    // Tạo OTP 6 số
+    // Táº¡o OTP 6 sá»‘
     const otpCode = String(
       crypto.randomInt(100000, 1000000)
     );
 
-    // Tạo password reset record
+    // Táº¡o password reset record
     const resetInsert = await pool.request()
       .input('userId', sql.BigInt, user.id)
       .input('otpCode', sql.VarChar(10), otpCode)
@@ -426,26 +409,26 @@ async function forgotPassword(req, res) {
         );
       `);
 
-    // Gửi OTP
+    // Gá»­i OTP
     try {
       await sendEmail({
         to: user.email,
-        subject: 'Mã OTP đặt lại mật khẩu',
+        subject: 'MÃ£ OTP Ä‘áº·t láº¡i máº­t kháº©u',
         html: `
-        <h2>Đặt lại mật khẩu</h2>
+        <h2>Äáº·t láº¡i máº­t kháº©u</h2>
 
-        <p>Xin chào ${user.full_name},</p>
+        <p>Xin chÃ o ${user.full_name},</p>
 
-        <p>Mã OTP để đặt lại mật khẩu của bạn là:</p>
+        <p>MÃ£ OTP Ä‘á»ƒ Ä‘áº·t láº¡i máº­t kháº©u cá»§a báº¡n lÃ :</p>
 
         <h1 style="letter-spacing: 5px;">
           ${otpCode}
         </h1>
 
-        <p>Mã OTP có hiệu lực trong <b>10 phút</b>.</p>
+        <p>MÃ£ OTP cÃ³ hiá»‡u lá»±c trong <b>10 phÃºt</b>.</p>
 
-        <p>Nếu bạn không yêu cầu đặt lại mật khẩu,
-        vui lòng bỏ qua email này.</p>
+        <p>Náº¿u báº¡n khÃ´ng yÃªu cáº§u Ä‘áº·t láº¡i máº­t kháº©u,
+        vui lÃ²ng bá» qua email nÃ y.</p>
         `,
       }, mailTransporter);
     } catch (emailError) {
@@ -458,7 +441,7 @@ async function forgotPassword(req, res) {
     console.log(`Password reset OTP sent to: ${user.email}`);
 
     return res.json({
-      message: 'Nếu email tồn tại, mã OTP đã được gửi.',
+      message: 'Náº¿u email tá»“n táº¡i, mÃ£ OTP Ä‘Ã£ Ä‘Æ°á»£c gá»­i.',
     });
 
   } catch (error) {
@@ -467,7 +450,7 @@ async function forgotPassword(req, res) {
     return res.status(500).json({
       message: error.code === 'SMTP_NOT_CONFIGURED' || error.code === 'SMTP_CONFIG_INVALID'
         ? error.message
-        : 'Không thể gửi mã OTP. Hãy kiểm tra cấu hình email và kết nối SMTP.',
+        : 'KhÃ´ng thá»ƒ gá»­i mÃ£ OTP. HÃ£y kiá»ƒm tra cáº¥u hÃ¬nh email vÃ  káº¿t ná»‘i SMTP.',
     });
   }
 }
@@ -479,25 +462,25 @@ async function resetPassword(req, res) {
 
     if (!isValidEmail(email)) {
       return res.status(400).json({
-        message: 'Email không hợp lệ.',
+        message: 'Email khÃ´ng há»£p lá»‡.',
       });
     }
 
     if (!/^\d{6}$/.test(otp)) {
       return res.status(400).json({
-        message: 'OTP phải gồm 6 chữ số.',
+        message: 'OTP pháº£i gá»“m 6 chá»¯ sá»‘.',
       });
     }
 
     if (newPassword.length < 6) {
       return res.status(400).json({
-        message: 'Mật khẩu phải có ít nhất 6 ký tự.',
+        message: 'Máº­t kháº©u pháº£i cÃ³ Ã­t nháº¥t 6 kÃ½ tá»±.',
       });
     }
 
     const pool = await getPool();
 
-    // Tìm user
+    // TÃ¬m user
     const userResult = await pool.request()
       .input('email', sql.VarChar(150), email)
       .query(`
@@ -509,13 +492,13 @@ async function resetPassword(req, res) {
 
     if (!userResult.recordset.length) {
       return res.status(400).json({
-        message: 'OTP hoặc email không hợp lệ.',
+        message: 'OTP hoáº·c email khÃ´ng há»£p lá»‡.',
       });
     }
 
     const userId = userResult.recordset[0].id;
 
-    // Kiểm tra OTP
+    // Kiá»ƒm tra OTP
     const otpResult = await pool.request()
       .input('userId', sql.BigInt, userId)
       .input('otp', sql.VarChar(10), otp)
@@ -534,16 +517,16 @@ async function resetPassword(req, res) {
 
     if (!otpResult.recordset.length) {
       return res.status(400).json({
-        message: 'OTP không hợp lệ hoặc đã hết hạn.',
+        message: 'OTP khÃ´ng há»£p lá»‡ hoáº·c Ä‘Ã£ háº¿t háº¡n.',
       });
     }
 
     const resetRecord = otpResult.recordset[0];
 
-    // Hash password mới
+    // Hash password má»›i
     const passwordHash = await bcrypt.hash(newPassword, 10);
 
-    // Đổi password
+    // Äá»•i password
     await pool.request()
       .input('userId', sql.BigInt, userId)
       .input('passwordHash', sql.VarChar(255), passwordHash)
@@ -553,7 +536,7 @@ async function resetPassword(req, res) {
         WHERE id = @userId;
       `);
 
-    // Đánh dấu OTP đã sử dụng
+    // ÄÃ¡nh dáº¥u OTP Ä‘Ã£ sá»­ dá»¥ng
     await pool.request()
       .input('resetId', sql.BigInt, resetRecord.id)
       .query(`
@@ -562,7 +545,7 @@ async function resetPassword(req, res) {
         WHERE id = @resetId;
       `);
 
-    // Vô hiệu hóa các OTP cũ còn lại
+    // VÃ´ hiá»‡u hÃ³a cÃ¡c OTP cÅ© cÃ²n láº¡i
     await pool.request()
       .input('userId', sql.BigInt, userId)
       .query(`
@@ -573,14 +556,14 @@ async function resetPassword(req, res) {
       `);
 
     return res.json({
-      message: 'Đặt lại mật khẩu thành công.',
+      message: 'Äáº·t láº¡i máº­t kháº©u thÃ nh cÃ´ng.',
     });
 
   } catch (error) {
     console.error('Reset password error:', error);
 
     return res.status(500).json({
-      message: 'Đặt lại mật khẩu thất bại.',
+      message: 'Äáº·t láº¡i máº­t kháº©u tháº¥t báº¡i.',
       error: error.message,
     });
   }
@@ -590,12 +573,12 @@ async function changePassword(req, res) {
   try {
     const userId = Number(req.auth?.userId);
     const { currentPassword, newPassword } = req.body || {};
-    if (!userId) return res.status(401).json({ message: 'Vui lòng đăng nhập lại.' });
+    if (!userId) return res.status(401).json({ message: 'Vui lÃ²ng Ä‘Äƒng nháº­p láº¡i.' });
     if (typeof currentPassword !== 'string' || !currentPassword || typeof newPassword !== 'string' || !newPassword) {
-      return res.status(400).json({ message: 'Vui lòng nhập mật khẩu hiện tại và mật khẩu mới.' });
+      return res.status(400).json({ message: 'Vui lÃ²ng nháº­p máº­t kháº©u hiá»‡n táº¡i vÃ  máº­t kháº©u má»›i.' });
     }
     if (newPassword.length < 6) {
-      return res.status(400).json({ message: 'Mật khẩu mới phải có ít nhất 6 ký tự.' });
+      return res.status(400).json({ message: 'Máº­t kháº©u má»›i pháº£i cÃ³ Ã­t nháº¥t 6 kÃ½ tá»±.' });
     }
 
     const pool = await getPool();
@@ -603,16 +586,16 @@ async function changePassword(req, res) {
       .input('userId', sql.BigInt, userId)
       .query('SELECT password_hash, status FROM users WHERE id = @userId;');
     const user = result.recordset[0];
-    if (!user) return res.status(404).json({ message: 'Không tìm thấy tài khoản.' });
+    if (!user) return res.status(404).json({ message: 'KhÃ´ng tÃ¬m tháº¥y tÃ i khoáº£n.' });
     if (String(user.status).toUpperCase() !== 'ACTIVE') {
-      return res.status(403).json({ message: 'Tài khoản chưa được kích hoạt hoặc đã bị khóa.' });
+      return res.status(403).json({ message: 'TÃ i khoáº£n chÆ°a Ä‘Æ°á»£c kÃ­ch hoáº¡t hoáº·c Ä‘Ã£ bá»‹ khÃ³a.' });
     }
 
     const matches = user.password_hash === currentPassword
       || await bcrypt.compare(currentPassword, user.password_hash).catch(() => false);
-    if (!matches) return res.status(400).json({ message: 'Mật khẩu hiện tại không đúng.' });
+    if (!matches) return res.status(400).json({ message: 'Máº­t kháº©u hiá»‡n táº¡i khÃ´ng Ä‘Ãºng.' });
     if (await bcrypt.compare(newPassword, user.password_hash).catch(() => false)) {
-      return res.status(400).json({ message: 'Mật khẩu mới phải khác mật khẩu hiện tại.' });
+      return res.status(400).json({ message: 'Máº­t kháº©u má»›i pháº£i khÃ¡c máº­t kháº©u hiá»‡n táº¡i.' });
     }
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
@@ -620,9 +603,19 @@ async function changePassword(req, res) {
       .input('userId', sql.BigInt, userId)
       .input('passwordHash', sql.VarChar(255), passwordHash)
       .query('UPDATE users SET password_hash = @passwordHash WHERE id = @userId;');
-    return res.json({ message: 'Đổi mật khẩu thành công.' });
+    return res.json({ message: 'Äá»•i máº­t kháº©u thÃ nh cÃ´ng.' });
   } catch (error) {
     console.error('Change password error:', error);
-    return res.status(500).json({ message: 'Không thể đổi mật khẩu lúc này.' });
+    return res.status(500).json({ message: 'KhÃ´ng thá»ƒ Ä‘á»•i máº­t kháº©u lÃºc nÃ y.' });
   }
 }
+
+module.exports = {
+  register,
+  login,
+  logout,
+  verifyEmail,
+  forgotPassword,
+  resetPassword,
+  changePassword,
+};

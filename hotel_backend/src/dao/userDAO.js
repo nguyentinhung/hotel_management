@@ -32,7 +32,20 @@ async function saveRefreshToken(userId, token, expiresAt) {
     `);
 }
 
+async function revokeRefreshToken(token) {
+    const pool = await getPool();
+
+    await pool.request()
+        .input('token', sql.VarChar(255), String(token))
+        .query(`
+            UPDATE refresh_tokens
+            SET revoked_at = SYSUTCDATETIME()
+            WHERE token = @token AND revoked_at IS NULL;
+        `);
+}
+
 module.exports = {
     findUserByEmail,
     saveRefreshToken,
+    revokeRefreshToken,
 };
