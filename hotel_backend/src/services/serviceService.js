@@ -1,31 +1,7 @@
 const serviceDao = require('../dao/serviceDao');
+const ServiceModel = require('../models/serviceModel');
 
-function validateService(data) {
-    if (!data || typeof data.name !== 'string' || !data.name.trim()) {
-        throw new Error('Service name is required.');
-    }
-    if (data.price === undefined || data.price === null || data.price === '') {
-        throw new Error('Service price is required.');
-    }
-    if (!Number.isFinite(Number(data.price))) {
-        throw new Error('Service price must be a valid number.');
-    }
-    if (Number(data.price) < 0) {
-        throw new Error('Service price cannot be negative.');
-    }
-    if (typeof data.unit !== 'string' || !data.unit.trim()) {
-        throw new Error('Service unit is required.');
-    }
-    if (data.description != null && typeof data.description !== 'string') {
-        throw new Error('Service description must be text.');
-    }
-    if (data.is_active != null && typeof data.is_active !== 'boolean') {
-        throw new Error('Service status must be active or inactive.');
-    }
-    if (data.booking_policy != null && !['PREBOOK', 'ON_DEMAND'].includes(data.booking_policy)) {
-        throw new Error('Service booking policy must be PREBOOK or ON_DEMAND.');
-    }
-}
+
 
 async function getAllServices() {
     return await serviceDao.findAll();
@@ -44,31 +20,13 @@ async function getServiceById(id) {
 }
 
 async function createService(data) {
-    validateService(data);
-    return await serviceDao.create({
-        name: data.name.trim(),
-        description: data.description ? data.description.trim() : '',
-        price: Number(data.price),
-        unit: data.unit.trim(),
-        is_active: data.is_active !== false,
-        booking_policy: data.booking_policy || 'ON_DEMAND'
-    });
+    return serviceDao.create(ServiceModel.normalizeInput(data));
 }
 
 async function updateService(id, data) {
-    validateService(data);
     const existing = await serviceDao.findById(id);
-    if (!existing) {
-        throw new Error('Service not found.');
-    }
-    return await serviceDao.update(id, {
-        name: data.name.trim(),
-        description: data.description ? data.description.trim() : '',
-        price: Number(data.price),
-        unit: data.unit.trim(),
-        is_active: data.is_active !== false,
-        booking_policy: data.booking_policy || existing.booking_policy || 'ON_DEMAND'
-    });
+    if (!existing) throw new Error('Service not found.');
+    return serviceDao.update(id, ServiceModel.normalizeInput(data, existing.booking_policy || 'ON_DEMAND'));
 }
 
 async function deleteService(id) {

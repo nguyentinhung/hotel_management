@@ -6,7 +6,7 @@ import { resolveRole } from '../utils/role';
 import type { CustomerBookingResponse, Promotion, RoomAvailabilityItem, ServiceItem } from '../types';
 import { useToast } from '../components/ToastProvider';
 import { getActivePromotions, getServices } from '../services/homeService';
-import { validatePromotion } from '../services/promotionValidationService';
+import { validatePromotion as validatePromotionApi } from '../services/promotionValidationService';
 
 const vnpayEnabled = import.meta.env.VITE_VNPAY_ENABLED === 'true';
 const dateValue = (date: Date) => date.toISOString().slice(0, 10);
@@ -142,9 +142,11 @@ export default function CustomerBookingPage() {
     setPromotionCode(code);
     setPromotionMessage('Đang kiểm tra mã khuyến mãi…');
     try {
-      const result = await validatePromotion(code, bookingSubtotal);
-      setAppliedPromotion({ promotion_code: result.promotion_code, discount_amount: Number(result.discount_amount), subtotal: bookingSubtotal });
-      setPromotionMessage(`Đã áp dụng mã ${result.promotion_code}. Giảm ${new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(result.discount_amount)}.`);
+      const result = await validatePromotionApi(code, bookingSubtotal);
+      const discountAmount = Number(result.discount_amount);
+      if (!result.promotion_code || !Number.isFinite(discountAmount)) throw new Error('Dữ liệu giảm giá từ máy chủ không hợp lệ.');
+      setAppliedPromotion({ promotion_code: result.promotion_code, discount_amount: discountAmount, subtotal: bookingSubtotal });
+      setPromotionMessage(`Đã áp dụng mã ${result.promotion_code}. Giảm ${new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(discountAmount)}.`);
       return true;
     } catch (err) {
       setAppliedPromotion(null);

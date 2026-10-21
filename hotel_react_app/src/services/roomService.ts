@@ -36,6 +36,7 @@ export const createWalkInBooking = async (
   return api.post<{ success: boolean; message: string; booking: WalkInBookingResponse }>(
     '/api/bookings/walk-in',
     payload,
+    localStorage.getItem('accessToken') || undefined,
   );
 };
 

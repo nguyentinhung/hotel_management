@@ -1,5 +1,6 @@
 const sql = require('mssql');
 const { getPool } = require('../config/db');
+const ProfileModel = require('../models/profileModel');
 
 async function getProfileByUserId(userId) {
   const pool = await getPool();
@@ -12,7 +13,7 @@ async function getProfileByUserId(userId) {
       LEFT JOIN roles r ON r.id = u.role_id
       WHERE u.id = @userId;
     `);
-  return result.recordset[0] || null;
+  return ProfileModel.fromRow(result.recordset[0]);
 }
 
 async function updateProfileByUserId(userId, fullName, phone) {

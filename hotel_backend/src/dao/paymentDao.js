@@ -1,4 +1,6 @@
 const { sql, getPool } = require('../config/db');
+const PaymentModel = require('../models/paymentModel');
+const InvoiceModel = require('../models/invoiceModel');
 const { expirePendingBookings } = require('./bookingDao');
 
 function paymentError(code, statusCode, message) {
@@ -262,7 +264,7 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method, 
   await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
   try {
     const bookingResult = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
-      SELECT b.id, b.booking_code, b.status, b.total_amount, b.deposit_amount,
+      SELECT b.id, b.booking_code, b.status, b.total_amount, b.deposit_amount, b.discount_amount,
         COALESCE(final_payments.amount_paid, 0) AS final_paid_amount
       FROM dbo.bookings b WITH (UPDLOCK, HOLDLOCK)
       OUTER APPLY (
@@ -296,8 +298,9 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method, 
       if (!invoiceId) {
         const totals = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
           SELECT
-            COALESCE((SELECT SUM(br.price_per_night * DATEDIFF(day, b.check_in_date, b.check_out_date))
-              FROM dbo.booking_rooms br WHERE br.booking_id = b.id), 0) AS room_amount,
+      COALESCE((SELECT SUM(br.price_per_night)
+        FROM dbo.booking_rooms br WHERE br.booking_id = b.id), 0)
+        * DATEDIFF(day, b.check_in_date, b.check_out_date) AS room_amount,
             COALESCE((SELECT SUM(bs.quantity * bs.unit_price)
               FROM dbo.booking_services bs JOIN dbo.booking_rooms br ON br.id = bs.booking_room_id
               WHERE br.booking_id = b.id), 0) AS service_amount
@@ -312,6 +315,7 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method, 
           .input('invoiceNumber', sql.VarChar(30), invoiceNumber)
           .input('roomAmount', sql.Decimal(14, 2), roomAmount)
           .input('serviceAmount', sql.Decimal(14, 2), serviceAmount)
+          .input('discountAmount', sql.Decimal(14, 2), Number(booking.discount_amount || 0))
           .input('totalAmount', sql.Decimal(14, 2), Number(booking.total_amount))
           .input('depositPaid', sql.Decimal(14, 2), depositPaid)
           .input('amountDue', sql.Decimal(14, 2), method === 'CASH' ? 0 : amount)
@@ -322,7 +326,7 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method, 
               (booking_id, invoice_number, room_amount, service_amount, discount_amount, tax_amount,
                total_amount, deposit_paid, amount_due, status, issued_at, created_by_user_id)
             OUTPUT INSERTED.id
-            VALUES (@bookingId, @invoiceNumber, @roomAmount, @serviceAmount, 0, 0,
+            VALUES (@bookingId, @invoiceNumber, @roomAmount, @serviceAmount, @discountAmount, 0,
                     @totalAmount, @depositPaid, @amountDue, @invoiceStatus, SYSUTCDATETIME(), @createdByUserId);
           `);
         invoiceId = created.recordset[0].id;
@@ -406,7 +410,7 @@ async function createReceptionInvoice(bookingId, createdByUserId) {
   await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
   try {
     const bookingResult = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
-      SELECT b.id, b.booking_code, b.status, b.total_amount, b.deposit_amount,
+      SELECT b.id, b.booking_code, b.status, b.total_amount, b.deposit_amount, b.discount_amount,
         COALESCE(final_payments.amount_paid, 0) AS final_paid_amount
       FROM dbo.bookings b WITH (UPDLOCK, HOLDLOCK)
       OUTER APPLY (
@@ -552,8 +556,9 @@ async function createReceptionInvoice(bookingId, createdByUserId) {
 
     const totals = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
       SELECT
-        COALESCE((SELECT SUM(br.price_per_night * DATEDIFF(day, b.check_in_date, b.check_out_date))
-          FROM dbo.booking_rooms br WHERE br.booking_id = b.id), 0) AS room_amount,
+        COALESCE((SELECT SUM(br.price_per_night)
+          FROM dbo.booking_rooms br WHERE br.booking_id = b.id), 0)
+          * DATEDIFF(day, b.check_in_date, b.check_out_date) AS room_amount,
         COALESCE((SELECT SUM(bs.quantity * bs.unit_price)
           FROM dbo.booking_services bs JOIN dbo.booking_rooms br ON br.id = bs.booking_room_id
           WHERE br.booking_id = b.id), 0) AS service_amount
@@ -563,6 +568,7 @@ async function createReceptionInvoice(bookingId, createdByUserId) {
     const serviceAmount = Number(totals.recordset[0].service_amount);
     const totalAmount = Number(booking.total_amount);
     const depositPaid = Number(booking.deposit_amount || 0);
+    const discountAmount = Number(booking.discount_amount || 0);
     const amountDue = Math.max(0, totalAmount - depositPaid - Number(booking.final_paid_amount || 0));
     const invoiceStatus = amountDue <= 0 ? 'PAID' : 'ISSUED';
     const invoiceNumber = `INV-${String(booking.booking_code).replace(/[^A-Z0-9-]/gi, '')}`;
@@ -571,6 +577,7 @@ async function createReceptionInvoice(bookingId, createdByUserId) {
       .input('invoiceNumber', sql.VarChar(30), invoiceNumber)
       .input('roomAmount', sql.Decimal(14, 2), roomAmount)
       .input('serviceAmount', sql.Decimal(14, 2), serviceAmount)
+      .input('discountAmount', sql.Decimal(14, 2), discountAmount)
       .input('totalAmount', sql.Decimal(14, 2), totalAmount)
       .input('depositPaid', sql.Decimal(14, 2), depositPaid)
       .input('amountDue', sql.Decimal(14, 2), amountDue)
@@ -581,7 +588,7 @@ async function createReceptionInvoice(bookingId, createdByUserId) {
           (booking_id, invoice_number, room_amount, service_amount, discount_amount, tax_amount,
            total_amount, deposit_paid, amount_due, status, issued_at, created_by_user_id)
         OUTPUT INSERTED.id
-        VALUES (@bookingId, @invoiceNumber, @roomAmount, @serviceAmount, 0, 0,
+        VALUES (@bookingId, @invoiceNumber, @roomAmount, @serviceAmount, @discountAmount, 0,
                 @totalAmount, @depositPaid, @amountDue, @invoiceStatus, SYSUTCDATETIME(), @createdByUserId);
       `);
     const invoiceId = invoiceResult.recordset[0].id;
@@ -841,7 +848,7 @@ async function getPaymentList(customerId = null, successOnly = false) {
     ORDER BY p.id DESC;
   `);
 
-  return result.recordset;
+  return PaymentModel.fromRows(result.recordset);
 }
 
 async function getCustomerPaymentList(customerId) {
@@ -867,7 +874,7 @@ async function getInvoiceList(customerId = null) {
     WHERE 1 = 1 ${customerFilter}
     ORDER BY i.issued_at DESC, i.id DESC;
   `);
-  return result.recordset;
+  return InvoiceModel.fromRows(result.recordset);
 }
 
 async function getInvoiceDetails(invoiceId, customerId = null) {
@@ -953,7 +960,7 @@ async function getPaymentStatus({ paymentCode, customerId = null }) {
     JOIN dbo.bookings b ON b.id = p.booking_id
     WHERE p.payment_code = @paymentCode ${ownerFilter};
   `);
-  return result.recordset[0] || null;
+  return PaymentModel.fromRow(result.recordset[0]);
 }
 
 async function confirmPaymentByCode(paymentCode) {

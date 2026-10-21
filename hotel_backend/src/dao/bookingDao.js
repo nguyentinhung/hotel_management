@@ -1,4 +1,5 @@
 const { sql, getPool } = require('../config/db');
+const BookingModel = require('../models/bookingModel');
 
 /**
  * ============================================================================
@@ -11,26 +12,6 @@ const { sql, getPool } = require('../config/db');
  * 4. Tự động tạo hồ sơ khách hàng mới (nếu chưa có trong hệ thống users).
  * 5. Lưu thông tin vào bookings, booking_rooms, booking_guests và cập nhật trạng thái phòng.
  */
-
-/**
- * Tính số đêm giữa 2 ngày
- */
-function calculateNights(checkInDate, checkOutDate) {
-  const start = new Date(checkInDate);
-  const end = new Date(checkOutDate);
-  const diff = end.getTime() - start.getTime();
-  return Math.max(1, Math.ceil(diff / (1000 * 60 * 60 * 24)));
-}
-
-/**
- * Tạo mã booking duy nhất (độ dài tối đa 20 ký tự theo schema database)
- * Ví dụ: BK98234123
- */
-function generateBookingCode() {
-  const timestamp = Date.now().toString().slice(-6);
-  const randomSuffix = Math.floor(100 + Math.random() * 900);
-  return `BK${timestamp}${randomSuffix}`;
-}
 
 function activeReservationPredicate(alias) {
   // CONFIRMED bookings hold inventory regardless of deposit; online bookings only reach this state after deposit succeeds.
@@ -56,6 +37,25 @@ async function expirePendingBookings() {
     SELECT COUNT(*) AS expired_count FROM @expired;
   `);
   return Number(result.recordset[0]?.expired_count ?? 0);
+}
+
+async function expireReservationsPastCheckout() {
+  const pool = await getPool();
+  const result = await pool.request().query(`
+    UPDATE dbo.bookings
+    SET status = 'CANCELLED', cancellation_reason = 'RESERVATION_EXPIRED'
+    WHERE status = 'CONFIRMED'
+      AND DATEADD(hour, 12, CONVERT(datetime2, check_out_date))
+        <= DATEADD(hour, 7, SYSUTCDATETIME());
+    SELECT @@ROWCOUNT AS expired_count;
+  `);
+  return Number(result.recordset[0]?.expired_count ?? 0);
+}
+
+async function expireStaleBookings() {
+  const paymentExpiredCount = await expirePendingBookings();
+  const reservationExpiredCount = await expireReservationsPastCheckout();
+  return paymentExpiredCount + reservationExpiredCount;
 }
 
 /**
@@ -84,7 +84,7 @@ async function createWalkInBooking(data) {
   const pool = await getPool();
 
   // Kiểm tra từng loại phòng được chọn và chọn phòng vật lý cho từng dòng.
-  const nights = calculateNights(checkInDate, checkOutDate);
+  const nights = BookingModel.calculateNights(checkInDate, checkOutDate);
   const selectedRooms = [];
   const selectedPhysicalRoomIds = new Set();
   let totalPerNight = 0;
@@ -206,7 +206,7 @@ async function createWalkInBooking(data) {
 
   // 4. Tạo mã booking và xác định trạng thái ban đầu
   // Walk-in bookings check guests in immediately; no online deposit is required at the desk.
-  const bookingCode = generateBookingCode();
+  const bookingCode = BookingModel.generateBookingCode();
   const initialStatus = checkInNow ? 'CHECKED_IN' : 'CONFIRMED';
   if (checkInNow && selectedRooms.some(({ room }) => !room)) throw new Error('Cannot check in before every room is assigned and ready.');
 
@@ -357,7 +357,7 @@ async function createCustomerBooking(data) {
     if (!customerResult.recordset.length) throw new Error('Customer account is unavailable.');
     const customer = customerResult.recordset[0];
 
-    const nights = calculateNights(checkInDate, checkOutDate);
+    const nights = BookingModel.calculateNights(checkInDate, checkOutDate);
     const selectedTypes = [];
     let totalCapacityAdults = 0;
     let totalCapacityChildren = 0;
@@ -440,7 +440,7 @@ async function createCustomerBooking(data) {
     }
     const totalAmount = originalTotalAmount - discountAmount;
     const requiredDepositAmount = promotion ? Math.ceil(totalAmount * 0.3) : Math.ceil(totalPerNight * nights * 0.3);
-    const bookingCode = generateBookingCode();
+    const bookingCode = BookingModel.generateBookingCode();
     const bookingResult = await transaction.request()
       .input('booking_code', sql.VarChar(20), bookingCode)
       .input('customer_id', sql.BigInt, customer.id)
@@ -651,7 +651,7 @@ async function checkInBooking({ bookingId, idCardNumber = '' }) {
 }
 
 async function getRecentBookings(limit = 10, activeOnly = false, customerId = null) {
-  await expirePendingBookings();
+  await expireStaleBookings();
   const pool = await getPool();
 
   await pool.request().query(`
@@ -922,7 +922,7 @@ async function updateBooking({ bookingId, customerId, ...changes }) {
       throw new Error('Guest count exceeds the selected rooms capacity.');
     }
 
-    const nights = calculateNights(changes.checkInDate, changes.checkOutDate);
+    const nights = BookingModel.calculateNights(changes.checkInDate, changes.checkOutDate);
     const chargesResult = await transaction.request()
       .input('bookingId', sql.BigInt, Number(bookingId))
       .query(`
@@ -1317,6 +1317,7 @@ module.exports = {
   createWalkInBooking,
   createCustomerBooking,
   expirePendingBookings,
+  expireStaleBookings,
   checkInBooking,
   getRecentBookings,
   updateBooking,

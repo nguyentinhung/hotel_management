@@ -1,4 +1,3 @@
-const crypto = require('crypto');
 const {
   createFinalPayment,
   createCustomerDepositPayment,
@@ -16,6 +15,8 @@ const {
 } = require('../dao/paymentDao');
 const { getVnpayConfig, buildVnpayPaymentUrl, verifyVnpayResponse } = require('./vnpayGateway');
 
+const PaymentModel = require('../models/paymentModel');
+const InvoiceModel = require('../models/invoiceModel');
 const vnpayEnabled = String(process.env.VNPAY_ENABLED || '').toLowerCase() === 'true';
 
 async function makePayment({ customerId, bookingCode, paymentType, method, ipAddress }) {
@@ -26,7 +27,7 @@ async function makePayment({ customerId, bookingCode, paymentType, method, ipAdd
     throw error;
   }
 
-  const normalizedMethod = String(method || '').toUpperCase();
+  const normalizedMethod = PaymentModel.normalizeMethod(method);
   const supportedMethods = paymentType === 'DEPOSIT'
     ? (vnpayEnabled ? ['VNPAY'] : ['SIMULATED'])
     : (vnpayEnabled ? ['CASH', 'VNPAY'] : ['CASH']);
@@ -41,7 +42,7 @@ async function makePayment({ customerId, bookingCode, paymentType, method, ipAdd
   }
   if (normalizedMethod === 'VNPAY') getVnpayConfig();
 
-  const paymentCode = `PAY${Date.now().toString(36).toUpperCase()}${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+  const paymentCode = PaymentModel.generateCode();
   const payment = paymentType === 'DEPOSIT'
     ? await createCustomerDepositPayment({
       customerId,
@@ -71,14 +72,14 @@ async function simulateDepositPayment({ paymentCode, customerId, succeeded }) {
 }
 
 async function makeReceptionCheckoutPayment({ bookingId, method, ipAddress, createdByUserId }) {
-  const normalizedMethod = String(method || '').toUpperCase();
+  const normalizedMethod = PaymentModel.normalizeMethod(method);
   if (normalizedMethod !== 'CASH' && !(vnpayEnabled && normalizedMethod === 'VNPAY')) {
     const error = new Error(vnpayEnabled ? 'Vui lòng chọn phương thức thanh toán hợp lệ.' : 'VNPay đang tạm dừng; hiện chỉ hỗ trợ thanh toán tiền mặt tại quầy.');
     error.statusCode = 400;
     throw error;
   }
   if (normalizedMethod === 'VNPAY') getVnpayConfig();
-  const paymentCode = `PAY${Date.now().toString(36).toUpperCase()}${crypto.randomBytes(4).toString('hex').toUpperCase()}`;
+  const paymentCode = PaymentModel.generateCode();
   const payment = await createReceptionCheckoutPayment({ bookingId, paymentCode, method: normalizedMethod, createdByUserId });
   return normalizedMethod === 'VNPAY' && payment.amount > 0
     ? { ...payment, payment_url: buildVnpayPaymentUrl({ paymentCode, amount: payment.amount, ipAddress }) }
@@ -99,44 +100,12 @@ async function getCustomerPayments(customerId) {
 
 async function getInvoices(customerId = null) {
   const rows = await getInvoiceListDao(customerId);
-  return rows.map((invoice) => ({
-    ...invoice,
-    id: Number(invoice.id),
-    room_amount: Number(invoice.room_amount),
-    service_amount: Number(invoice.service_amount),
-    discount_amount: Number(invoice.discount_amount),
-    tax_amount: Number(invoice.tax_amount),
-    total_amount: Number(invoice.total_amount),
-    deposit_paid: Number(invoice.deposit_paid),
-    amount_due: Number(invoice.amount_due),
-    items: invoice.items ? (Array.isArray(invoice.items) ? invoice.items : JSON.parse(invoice.items)).map((item) => ({
-      ...item, quantity: Number(item.quantity), unit_price: Number(item.unit_price), amount: Number(item.amount),
-    })) : [],
-  }));
+  return rows.map((invoice) => InvoiceModel.normalizeListItem(invoice));
 }
 
 async function getInvoiceDetails(invoiceId, customerId = null) {
   const invoice = await getInvoiceDetailsDao(invoiceId, customerId);
-  if (!invoice) return null;
-  const parseItems = (value) => value ? (Array.isArray(value) ? value : JSON.parse(value)) : [];
-  return {
-    ...invoice,
-    id: Number(invoice.id),
-    adults: Number(invoice.adults),
-    children: Number(invoice.children),
-    room_amount: Number(invoice.room_amount),
-    service_amount: Number(invoice.service_amount),
-    discount_amount: Number(invoice.discount_amount),
-    tax_amount: Number(invoice.tax_amount),
-    total_amount: Number(invoice.total_amount),
-    deposit_paid: Number(invoice.deposit_paid),
-    amount_due: Number(invoice.amount_due),
-    items: parseItems(invoice.items).map((item) => ({
-      ...item, quantity: Number(item.quantity), unit_price: Number(item.unit_price), amount: Number(item.amount),
-    })),
-    payments: parseItems(invoice.payments).map((payment) => ({ ...payment, amount: Number(payment.amount) })),
-    rooms: parseItems(invoice.rooms),
-  };
+  return invoice ? InvoiceModel.normalizeDetails(invoice) : null;
 }
 
 async function getPaymentStatus(paymentCode, customerId = null) {

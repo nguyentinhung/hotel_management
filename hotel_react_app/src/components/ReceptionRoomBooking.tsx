@@ -246,18 +246,16 @@ export default function ReceptionRoomBooking({
   const [checkOutPaymentMethod, setCheckOutPaymentMethod] = useState<'CASH' | 'VNPAY'>('CASH');
   const [checkOutPaymentNote, setCheckOutPaymentNote] = useState('');
   const [cashTendered, setCashTendered] = useState('');
+  const [cashTenderError, setCashTenderError] = useState('');
   const vnpayEnabled = import.meta.env.VITE_VNPAY_ENABLED === 'true';
   const [checkoutSuccess, setCheckoutSuccess] = useState<CheckoutPaymentSuccess | null>(null);
 
   const vietnamToday = getVietnamToday(attentionNow);
   const overdueCheckInCutoffUtc = getVietnamCheckInCutoffUtc(attentionNow);
   const overdueBookings = bookingHistory.filter((booking) => {
-    const createdAt = Date.parse(booking.created_at);
     return booking.status === 'CONFIRMED'
       && String(booking.check_in_date).slice(0, 10) === vietnamToday
       && attentionNow.getTime() >= overdueCheckInCutoffUtc
-      && Number.isFinite(createdAt)
-      && createdAt < overdueCheckInCutoffUtc
       && !handledOverdueBookingIds.has(String(booking.id));
   });
   const overdueCheckoutBookings = managementBookings.filter((booking) => {
@@ -657,6 +655,8 @@ export default function ReceptionRoomBooking({
     if (!selectedCheckOutBooking) return;
     try {
       setIsCreatingInvoice(true);
+      setCashTendered('');
+      setCashTenderError('');
       const result = await createReceptionInvoice(selectedCheckOutBooking.id);
       const detail = await getInvoiceDetails(result.invoice_id);
       setCreatedInvoice({ detail, created: result.created });
@@ -668,6 +668,23 @@ export default function ReceptionRoomBooking({
   };
 
   const continueInvoicePayment = () => {
+    if (checkOutPaymentMethod === 'CASH' && invoiceBalanceDue > 0) {
+      if (cashTenderedIsEmpty) {
+        const message = 'Vui lòng nhập số tiền khách đưa.';
+        setCashTenderError(message);
+        showToast(message, 'error');
+        document.getElementById('checkout-cash-tendered')?.focus();
+        return;
+      }
+      if (cashTenderedAmount < invoiceBalanceDue) {
+        const message = 'Tiền khách đưa chưa đủ số tiền cần thanh toán.';
+        setCashTenderError(message);
+        showToast(message, 'error');
+        document.getElementById('checkout-cash-tendered')?.focus();
+        return;
+      }
+    }
+    setCashTenderError('');
     void confirmCheckOut();
   };
 
@@ -958,9 +975,6 @@ export default function ReceptionRoomBooking({
   const cashTenderedIsEmpty = cashTendered.trim() === '';
   const cashTenderedAmount = cashTenderedIsEmpty ? 0 : Math.max(0, Number(cashTendered) || 0);
   const cashChangeDue = Math.max(0, cashTenderedAmount - invoiceBalanceDue);
-  const cashAmountIsInsufficient = Boolean(createdInvoice)
-    && checkOutPaymentMethod === 'CASH'
-    && (cashTenderedIsEmpty || cashTenderedAmount < invoiceBalanceDue);
 
   return (
     <div className={`reception-booking-module${mode === 'management' ? ' booking-management-main-container' : ''}`}>
@@ -2174,12 +2188,12 @@ export default function ReceptionRoomBooking({
                       <h3>Phương thức thanh toán</h3>
                       <fieldset className="checkout-created-invoice-methods">
                         <label className={checkOutPaymentMethod === 'CASH' ? 'is-selected' : ''}>
-                          <input type="radio" name="checkout-invoice-payment-method" value="CASH" checked={checkOutPaymentMethod === 'CASH'} onChange={() => setCheckOutPaymentMethod('CASH')} />
+                          <input type="radio" name="checkout-invoice-payment-method" value="CASH" checked={checkOutPaymentMethod === 'CASH'} onChange={() => { setCheckOutPaymentMethod('CASH'); setCashTenderError(''); }} />
                           <svg className="checkout-payment-method-icon cash" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="7" width="16" height="12" rx="2" stroke="currentColor" strokeWidth="1.8"/><path d="M4 10h16M8 15h3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/><path d="M7 7V5h11" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
                           <span><strong>Tiền mặt</strong><small>Thanh toán trực tiếp tại quầy</small></span>
                         </label>
                         <label className={`${checkOutPaymentMethod === 'VNPAY' ? 'is-selected' : ''}${!vnpayEnabled ? ' is-demo' : ''}`} title={!vnpayEnabled ? 'VNPay chỉ hiển thị minh họa; chưa bật cấu hình thanh toán' : undefined}>
-                          <input type="radio" name="checkout-invoice-payment-method" value="VNPAY" checked={checkOutPaymentMethod === 'VNPAY'} onChange={() => setCheckOutPaymentMethod('VNPAY')} aria-label="Thanh toán qua cổng VNPay" />
+                          <input type="radio" name="checkout-invoice-payment-method" value="VNPAY" checked={checkOutPaymentMethod === 'VNPAY'} onChange={() => { setCheckOutPaymentMethod('VNPAY'); setCashTenderError(''); }} aria-label="Thanh toán qua cổng VNPay" />
                           <span className="checkout-payment-method-vnpay-brand">
                             <img className="checkout-payment-method-logo-vnpay" src="/vnpay-logo-full.jpg" alt="VNPay — Cho cuộc sống đơn giản hơn" />
                             <small>Thanh toán qua cổng VNPay</small>
@@ -2205,7 +2219,7 @@ export default function ReceptionRoomBooking({
                       <div className="checkout-cash-payment-row">
                         <label htmlFor="checkout-cash-tendered">Tiền khách đưa</label>
                         <div className="checkout-cash-input-wrap">
-                          <input id="checkout-cash-tendered" type="number" min="0" step="1" inputMode="numeric" value={cashTendered} onChange={(event) => setCashTendered(event.target.value)} placeholder="Nhập số tiền khách đưa" />
+                          <input id="checkout-cash-tendered" type="number" min="0" step="1" inputMode="numeric" value={cashTendered} aria-invalid={Boolean(cashTenderError)} aria-describedby={cashTenderError ? 'checkout-cash-tender-error' : undefined} onChange={(event) => { setCashTendered(event.target.value); setCashTenderError(''); }} placeholder="Nhập số tiền khách đưa" />
                           <span>₫</span>
                         </div>
                       </div>
@@ -2213,14 +2227,14 @@ export default function ReceptionRoomBooking({
                         <span>Tiền trả lại khách</span>
                         <strong className={cashChangeDue > 0 ? 'has-change' : ''}>{formatCurrency(cashChangeDue)}</strong>
                       </div>
-                      {cashAmountIsInsufficient && <p className="checkout-cash-insufficient">{cashTenderedIsEmpty ? 'Vui lòng nhập số tiền khách đưa.' : 'Tiền khách đưa chưa đủ số tiền cần thanh toán.'}</p>}
+                      {cashTenderError && <p id="checkout-cash-tender-error" className="checkout-cash-insufficient" role="alert" aria-live="assertive">{cashTenderError}</p>}
                     </section>}
                   </div>
                 </div>
               </div>
               <footer className="checkout-created-invoice-actions">
                 <button className="btn btn-outline" type="button" disabled={isCheckingOut != null} onClick={() => setCreatedInvoice(null)}>← Quay lại chỉnh sửa</button>
-                <button className="btn btn-primary" type="button" disabled={isCheckingOut != null || createdInvoice.detail.amount_due <= 0 || createdInvoice.detail.status.toUpperCase() === 'PAID' || cashAmountIsInsufficient} onClick={continueInvoicePayment}>
+                <button className="btn btn-primary" type="button" disabled={isCheckingOut != null || createdInvoice.detail.amount_due <= 0 || createdInvoice.detail.status.toUpperCase() === 'PAID'} onClick={continueInvoicePayment}>
                   {createdInvoice.detail.amount_due <= 0 || createdInvoice.detail.status.toUpperCase() === 'PAID' ? 'Đã thanh toán' : isCheckingOut != null ? 'Đang xử lý…' : 'Xác nhận thanh toán'}
                 </button>
               </footer>

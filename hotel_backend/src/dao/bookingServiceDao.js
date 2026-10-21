@@ -1,4 +1,5 @@
 const { sql, getPool } = require('../config/db');
+const BookingServiceModel = require('../models/bookingServiceModel');
 
 async function getServiceableBookingRooms(bookingId, customerId = null) {
   const pool = await getPool();
@@ -37,7 +38,7 @@ async function getBookingServices(bookingId, customerId = null) {
     WHERE br.booking_id = @bookingId ${ownerFilter}
     ORDER BY bs.used_at DESC, bs.id DESC;
   `);
-  return result.recordset;
+  return BookingServiceModel.fromRows(result.recordset);
 }
 
 async function addServiceToCheckedInBooking({ bookingId, bookingRoomId, serviceId, quantity, customerId = null }) {

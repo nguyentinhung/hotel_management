@@ -1,4 +1,5 @@
 const { getPool } = require('../config/db');
+const ServiceModel = require('../models/serviceModel');
 
 async function findAll() {
     const pool = await getPool();
@@ -15,7 +16,7 @@ async function findAll() {
         WHERE is_deleted = 0
         ORDER BY id;
     `);
-    return result.recordset;
+    return ServiceModel.fromRows(result.recordset);
 }
 
 async function findActive() {
@@ -33,7 +34,7 @@ async function findActive() {
         WHERE is_active = 1 AND is_deleted = 0
         ORDER BY id;
     `);
-    return result.recordset;
+    return ServiceModel.fromRows(result.recordset);
 }
 
 async function findById(id) {
@@ -52,7 +53,7 @@ async function findById(id) {
             FROM services
             WHERE id = @id AND is_deleted = 0;
         `);
-    return result.recordset[0] || null;
+    return ServiceModel.fromRow(result.recordset[0]);
 }
 
 async function create(service) {
@@ -92,7 +93,7 @@ async function create(service) {
                 @booking_policy
             );
         `);
-    return result.recordset[0];
+    return ServiceModel.fromRow(result.recordset[0]);
 }
 
 async function update(id, service) {
@@ -124,7 +125,7 @@ async function update(id, service) {
                 INSERTED.booking_policy
             WHERE id = @id AND is_deleted = 0;
         `);
-    return result.recordset[0] || null;
+    return ServiceModel.fromRow(result.recordset[0]);
 }
 
 // Xóa mềm: chỉ đánh dấu is_deleted = 1, KHÔNG xóa dòng nào trong database
@@ -146,7 +147,7 @@ async function softDelete(id) {
                 INSERTED.is_active
             WHERE id = @id AND is_deleted = 0;
         `);
-    return result.recordset[0] || null;
+    return ServiceModel.fromRow(result.recordset[0]);
 }
 
 module.exports = {

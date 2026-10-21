@@ -1,4 +1,5 @@
 const { sql, getPool } = require('../config/db');
+const RoomModel = require('../models/roomModel');
 
 function quoteSqlIdentifier(identifier) {
   return `[${String(identifier).replace(/]/g, ']]')}]`;
@@ -235,7 +236,7 @@ async function getRoomList() {
     INNER JOIN dbo.room_types rt ON rt.id = r.room_type_id
     ORDER BY r.floor, r.room_number;
   `);
-  return result.recordset;
+  return RoomModel.fromRows(result.recordset);
 }
 
 async function getRoomDetails(roomId) {
@@ -250,7 +251,7 @@ async function getRoomDetails(roomId) {
       INNER JOIN dbo.room_types rt ON rt.id = r.room_type_id
       WHERE r.id = @roomId;
     `);
-  return result.recordset[0] || null;
+  return RoomModel.fromRow(result.recordset[0]);
 }
 
 async function createRoom({ roomNumber, roomTypeId, floor }) {
