@@ -115,6 +115,36 @@ const unlockUser = async (req, res) => {
     }
 };
 
+const assignUserRole = async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+        const { role_code } = req.body;
+
+        if (!Number.isInteger(id) || id <= 0) {
+            return res.status(400).json({
+                message: 'ID người dùng không hợp lệ.',
+            });
+        }
+
+        if (!role_code) {
+            return res.status(400).json({
+                message: 'Vui lòng chọn vai trò.',
+            });
+        }
+
+        const user = await userService.assignUserRole(id, role_code);
+
+        return res.status(200).json({
+            message: 'Phân quyền người dùng thành công.',
+            user,
+        });
+    } catch (error) {
+        return res.status(400).json({
+            message: error.message || 'Không thể phân quyền người dùng.',
+        });
+    }
+};
+
 module.exports = {
     getUserList,
     getUserDetails,
@@ -122,4 +152,5 @@ module.exports = {
     updateUser,
     lockUser,
     unlockUser,
+    assignUserRole,
 };

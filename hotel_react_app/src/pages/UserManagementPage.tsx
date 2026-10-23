@@ -7,6 +7,7 @@ import {
     lockUser,
     unlockUser,
 } from '../services/userService';
+import { assignUserRole } from '../services/userService';
 
 export default function UserManagementPage() {
     const [users, setUsers] = useState<User[]>([]);
@@ -42,6 +43,51 @@ export default function UserManagementPage() {
             );
         } finally {
             setLoading(false);
+        }
+    };
+
+    const availableRoles = [
+        { code: 'ADMIN', label: 'Quản trị viên' },
+        { code: 'RECEPTIONIST', label: 'Lễ tân' },
+        { code: 'HOUSEKEEPER', label: 'Nhân viên buồng phòng' },
+        { code: 'CUSTOMER', label: 'Khách hàng' },
+    ];
+
+    const handleAssignRole = async (user: User, roleCode: string) => {
+        const token = localStorage.getItem('accessToken');
+
+        if (!token) {
+            setError('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+            return;
+        }
+
+        if (roleCode === user.role_code) return;
+
+        const confirmed = window.confirm(
+            `Bạn có chắc muốn đổi vai trò của ${user.full_name} thành ${roleCode}?`
+        );
+
+        if (!confirmed) return;
+
+        try {
+            setError('');
+            setSuccessMessage('');
+
+            const result = await assignUserRole(token, user.id, roleCode);
+
+            setUsers((currentUsers) =>
+                currentUsers.map((item) =>
+                    item.id === user.id ? result.user : item
+                )
+            );
+
+            setSuccessMessage('Phân quyền người dùng thành công.');
+        } catch (error) {
+            setError(
+                error instanceof Error
+                    ? error.message
+                    : 'Không thể phân quyền người dùng.'
+            );
         }
     };
 
@@ -335,8 +381,22 @@ export default function UserManagementPage() {
                                         >
                                             Sửa
                                         </button>
+                                        <select
+                                            aria-label={`Phân quyền cho ${user.full_name}`}
+                                            value={user.role_code}
+                                            onChange={(event) =>
+                                                void handleAssignRole(user, event.target.value)
+                                            }
+                                        >
+                                            {availableRoles.map((role) => (
+                                                <option key={role.code} value={role.code}>
+                                                    {role.label}
+                                                </option>
+                                            ))}
+                                        </select>
                                         <button
                                             type="button"
+                                            className="btn btn-outline"
                                             onClick={() => handleToggleUserStatus(user)}
                                         >
                                             {['LOCKED', 'BLOCKED'].includes(user.status?.toUpperCase())

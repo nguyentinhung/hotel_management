@@ -221,6 +221,30 @@ const unlockUser = async (id) => {
     return { id: userId, status: 'ACTIVE' };
 };
 
+async function assignUserRole(id, roleCode) {
+    const allowedRoles = [
+        'ADMIN',
+        'RECEPTIONIST',
+        'HOUSEKEEPER',
+        'CUSTOMER',
+    ];
+
+    if (!allowedRoles.includes(String(roleCode).toUpperCase())) {
+        throw new Error('Vai trò không hợp lệ.');
+    }
+
+    const updated = await userDao.assignUserRole(
+        id,
+        String(roleCode).toUpperCase()
+    );
+
+    if (!updated) {
+        throw new Error('Không tìm thấy người dùng hoặc vai trò.');
+    }
+
+    return userDao.getUserById(id);
+}
+
 module.exports = {
     getUserList,
     getUserById,
@@ -228,4 +252,5 @@ module.exports = {
     updateUser,
     lockUser,
     unlockUser,
+    assignUserRole,
 };

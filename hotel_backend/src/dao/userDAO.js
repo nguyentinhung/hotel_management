@@ -215,6 +215,31 @@ async function unlockUser(id) {
   return result.recordset.length > 0;
 }
 
+async function assignUserRole(id, roleCode) {
+  const pool = await getPool();
+
+  const result = await pool.request()
+    .input('id', sql.Int, id)
+    .input('roleCode', sql.NVarChar, roleCode)
+    .query(`
+      UPDATE users
+      SET role_id = (
+        SELECT id
+        FROM roles
+        WHERE UPPER(code) = UPPER(@roleCode)
+      )
+      OUTPUT INSERTED.id
+      WHERE id = @id
+        AND EXISTS (
+          SELECT 1
+          FROM roles
+          WHERE UPPER(code) = UPPER(@roleCode)
+        );
+    `);
+
+  return result.recordset.length > 0;
+}
+
 module.exports = {
   getUserList,
   getUserById,
@@ -226,4 +251,5 @@ module.exports = {
   updateUser,
   lockUser,
   unlockUser,
+  assignUserRole,
 };

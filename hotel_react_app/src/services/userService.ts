@@ -66,3 +66,14 @@ export const unlockUser = (token: string, id: number) =>
         {},
         token,
     );
+
+export const assignUserRole = (
+    token: string,
+    id: number,
+    role_code: string,
+) =>
+    api.patch<{ message: string; user: User }>(
+        `/api/admin/users/${id}/role`,
+        { role_code },
+        token,
+    );
