@@ -16,6 +16,7 @@ export default function UserManagementPage() {
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [successMessage, setSuccessMessage] = useState('');
     const [editingUser, setEditingUser] = useState<User | null>(null);
+    const [searchTerm, setSearchTerm] = useState('');
 
     const loadUsers = async () => {
         const token = localStorage.getItem('accessToken');
@@ -43,6 +44,18 @@ export default function UserManagementPage() {
             setLoading(false);
         }
     };
+
+    const filteredUsers = users.filter((user) => {
+        const keyword = searchTerm.trim().toLowerCase();
+
+        if (!keyword) return true;
+
+        return (
+            (user.full_name ?? '').toLowerCase().includes(keyword) ||
+            (user.email ?? '').toLowerCase().includes(keyword) ||
+            (user.phone ?? '').toLowerCase().includes(keyword)
+        );
+    });
 
     const handleToggleUserStatus = async (user: User) => {
         console.log('Đã bấm Lock/Unlock:', user.id);
@@ -190,6 +203,23 @@ export default function UserManagementPage() {
                         Xem thông tin các tài khoản trong hệ thống.
                     </p>
                 </div>
+                <div className="search-user">
+                    <input
+                        type="text"
+                        placeholder="Tìm theo họ tên, email hoặc số điện thoại..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        aria-label="Tìm kiếm người dùng"
+                    />
+                    {searchTerm && (
+                        <button
+                            type="button"
+                            onClick={() => setSearchTerm('')}
+                        >
+                            Clear
+                        </button>
+                    )}
+                </div>
                 <div
                     style={{
                         display: 'flex',
@@ -223,6 +253,11 @@ export default function UserManagementPage() {
                     <strong>Chưa có người dùng</strong>
                     <span>Hệ thống chưa có tài khoản nào.</span>
                 </div>
+            ) : filteredUsers.length === 0 ? (
+                <div className="empty-state-box">
+                    <strong>Không tìm thấy người dùng</strong>
+                    <span>Thử tìm bằng tên, email hoặc số điện thoại khác.</span>
+                </div>
             ) : (
                 <div
                     style={{
@@ -252,7 +287,7 @@ export default function UserManagementPage() {
                         </thead>
 
                         <tbody>
-                            {users.map((user) => (
+                            {filteredUsers.map((user) => (
                                 <tr key={user.id}>
                                     <td style={cellStyle}>{user.id}</td>
 
@@ -304,7 +339,9 @@ export default function UserManagementPage() {
                                             type="button"
                                             onClick={() => handleToggleUserStatus(user)}
                                         >
-                                            {user.status === 'LOCKED' ? 'Unlock User' : 'Lock User'}
+                                            {['LOCKED', 'BLOCKED'].includes(user.status?.toUpperCase())
+                                                ? 'Mở khóa'
+                                                : 'Khóa tài khoản'}
                                         </button>
                                     </td>
                                 </tr>
