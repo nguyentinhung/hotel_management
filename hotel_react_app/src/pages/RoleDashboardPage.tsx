@@ -24,7 +24,7 @@ import dashboardBannerImage from '../assets/lumiere-hero.png';
 import lotusLogo from '../assets/lumiere-lotus.png';
 import ReportsStatisticsPage from './ReportsStatisticsPage';
 import ReviewListPage from './ReviewListPage';
-
+import UserManagementPage from './UserManagementPage';
 /**
  * ============================================================================
  * TRANG DASHBOARD THEO VAI TRÒ (ROLE DASHBOARD PAGE)
@@ -54,6 +54,7 @@ const dashboardConfig: Record<
       { label: 'Reports & Statistics', description: 'Review hotel statistics.' },
       { label: 'Promotion Management', description: 'Manage promotions.' },
       { label: 'Profile', description: 'View and update your profile.' },
+      { label: 'Account Management', description: 'View and manage user accounts.' },
     ],
   },
   RECEPTIONIST: {
@@ -773,7 +774,9 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
         { label: 'Reports & Statistics', icon: 'chart' },
       ]
     },
-    { title: 'HỆ THỐNG', items: [{ label: 'Account Management', icon: 'shield' }] },
+    {
+      title: 'HỆ THỐNG', items: [{ label: 'Account Management', moduleIndex: 7, icon: 'shield' }],
+    },
   ];
 
   const handleLogout = async () => {
@@ -926,6 +929,8 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
             <ServiceListPage role={currentRole} />
           ) : currentRole === 'ADMIN' && activeItem.label === 'Reports & Statistics' ? (
             <ReportsStatisticsPage />
+          ) : currentRole === 'ADMIN' && activeItem.label === 'Account Management' ? (
+            <UserManagementPage />
           ) : currentRole === 'RECEPTIONIST' && activeItem.label === config.nav[5].label ? (
             <ServiceListPage role={currentRole} />
           ) : currentRole === 'CUSTOMER' && ['Đặt phòng'].includes(activeItem.label) ? (
