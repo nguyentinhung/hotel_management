@@ -3,7 +3,7 @@ const sql = require('mssql');
 const config = {
   user: process.env.DB_USER || 'sa',
   password: process.env.DB_PASSWORD || '123',
-  server: process.env.DB_SERVER || 'localhost',
+  server: process.env.DB_SERVER || 'LAPTOP-FF5K1DE4',
   database: process.env.DB_NAME || 'hotel_management',
   port: Number(process.env.DB_PORT || 1433),
   options: {

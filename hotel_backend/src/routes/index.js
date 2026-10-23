@@ -17,6 +17,7 @@ const { getAdminStatistics } = require('../controllers/statisticsController');
 const promotionController = require('../controllers/promotionController');
 const amenityController = require('../controllers/amenityController');
 const roomTypeController = require('../controllers/roomTypeController');
+const equipmentItemController = require('../controllers/equipmentItemController');
 
 const router = express.Router();
 const vnpayEnabled = String(process.env.VNPAY_ENABLED || '').toLowerCase() === 'true';
@@ -62,6 +63,11 @@ router.get('/home', getHomeData);
 router.get('/room-types', getRoomTypes);
 router.get('/room-types/:roomTypeId', getRoomTypeDetails);
 router.get('/admin/amenities', requireAdmin, amenityController.getAdminAmenities);
+router.get('/admin/equipment-items', requireAdmin, equipmentItemController.getEquipmentItems);
+router.get('/admin/equipment-items/:id', requireAdmin, equipmentItemController.getEquipmentItemById);
+router.post('/admin/equipment-items', requireAdmin, equipmentItemController.createEquipmentItem);
+router.put('/admin/equipment-items/:id', requireAdmin, equipmentItemController.updateEquipmentItem);
+router.delete('/admin/equipment-items/:id', requireAdmin, equipmentItemController.deleteEquipmentItem);
 
 router.post('/room-types', requireAdmin, roomTypeController.createRoomType);
 router.put('/room-types/:roomTypeId', requireAdmin, roomTypeController.updateRoomType);

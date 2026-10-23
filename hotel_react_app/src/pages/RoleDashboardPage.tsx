@@ -25,6 +25,7 @@ import dashboardBannerImage from '../assets/lumiere-hero.png';
 import lotusLogo from '../assets/lumiere-lotus.png';
 import ReportsStatisticsPage from './ReportsStatisticsPage';
 import ReviewListPage from './ReviewListPage';
+import EquipmentListPage from './EquipmentListPage';
 
 /**
  * ============================================================================
@@ -56,6 +57,7 @@ const dashboardConfig: Record<
       { label: 'Promotion Management', description: 'Manage promotions.' },
       { label: 'Profile', description: 'View and update your profile.' },
       { label: 'Change Password', description: 'Update your password.' },
+      { label: 'Equipment Management', description: 'Manage the shared equipment checklist.' },
     ],
   },
   RECEPTIONIST: {
@@ -741,7 +743,7 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
       { label: 'Room Management', moduleIndex: 0, icon: 'bedDouble' }, { label: 'Room Type Management', moduleIndex: 1, icon: 'room' },
     ] },
     { title: 'DỊCH VỤ & VẬN HÀNH', items: [
-      { label: 'Service Management', moduleIndex: 2, icon: 'service' }, { label: 'Cleaning Task', icon: 'cleaning' }, { label: 'Equipment Management', icon: 'equipment' }, { label: 'Equipment Inspection', icon: 'maintenance' },
+      { label: 'Service Management', moduleIndex: 2, icon: 'service' }, { label: 'Cleaning Task', icon: 'cleaning' }, { label: 'Equipment Management', moduleIndex: 8, icon: 'equipment' }, { label: 'Equipment Inspection', icon: 'maintenance' },
     ] },
     { title: 'KHÁCH HÀNG', items: [
       { label: 'Customer Management', icon: 'customer' }, { label: 'Promotion Management', moduleIndex: 5, icon: 'tag' }, { label: 'Review Management', icon: 'review' },
@@ -906,6 +908,8 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
             <RoomStatusPanel role={currentRole} />
           ) : currentRole === 'ADMIN' && activeItem.label === 'Service Management' ? (
             <ServiceListPage role={currentRole} />
+          ) : currentRole === 'ADMIN' && activeItem.label === 'Equipment Management' ? (
+            <div className="module-content"><EquipmentListPage /></div>
           ) : currentRole === 'ADMIN' && activeItem.label === 'Reports & Statistics' ? (
             <ReportsStatisticsPage />
           ) : currentRole === 'RECEPTIONIST' && activeItem.label === config.nav[5].label ? (

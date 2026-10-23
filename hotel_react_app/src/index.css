@@ -9841,3 +9841,26 @@ a:focus-visible {
 .review-form textarea, #review-booking { width: 100%; }
 .review-page { display: grid; gap: 14px; }
 @media (max-width: 600px) { .review-management-heading { align-items: flex-start; flex-direction: column; } }
+
+.dashboard-shell-unified .equipment-table { min-width: 760px; table-layout: fixed; }
+.dashboard-shell-unified .equipment-table th:nth-child(1),
+.dashboard-shell-unified .equipment-table td:nth-child(1) { width: 120px; text-align: center; }
+.dashboard-shell-unified .equipment-table th:nth-child(2) { width: 48%; }
+.dashboard-shell-unified .equipment-table th:nth-child(3),
+.dashboard-shell-unified .equipment-table td:nth-child(3) { width: 160px; white-space: nowrap; }
+.dashboard-shell-unified .equipment-table th:last-child,
+.dashboard-shell-unified .equipment-table td:last-child { width: 120px; text-align: center; white-space: nowrap; }
+.dashboard-shell-unified .equipment-table th:last-child { text-align: center; }
+.dashboard-shell-unified .equipment-row-actions { justify-content: center; }
+.dashboard-shell-unified .equipment-table .equipment-name-cell { overflow-wrap: anywhere; }
+.dashboard-shell-unified .equipment-modal { width: min(100%, 680px); }
+.dashboard-shell-unified .equipment-details-modal { width: min(100%, 760px); }
+.dashboard-shell-unified .equipment-form-grid { grid-template-columns: minmax(0, 1fr); }
+.dashboard-shell-unified .equipment-details-content { gap: 18px; }
+.dashboard-shell-unified .equipment-details-status { display: grid; justify-items: start; gap: 6px; }
+.dashboard-shell-unified .equipment-details-facts { grid-template-columns: minmax(0, 1fr); }
+.dashboard-shell-unified .equipment-details-facts > div { min-height: 64px; }
+.dashboard-shell-unified .equipment-details-actions { margin-top: 20px; }
+@media (max-width: 600px) {
+  .dashboard-shell-unified .equipment-modal { padding: 20px; }
+}
