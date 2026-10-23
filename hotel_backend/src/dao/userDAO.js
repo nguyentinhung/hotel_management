@@ -185,6 +185,36 @@ async function updateUser(id, data) {
   return userModel.fromRow(result.recordset[0] ?? null);
 }
 
+async function lockUser(id) {
+  const pool = await getPool();
+
+  const result = await pool.request()
+    .input('id', sql.Int, id)
+    .query(`
+      UPDATE users
+      SET status = 'LOCKED'
+      OUTPUT INSERTED.id
+      WHERE id = @id;
+    `);
+
+  return result.recordset.length > 0;
+}
+
+async function unlockUser(id) {
+  const pool = await getPool();
+
+  const result = await pool.request()
+    .input('id', sql.Int, id)
+    .query(`
+      UPDATE users
+      SET status = 'ACTIVE'
+      OUTPUT INSERTED.id
+      WHERE id = @id;
+    `);
+
+  return result.recordset.length > 0;
+}
+
 module.exports = {
   getUserList,
   getUserById,
@@ -194,4 +224,6 @@ module.exports = {
   getUserByEmailExceptId,
   getUserByPhoneExceptId,
   updateUser,
+  lockUser,
+  unlockUser,
 };

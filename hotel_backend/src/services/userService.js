@@ -153,9 +153,79 @@ async function updateUser(id, data) {
     });
 }
 
+const lockUser = async (id) => {
+    const userId = Number(id);
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+        const error = new Error('ID người dùng không hợp lệ.');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const existingUser = await userDao.getUserById(userId);
+
+    if (!existingUser) {
+        const error = new Error('Không tìm thấy người dùng.');
+        error.statusCode = 404;
+        throw error;
+    }
+
+    if (existingUser.status === 'LOCKED') {
+        const error = new Error('Tài khoản đã bị khóa.');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const updated = await userDao.lockUser(userId);
+
+    if (!updated) {
+        const error = new Error('Không thể khóa tài khoản.');
+        error.statusCode = 500;
+        throw error;
+    }
+
+    return { id: userId, status: 'LOCKED' };
+};
+
+const unlockUser = async (id) => {
+    const userId = Number(id);
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+        const error = new Error('ID người dùng không hợp lệ.');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const existingUser = await userDao.getUserById(userId);
+
+    if (!existingUser) {
+        const error = new Error('Không tìm thấy người dùng.');
+        error.statusCode = 404;
+        throw error;
+    }
+
+    if (existingUser.status === 'ACTIVE') {
+        const error = new Error('Tài khoản đang hoạt động.');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const updated = await userDao.unlockUser(userId);
+
+    if (!updated) {
+        const error = new Error('Không thể mở khóa tài khoản.');
+        error.statusCode = 500;
+        throw error;
+    }
+
+    return { id: userId, status: 'ACTIVE' };
+};
+
 module.exports = {
     getUserList,
     getUserById,
     createUser,
     updateUser,
+    lockUser,
+    unlockUser,
 };

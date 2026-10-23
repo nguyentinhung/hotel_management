@@ -3,6 +3,11 @@ import { getUserList, type User } from '../services/userService';
 import UserDetailsModal from '../components/UserDetailsModal';
 import CreateUserModal from '../components/CreateUserModal';
 import UpdateUserModal from '../components/UpdateUserModal';
+import {
+    lockUser,
+    unlockUser,
+} from '../services/userService';
+
 export default function UserManagementPage() {
     const [users, setUsers] = useState<User[]>([]);
     const [loading, setLoading] = useState(true);
@@ -36,6 +41,63 @@ export default function UserManagementPage() {
             );
         } finally {
             setLoading(false);
+        }
+    };
+
+    const handleToggleUserStatus = async (user: User) => {
+        console.log('Đã bấm Lock/Unlock:', user.id);
+
+        // Dùng cùng key với loadUsers()
+        const token = localStorage.getItem('accessToken');
+
+        if (!token) {
+            setError('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+            return;
+        }
+
+        // Hệ thống hiện đang hiển thị trạng thái khóa là BLOCKED
+        const isLocked =
+            user.status?.toUpperCase() === 'BLOCKED' ||
+            user.status?.toUpperCase() === 'LOCKED';
+
+        const confirmed = window.confirm(
+            isLocked
+                ? `Bạn có chắc muốn mở khóa tài khoản ${user.full_name}?`
+                : `Bạn có chắc muốn khóa tài khoản ${user.full_name}?`
+        );
+
+        if (!confirmed) return;
+
+        try {
+            setError('');
+            setSuccessMessage('');
+
+            console.log('Đang gửi yêu cầu API...', {
+                id: user.id,
+                action: isLocked ? 'unlock' : 'lock',
+            });
+
+            if (isLocked) {
+                await unlockUser(token, user.id);
+            } else {
+                await lockUser(token, user.id);
+            }
+
+            setSuccessMessage(
+                isLocked
+                    ? 'Mở khóa tài khoản thành công.'
+                    : 'Khóa tài khoản thành công.'
+            );
+
+            await loadUsers();
+        } catch (error) {
+            console.error('Lỗi Lock/Unlock User:', error);
+
+            setError(
+                error instanceof Error
+                    ? error.message
+                    : 'Không thể cập nhật trạng thái tài khoản.'
+            );
         }
     };
 
@@ -237,6 +299,12 @@ export default function UserManagementPage() {
                                             onClick={() => setEditingUser(user)}
                                         >
                                             Sửa
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => handleToggleUserStatus(user)}
+                                        >
+                                            {user.status === 'LOCKED' ? 'Unlock User' : 'Lock User'}
                                         </button>
                                     </td>
                                 </tr>

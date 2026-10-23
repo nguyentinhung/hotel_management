@@ -52,3 +52,17 @@ export const updateUser = (
         data,
         token,
     );
+
+export const lockUser = (token: string, id: number) =>
+    api.patch<{ message: string; user: User }>(
+        `/api/admin/users/${id}/lock`,
+        {},
+        token,
+    );
+
+export const unlockUser = (token: string, id: number) =>
+    api.patch<{ message: string; user: User }>(
+        `/api/admin/users/${id}/unlock`,
+        {},
+        token,
+    );

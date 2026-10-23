@@ -85,9 +85,41 @@ async function updateUser(req, res) {
     }
 }
 
+const lockUser = async (req, res) => {
+    try {
+        const user = await userService.lockUser(req.params.id);
+
+        return res.status(200).json({
+            message: 'Khóa tài khoản thành công.',
+            user,
+        });
+    } catch (error) {
+        return res.status(error.statusCode || 500).json({
+            message: error.message || 'Không thể khóa tài khoản.',
+        });
+    }
+};
+
+const unlockUser = async (req, res) => {
+    try {
+        const user = await userService.unlockUser(req.params.id);
+
+        return res.status(200).json({
+            message: 'Mở khóa tài khoản thành công.',
+            user,
+        });
+    } catch (error) {
+        return res.status(error.statusCode || 500).json({
+            message: error.message || 'Không thể mở khóa tài khoản.',
+        });
+    }
+};
+
 module.exports = {
     getUserList,
     getUserDetails,
     createUser,
     updateUser,
+    lockUser,
+    unlockUser,
 };
