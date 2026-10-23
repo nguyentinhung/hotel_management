@@ -2100,6 +2100,64 @@ a:focus-visible {
   line-height: 1.7;
 }
 
+.staff-management-toolbar,
+.staff-management-toolbar form,
+.staff-management-actions,
+.staff-detail-dialog footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.staff-management-toolbar { justify-content: space-between; }
+.staff-management-toolbar form { flex: 1; }
+.staff-management-toolbar input,
+.staff-detail-form input,
+.staff-detail-form select {
+  min-height: 42px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--primary);
+  font: inherit;
+}
+.staff-management-toolbar input { flex: 1; }
+.staff-management-actions { flex-wrap: wrap; }
+.staff-management-error { color: #b42318 !important; }
+.staff-detail-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(9, 32, 33, .52);
+}
+.staff-detail-dialog {
+  width: min(100%, 560px);
+  max-height: min(90vh, 760px);
+  overflow: auto;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .2);
+}
+.staff-detail-dialog > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.staff-detail-dialog h2 { margin: 0; color: var(--primary); font-size: 1.25rem; }
+.staff-detail-dialog > header button { border: 0; background: transparent; color: var(--primary); font-size: 1.7rem; cursor: pointer; }
+.staff-detail-list { display: grid; grid-template-columns: 150px 1fr; gap: 12px; margin: 0 0 22px; }
+.staff-detail-list dt { color: var(--muted); }
+.staff-detail-list dd { margin: 0; color: var(--primary); font-weight: 600; overflow-wrap: anywhere; }
+.staff-detail-form { display: grid; gap: 14px; }
+.staff-detail-form label { display: grid; gap: 6px; color: var(--primary); font-weight: 600; }
+.staff-detail-dialog footer { justify-content: flex-end; margin-top: 20px; }
+@media (max-width: 600px) {
+  .staff-management-toolbar, .staff-management-toolbar form { align-items: stretch; flex-direction: column; }
+  .staff-detail-list { grid-template-columns: 1fr; gap: 5px; }
+  .staff-detail-list dd { margin-bottom: 9px; }
+}
+
 .customer-profile-card h2 { margin: 0; color: var(--primary); font-size: 1.2rem; }
 .customer-profile-card dl { display: grid; gap: 12px; margin: 0; }
 .customer-profile-card dl > div { display: grid; gap: 4px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }

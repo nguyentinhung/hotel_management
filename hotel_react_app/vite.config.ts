@@ -13,6 +13,10 @@ export default defineConfig({
         target: 'http://127.0.0.1:5001',
         changeOrigin: true,
       },
+      '/api/payments/vnpay/return': {
+        target: 'http://127.0.0.1:5001',
+        changeOrigin: true,
+      },
       // Keep ordinary app API requests working on the local frontend, but do
       // not expose the backend API through the public ngrok frontend tunnel.
       '/api': {

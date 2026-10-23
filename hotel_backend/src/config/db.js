@@ -202,6 +202,20 @@ async function ensureGuestIdCardOptional() {
   `);
 }
 
+async function ensureGuestIdCardImageColumns() {
+  const currentPool = await getPool();
+  await currentPool.request().query(`
+    IF OBJECT_ID(N'dbo.booking_guests', N'U') IS NULL
+      THROW 50009, 'Table dbo.booking_guests was not found in the current database.', 1;
+
+    IF COL_LENGTH(N'dbo.booking_guests', N'id_card_image') IS NULL
+      ALTER TABLE dbo.booking_guests ADD id_card_image VARBINARY(MAX) NULL;
+
+    IF COL_LENGTH(N'dbo.booking_guests', N'id_card_image_mime_type') IS NULL
+      ALTER TABLE dbo.booking_guests ADD id_card_image_mime_type VARCHAR(50) NULL;
+  `);
+}
+
 async function ensureInvoiceCreatorColumn() {
   const currentPool = await getPool();
   await currentPool.request().query(`
@@ -263,14 +277,35 @@ async function ensureReviewBookingColumn() {
   `);
 }
 
+async function ensurePaymentMethodConstraint() {
+  const currentPool = await getPool();
+  await currentPool.request().query(`
+    IF OBJECT_ID(N'dbo.payments', N'U') IS NOT NULL
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM sys.check_constraints
+        WHERE parent_object_id = OBJECT_ID(N'dbo.payments') AND name = N'chk_payment_method'
+      )
+      BEGIN
+        ALTER TABLE dbo.payments DROP CONSTRAINT chk_payment_method;
+      END;
+
+      ALTER TABLE dbo.payments WITH CHECK ADD CONSTRAINT chk_payment_method
+      CHECK (method IN ('VNPAY', 'SIMULATED', 'CASH', 'CARD'));
+    END;
+  `);
+}
+
 module.exports = {
   sql,
   getPool,
   ensureAuthTables,
   ensureBookingStatusConstraint,
   ensureGuestIdCardOptional,
+  ensureGuestIdCardImageColumns,
   ensureInvoiceCreatorColumn,
   ensureBookingPromotionColumns,
   ensureBookingCancellationReason,
   ensureReviewBookingColumn,
+  ensurePaymentMethodConstraint,
 };

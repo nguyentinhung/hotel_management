@@ -32,11 +32,13 @@ export const checkRoomAvailability = async (
 
 export const createWalkInBooking = async (
   payload: WalkInBookingPayload,
+  idCardImage: File,
 ): Promise<{ success: boolean; message: string; booking: WalkInBookingResponse }> => {
-  return api.post<{ success: boolean; message: string; booking: WalkInBookingResponse }>(
-    '/api/bookings/walk-in',
-    payload,
-    localStorage.getItem('accessToken') || undefined,
+  const formData = new FormData();
+  formData.append('payload', JSON.stringify(payload));
+  formData.append('id_card_image', idCardImage);
+  return api.postFormWithAuth<{ success: boolean; message: string; booking: WalkInBookingResponse }>(
+    '/api/bookings/walk-in', formData, localStorage.getItem('accessToken') || undefined,
   );
 };
 
@@ -54,13 +56,11 @@ export const createCustomerBooking = async (
 export const checkInBooking = async (
   bookingId: string | number,
   accessToken: string,
-  idCardNumber?: string,
+  idCardImage?: File,
 ): Promise<{ success: boolean; message: string }> => {
-  return api.post<{ success: boolean; message: string }>(
-    `/api/bookings/${bookingId}/check-in`,
-    idCardNumber ? { id_card_number: idCardNumber } : {},
-    accessToken,
-  );
+  const formData = new FormData();
+  if (idCardImage) formData.append('id_card_image', idCardImage);
+  return api.postFormWithAuth<{ success: boolean; message: string }>(`/api/bookings/${bookingId}/check-in`, formData, accessToken);
 };
 
 export const checkOutBooking = async (bookingId: string | number, accessToken: string) =>

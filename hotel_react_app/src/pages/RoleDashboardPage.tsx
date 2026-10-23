@@ -25,6 +25,7 @@ import dashboardBannerImage from '../assets/lumiere-hero.png';
 import lotusLogo from '../assets/lumiere-lotus.png';
 import ReportsStatisticsPage from './ReportsStatisticsPage';
 import ReviewListPage from './ReviewListPage';
+import StaffManagementPage from './StaffManagementPage';
 
 /**
  * ============================================================================
@@ -689,7 +690,11 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
         ? { label: 'Invoice Management', description: 'View the invoice list and payment status.' }
         : activeModule === 'Review Management'
           ? { label: 'Review Management', description: 'Review customer ratings and booking feedback.' }
-          : config.nav[0]);
+          : activeModule === 'Promotion Management'
+            ? { label: 'Promotion Management', description: 'Xem danh sách và chi tiết các chương trình khuyến mãi.' }
+            : activeModule === 'Staff Management'
+              ? { label: 'Staff Management', description: 'Xem danh sách, chi tiết và quản lý thông tin nhân viên.' }
+            : config.nav[0]);
 
   const pageTitle = currentRole === 'RECEPTIONIST' && activeItem.label === config.nav[3].label
     ? 'Payment Management'
@@ -730,7 +735,6 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
       { label: 'Review Management', icon: 'review' },
     ] },
     { title: 'NHÂN SỰ', items: [
-      { label: 'Staff Management', icon: 'staff' },
       { label: 'Profile', moduleIndex: 7, icon: 'profile' },
       { label: 'Change Password', moduleIndex: 8, icon: 'key' },
     ] },
@@ -799,15 +803,31 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
                 const invoiceModule = item.label === 'Invoice Management';
                 const reportsModule = item.label === 'Reports & Statistics';
                 const reviewModule = item.label === 'Review Management';
-                const isActive = Boolean((module && module === activeItem.label) || (invoiceModule && activeItem.label === 'Invoice Management') || (reportsModule && activeItem.label === 'Reports & Statistics') || (reviewModule && activeItem.label === 'Review Management'));
-                const isDisabled = !module && !invoiceModule && !reportsModule && !reviewModule;
+                const promotionModule = item.label === 'Promotion Management';
+                const staffModule = item.label === 'Staff Management';
+                const isActive = Boolean(
+                  (module && module === activeItem.label) ||
+                  (invoiceModule && activeItem.label === 'Invoice Management') ||
+                  (reportsModule && activeItem.label === 'Reports & Statistics') ||
+                  (reviewModule && activeItem.label === 'Review Management') ||
+                  (promotionModule && activeItem.label === 'Promotion Management') ||
+                  (staffModule && activeItem.label === 'Staff Management')
+                );
+                const isDisabled = !module && !invoiceModule && !reportsModule && !reviewModule && !promotionModule && !staffModule;
                 return <button
                   key={item.label}
                   type="button"
                   className={`nav-item${isActive ? ' active' : ''}${isDisabled ? ' nav-item-disabled' : ''}`}
                   aria-disabled={isDisabled}
                   title={isDisabled ? 'This section is not available yet' : undefined}
-                  onClick={() => { if (module) setActiveModule(module); else if (invoiceModule) setActiveModule('Invoice Management'); else if (reportsModule) setActiveModule('Reports & Statistics'); else if (reviewModule) setActiveModule('Review Management'); }}
+                  onClick={() => {
+                    if (module) setActiveModule(module);
+                    else if (invoiceModule) setActiveModule('Invoice Management');
+                    else if (reportsModule) setActiveModule('Reports & Statistics');
+                    else if (reviewModule) setActiveModule('Review Management');
+                    else if (promotionModule) setActiveModule('Promotion Management');
+                    else if (staffModule) setActiveModule('Staff Management');
+                  }}
                 >
                   <span className="dashboard-nav-icon"><DashboardNavIcon name={item.icon} /></span>
                   <span>{item.label}</span>
@@ -887,10 +907,12 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
             <ReceptionRoomBooking mode="checkin" />
           ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Check-out' ? (
             <ReceptionRoomBooking mode="checkout" />
-          ) : currentRole === 'ADMIN' && activeItem.label === 'Promotion Management' ? (
-            <div className="module-content"><PromotionListPage role="ADMIN" /></div>
+          ) : ['ADMIN', 'RECEPTIONIST'].includes(currentRole) && activeItem.label === 'Promotion Management' ? (
+            <div className="module-content"><PromotionListPage role={currentRole} /></div>
           ) : ['ADMIN', 'RECEPTIONIST', 'CUSTOMER'].includes(currentRole) && ['Review Management', 'Review'].includes(activeItem.label) ? (
             <ReviewListPage role={currentRole} />
+          ) : ['ADMIN', 'RECEPTIONIST'].includes(currentRole) && activeItem.label === 'Staff Management' ? (
+            <StaffManagementPage canEdit={currentRole === 'ADMIN'} />
           ) : currentRole === 'CUSTOMER' && activeItem.label === 'My Bookings' ? (
 
             <ReceptionBookingHistory customerMode />

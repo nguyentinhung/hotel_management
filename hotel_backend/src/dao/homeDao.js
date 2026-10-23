@@ -1,4 +1,8 @@
 const { sql, getPool } = require('../config/db');
+const RoomTypeModel = require('../models/roomTypeModel');
+const PromotionModel = require('../models/promotionModel');
+const ServiceModel = require('../models/serviceModel');
+const ReviewModel = require('../models/reviewModel');
 
 async function getRoomTypes() {
   const pool = await getPool();
@@ -42,7 +46,7 @@ async function getRoomTypes() {
     ORDER BY rt.id;
   `);
 
-  return result.recordset;
+  return RoomTypeModel.fromRows(result.recordset);
 }
 
 async function getRoomTypeById(roomTypeId) {
@@ -106,7 +110,7 @@ async function getRoomTypeById(roomTypeId) {
   ]);
 
   const roomType = roomTypeResult.recordset[0];
-  return {
+  return RoomTypeModel.fromRow({
     ...roomType,
     base_price: Number(roomType.base_price ?? 0),
     average_rating: roomType.average_rating == null ? null : Number(roomType.average_rating),
@@ -115,7 +119,7 @@ async function getRoomTypeById(roomTypeId) {
     amenity_ids: String(roomType.amenity_ids || '').split(',').map(Number).filter(Number.isInteger),
     images: imagesResult.recordset,
     reviews: reviewsResult.recordset,
-  };
+  });
 }
 
 async function getPromotions() {
@@ -128,7 +132,7 @@ async function getPromotions() {
     ORDER BY id;
   `);
 
-  return result.recordset;
+  return PromotionModel.fromRows(result.recordset);
 }
 
 async function getServices(activeOnly = true) {
@@ -146,7 +150,7 @@ async function getServices(activeOnly = true) {
   query += ` ORDER BY id;`;
 
   const result = await request.query(query);
-  return result.recordset;
+  return ServiceModel.fromRows(result.recordset);
 }
 
 async function getActiveServiceById(id) {
@@ -154,7 +158,7 @@ async function getActiveServiceById(id) {
   const result = await pool.request()
     .input('id', sql.Int, id)
     .query(`SELECT id, name, description, price, unit, is_active, booking_policy FROM services WHERE id = @id AND is_active = 1 AND is_deleted = 0;`);
-  return result.recordset[0] || null;
+  return ServiceModel.fromRow(result.recordset[0]);
 }
 
 async function getReviews() {
@@ -175,7 +179,7 @@ async function getReviews() {
     ORDER BY r.id DESC;
   `);
 
-  return result.recordset;
+  return ReviewModel.fromRows(result.recordset);
 }
 
 module.exports = {

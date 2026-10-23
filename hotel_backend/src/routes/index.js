@@ -7,7 +7,8 @@ const { getRoomList: getRoomListHandler, getRoomDetails: getRoomDetailsHandler, 
 const { createCustomerBookingHandler, checkInBookingHandler, createWalkInBookingHandler, getRecentBookingsHandler, getBookingHistoryHandler, updateBookingHandler, cancelBookingHandler, getActiveBookingsHandler, checkOutBookingHandler, createReceptionInvoiceHandler, finishRoomCleaningHandler, reportRoomMaintenanceHandler, getRoomMaintenanceReportsHandler, resolveRoomMaintenanceReportHandler, getRoomStatusesHandler, getAssignableRoomsHandler, assignRoomHandler } = require('../controllers/bookingController');
 const serviceController = require('../controllers/serviceController');
 const { requireCustomer, requireReceptionist, requirePaymentStaff, requirePaymentActor, requireReviewStaff, requireProfileAccess, requireChangePassword } = require('../utils/middleware/customerAuth');
-const { requireAdmin, requireRoomListAccess } = require('../utils/middleware/roleMiddleware');
+const { requireAdmin, requireRoomListAccess, requirePromotionReadAccess, requireStaffReadAccess } = require('../utils/middleware/roleMiddleware');
+const staffController = require('../controllers/staffController');
 const reviewController = require('../controllers/reviewController');
 const { getProfile, updateProfile } = require('../controllers/profileController');
 const { createPayment, getPaymentList, getCustomerPaymentList, getInvoiceList, getInvoiceDetail, getPaymentStatusRequest, confirmPaymentRequest, simulateDepositPaymentRequest } = require('../controllers/paymentController');
@@ -30,6 +31,13 @@ const upload = multer({
     return cb(new Error('Chỉ chấp nhận ảnh JPG, PNG, WEBP.'));
   },
 });
+const uploadIdCardImage = (req, res, next) => upload.single('id_card_image')(req, res, (error) => {
+  if (!error) return next();
+  const message = error.code === 'LIMIT_FILE_SIZE'
+    ? 'Ảnh CCCD không được vượt quá 5 MB.'
+    : error.message || 'Không thể nhận ảnh CCCD.';
+  return res.status(400).json({ success: false, message });
+});
 
 router.get('/health', (req, res) => {
   res.json({ ok: true, message: 'Hotel backend is running' });
@@ -38,6 +46,10 @@ router.get('/health', (req, res) => {
 router.get('/admin/statistics', requireAdmin, getAdminStatistics);
 router.get('/profile', requireProfileAccess, getProfile);
 router.put('/profile', requireProfileAccess, updateProfile);
+router.get('/staff', requireStaffReadAccess, staffController.getStaffList);
+router.get('/staff/:staffId', requireStaffReadAccess, staffController.getStaffDetails);
+router.put('/staff/:staffId', requireAdmin, staffController.updateStaffInfo);
+router.patch('/staff/:staffId/status', requireAdmin, staffController.updateStaffStatus);
 
 // --- Authentication APIs ---
 // Đăng ký tài khoản mới cho khách hàng
@@ -68,8 +80,10 @@ router.put('/room-types/:roomTypeId', requireAdmin, roomTypeController.updateRoo
 router.delete('/room-types/:roomTypeId', requireAdmin, roomTypeController.deleteRoomType);
 router.get('/promotions/active', getPromotions);
 router.post('/promotions/validate', promotionController.validatePromotion);
-router.get('/admin/promotions', requireAdmin, promotionController.getPromotions);
-router.get('/admin/promotions/:id', requireAdmin, promotionController.getPromotionById);
+router.get('/promotions', requirePromotionReadAccess, promotionController.getPromotions);
+router.get('/promotions/:id', requirePromotionReadAccess, promotionController.getPromotionById);
+router.get('/admin/promotions', requirePromotionReadAccess, promotionController.getPromotions);
+router.get('/admin/promotions/:id', requirePromotionReadAccess, promotionController.getPromotionById);
 router.post('/admin/promotions', requireAdmin, promotionController.createPromotion);
 router.put('/admin/promotions/:id', requireAdmin, promotionController.updatePromotion);
 router.delete('/admin/promotions/:id', requireAdmin, promotionController.deletePromotion);
@@ -101,13 +115,13 @@ router.get('/rooms/availability', checkAvailability);
 router.get('/rooms/available-list', getAvailableRooms);
 
 // 3. Lễ tân tạo đơn đặt phòng trực tiếp tại quầy (walk-in) cho khách
-router.post('/bookings/walk-in', requireReceptionist, createWalkInBookingHandler);
+router.post('/bookings/walk-in', requireReceptionist, uploadIdCardImage, createWalkInBookingHandler);
 
 // Khách hàng đã đăng nhập tạo booking online
 router.post('/bookings/customer', createCustomerBookingHandler);
 router.patch('/bookings/:bookingId', updateBookingHandler);
 router.post('/bookings/:bookingId/cancel', cancelBookingHandler);
-router.post('/bookings/:bookingId/check-in', checkInBookingHandler);
+router.post('/bookings/:bookingId/check-in', requireReceptionist, uploadIdCardImage, checkInBookingHandler);
 router.post('/bookings/:bookingId/check-out', checkOutBookingHandler);
 router.post('/bookings/:bookingId/invoice', createReceptionInvoiceHandler);
 router.get('/bookings/:bookingId/assignable-rooms', getAssignableRoomsHandler);

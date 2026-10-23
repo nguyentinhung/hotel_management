@@ -250,7 +250,7 @@ export default function CustomerBookingPage() {
 
   if (booking) {
     const requiredDepositAmount = booking.required_deposit_amount
-      ?? Math.ceil(Number(booking.price_per_night || 0) * Number(booking.nights || 0) * 0.3);
+      ?? Math.ceil(Number(booking.total_amount || 0) * 0.3);
     return (
       <main className="container section-block">
         <div className="empty-state-box">
@@ -259,7 +259,7 @@ export default function CustomerBookingPage() {
           <p>{booking.room_type_name}{booking.room_number ? ` · Phòng ${booking.room_number}` : ' · Số phòng sẽ được lễ tân sắp xếp trước ngày nhận phòng'}</p>
           <p>{booking.check_in_date} đến {booking.check_out_date} · {booking.nights} đêm</p>
           <p>Tổng tiền: <strong>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(booking.total_amount)}</strong></p>
-          <p>Khoản cọc tối thiểu (30% tiền phòng): <strong>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(requiredDepositAmount)}</strong></p>
+          <p>Khoản cọc tối thiểu (30% tổng tiền): <strong>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(requiredDepositAmount)}</strong></p>
           <p>{vnpayEnabled
             ? 'Booking đã được tạo. Vui lòng hoàn tất cọc VNPay để xác nhận thanh toán.'
             : 'Booking đã được tạo. Đang mở màn hình mô phỏng đã nhận tiền cọc bằng tiền mặt; không kết nối VNPay.'}</p>

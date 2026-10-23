@@ -82,7 +82,7 @@ async function makeReceptionCheckoutPayment({ bookingId, method, ipAddress, crea
   const paymentCode = PaymentModel.generateCode();
   const payment = await createReceptionCheckoutPayment({ bookingId, paymentCode, method: normalizedMethod, createdByUserId });
   return normalizedMethod === 'VNPAY' && payment.amount > 0
-    ? { ...payment, payment_url: buildVnpayPaymentUrl({ paymentCode, amount: payment.amount, ipAddress }) }
+    ? { ...payment, payment_url: buildVnpayPaymentUrl({ paymentCode: payment.payment_code, amount: payment.amount, ipAddress }) }
     : payment;
 }
 
@@ -136,7 +136,6 @@ async function handleVnpayCallback(params) {
     paymentCode,
     amountMinor,
     transactionNo: params.vnp_TransactionNo,
-    payDate: params.vnp_PayDate,
     succeeded,
   });
   return { ...result, paymentCode, succeeded };

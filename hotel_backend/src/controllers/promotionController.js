@@ -29,8 +29,7 @@ async function validatePromotion(req, res) {
 
 async function getPromotionById(req, res) {
   try {
-    const activeOnly = req.baseUrl === '/api/promotions';
-    const promotion = await promotionService.getPromotionById(req.params.id, activeOnly);
+    const promotion = await promotionService.getPromotionById(req.params.id, false);
     return res.json(promotion);
   } catch (error) {
     return res.status(error.message === 'Promotion not found.' ? 404 : 500).json({ message: error.message });

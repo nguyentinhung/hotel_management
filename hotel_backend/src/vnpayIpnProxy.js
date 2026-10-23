@@ -1,8 +1,11 @@
 const http = require('http');
 
-// Expose only VNPay's signed IPN callback to the public tunnel. Do not point
+// Expose only VNPay's signed callbacks to the public tunnel. Do not point
 // ngrok directly at the full application server.
-const allowedPath = '/api/payments/vnpay/ipn';
+const allowedPaths = new Set([
+  '/api/payments/vnpay/ipn',
+  '/api/payments/vnpay/return',
+]);
 const backendOrigin = `http://127.0.0.1:${Number(process.env.PORT || 5000)}`;
 const proxyPort = Number(process.env.VNPAY_IPN_PROXY_PORT || 5001);
 
@@ -16,14 +19,14 @@ const server = http.createServer(async (request, response) => {
     return;
   }
 
-  if (request.method !== 'GET' || requestUrl.pathname !== allowedPath || requestUrl.search.length > 8192) {
+  if (request.method !== 'GET' || !allowedPaths.has(requestUrl.pathname) || requestUrl.search.length > 8192) {
     response.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
     response.end(JSON.stringify({ message: 'Not found.' }));
     return;
   }
 
   try {
-    const upstream = await fetch(`${backendOrigin}${allowedPath}${requestUrl.search}`, {
+    const upstream = await fetch(`${backendOrigin}${requestUrl.pathname}${requestUrl.search}`, {
       method: 'GET',
       signal: AbortSignal.timeout(10000),
     });
@@ -40,6 +43,6 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(proxyPort, '127.0.0.1', () => {
-  console.log(`VNPay IPN-only proxy listening on 127.0.0.1:${proxyPort}`);
+  console.log(`VNPay callback proxy listening on 127.0.0.1:${proxyPort}`);
 });
 

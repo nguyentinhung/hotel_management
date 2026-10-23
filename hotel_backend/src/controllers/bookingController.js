@@ -1,5 +1,20 @@
 const jwt = require('jsonwebtoken');
 const { createWalkInBooking, createCustomerBooking, checkInBooking, getRecentBookings, getActiveBookings, updateBooking, cancelBooking, checkOutBooking, updateRoomStatus, reportRoomMaintenance, getOpenRoomMaintenanceReports, resolveRoomMaintenanceReport, getRoomStatuses, getAssignableRooms, assignRoomToBooking } = require('../services/bookingService');
+
+function isValidIdCardImage(file) {
+  if (!file?.buffer?.length) return false;
+  const bytes = file.buffer;
+  if (file.mimetype === 'image/jpeg' || file.mimetype === 'image/jpg') {
+    return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  }
+  if (file.mimetype === 'image/png') {
+    return bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  }
+  if (file.mimetype === 'image/webp') {
+    return bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP';
+  }
+  return false;
+}
 const { makeReceptionCheckoutPayment, createReceptionInvoice } = require('../services/paymentService');
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
 const roleCodeById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
@@ -113,20 +128,23 @@ async function checkInBookingHandler(req, res) {
     return res.status(403).json({ success: false, message: 'Chỉ lễ tân mới được xác nhận check-in.' });
   }
 
-  const idCardNumber = String(req.body?.id_card_number || '').trim();
-  if (idCardNumber && !/^\d{12}$/.test(idCardNumber)) {
-    return res.status(400).json({ success: false, message: 'CCCD phải gồm đúng 12 chữ số.' });
+  if (req.file && !isValidIdCardImage(req.file)) {
+    return res.status(400).json({ success: false, message: 'Ảnh CCCD không hợp lệ. Vui lòng chọn ảnh JPG, PNG hoặc WEBP.' });
   }
 
   try {
-    const result = await checkInBooking({ bookingId: req.params.bookingId, idCardNumber });
+    const result = await checkInBooking({
+      bookingId: req.params.bookingId,
+      idCardImageBuffer: req.file?.buffer || null,
+      idCardImageMimeType: req.file?.mimetype || null,
+    });
     return res.json({ success: true, message: 'Đã xác nhận check-in thành công.', booking: result });
   } catch (error) {
     const status = /not found/i.test(error.message)
       ? 404
       : /not waiting for check-in|outside its check-in dates|assign a room|not ready for check-in|deposit payment is required/i.test(error.message)
         ? 409
-        : /valid 12-digit CCCD is required/i.test(error.message)
+        : /CCCD image is required/i.test(error.message)
           ? 400
         : 500;
     const message = /not found/i.test(error.message)
@@ -141,8 +159,8 @@ async function checkInBookingHandler(req, res) {
               ? 'Booking online chưa thanh toán đủ tiền cọc tối thiểu 30%, không thể check-in.'
             : /not ready for check-in/i.test(error.message)
               ? 'Phòng đã gán hiện chưa sẵn sàng. Vui lòng chọn phòng khác hoặc xử lý trạng thái phòng trước.'
-            : /valid 12-digit CCCD is required/i.test(error.message)
-              ? 'Booking online cần nhập CCCD gồm đúng 12 chữ số để check-in.'
+            : /CCCD image is required/i.test(error.message)
+              ? 'Vui lòng tải ảnh CCCD lên trước khi check-in booking này.'
             : 'Không thể cập nhật check-in lúc này. Vui lòng thử lại.';
     return res.status(status).json({ success: false, message });
   }
@@ -162,6 +180,15 @@ async function checkInBookingHandler(req, res) {
  */
 async function createWalkInBookingHandler(req, res) {
   try {
+    let body = req.body || {};
+    if (typeof body.payload === 'string') {
+      try { body = JSON.parse(body.payload); } catch {
+        return res.status(400).json({ success: false, message: 'Dữ liệu booking không hợp lệ.' });
+      }
+    }
+    if (!isValidIdCardImage(req.file)) {
+      return res.status(400).json({ success: false, message: 'Vui lòng tải ảnh CCCD hợp lệ (JPG, PNG hoặc WEBP, tối đa 5 MB).' });
+    }
     const {
       room_type_id,
       room_id,
@@ -179,7 +206,7 @@ async function createWalkInBookingHandler(req, res) {
       promotion_code,
       special_request,
       check_in_now,
-    } = req.body || {};
+    } = body;
 
     // 1. Kiểm tra các trường bắt buộc
     const selections = Array.isArray(room_selections) && room_selections.length
@@ -202,10 +229,6 @@ async function createWalkInBookingHandler(req, res) {
     if (!/^\d{10}$/.test(normalizedPhone)) {
       return res.status(400).json({ success: false, message: 'Số điện thoại phải gồm đúng 10 chữ số.' });
     }
-    const normalizedIdCard = String(guest_id_card || '').trim();
-    if (!/^\d{12}$/.test(normalizedIdCard)) {
-      return res.status(400).json({ success: false, message: 'CCCD phải gồm đúng 12 chữ số.' });
-    }
     const normalizedEmail = String(guest_email || '').trim();
     if (normalizedEmail && (normalizedEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(normalizedEmail))) {
       return res.status(400).json({ success: false, message: 'Vui lòng nhập email đúng định dạng, ví dụ khach@example.com.' });
@@ -227,7 +250,8 @@ async function createWalkInBookingHandler(req, res) {
       guestFullName: guest_full_name,
       guestPhone: normalizedPhone,
       guestEmail: normalizedEmail || null,
-      guestIdCard: normalizedIdCard,
+      guestIdCardImage: req.file.buffer,
+      guestIdCardImageMimeType: req.file.mimetype,
       depositAmount: Number(deposit_amount || 0),
       serviceSelections: services.map((selection) => ({ serviceId: Number(selection.service_id), quantity: Number(selection.quantity) })),
       promotionCode: promotion_code,
@@ -427,8 +451,12 @@ async function checkOutBookingHandler(req, res) {
     });
   } catch (error) {
     if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
-    const notFound = /not found/i.test(error.message);
-    return res.status(notFound ? 404 : 409).json({ success: false, message: notFound ? 'Không tìm thấy booking.' : 'Booking này chưa check-in hoặc không thể check-out.' });
+    if (/not found/i.test(error.message)) return res.status(404).json({ success: false, message: 'Không tìm thấy booking.' });
+    if (/BOOKING_NOT_CHECKED_IN|chưa check-in/i.test(error.message)) {
+      return res.status(409).json({ success: false, message: 'Booking này chưa check-in hoặc không thể check-out.' });
+    }
+    console.error('Check-out booking error:', error);
+    return res.status(error.status || 500).json({ success: false, message: error.message || 'Không thể thực hiện check-out.' });
   }
 }
 

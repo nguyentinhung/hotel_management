@@ -1,5 +1,6 @@
 const { sql, getPool } = require('../config/db');
 const RoomModel = require('../models/roomModel');
+const RoomAvailabilityModel = require('../models/roomAvailabilityModel');
 
 function quoteSqlIdentifier(identifier) {
   return `[${String(identifier).replace(/]/g, ']]')}]`;
@@ -101,7 +102,9 @@ async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, ch
           AND b.check_in_date < @checkOut
           AND b.check_out_date > @checkIn
       ) bk ON bk.room_id = r.id
-      WHERE r.status NOT IN ('MAINTENANCE', 'CLEANING');
+      -- A room being cleaned is still part of the sellable room inventory.
+      -- It can be reserved for a future stay and will be ready before check-in.
+      WHERE r.status <> 'MAINTENANCE';
     `);
 
   const rooms = roomsResult.recordset;
@@ -136,7 +139,9 @@ async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, ch
     const totalRooms = typeRooms.length;
 
     // Danh sách các phòng vật lý chưa bị đặt (is_booked == 0)
-    const availablePhysicalRooms = typeRooms.filter((r) => r.is_booked === 0);
+    // Keep rooms still being cleaned out of the immediate assignment list, while
+    // counting them in inventory above so a future booking can reserve the type.
+    const availablePhysicalRooms = typeRooms.filter((r) => r.is_booked === 0 && r.physical_status !== 'CLEANING');
 
     // Số lượng phòng đã đặt chưa gán số phòng
     const reservedCount = reservedCountByType.get(type.id) || 0;
@@ -161,28 +166,14 @@ async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, ch
       type.max_adults >= Number(adults) &&
       type.max_children >= Number(children);
 
-    return {
-      id: type.id,
-      name: type.name,
-      description: type.description,
-      base_price: Number(type.base_price ?? 0),
-      max_adults: type.max_adults ?? 0,
-      max_children: type.max_children ?? 0,
-      image_url: type.image_url || null,
-      amenities: String(type.amenities || '')
-        .split(',')
-        .map((entry) => entry.trim())
-        .filter(Boolean),
-      average_rating: Number((type.average_rating ?? 0).toFixed(1)),
-      review_count: Number(type.review_count ?? 0),
-      // --- CÁC TRƯỜNG PHỤC VỤ CHECK AVAILABILITY ---
-      total_rooms: totalRooms, // Tổng số phòng khách sạn có của loại này
-      booked_rooms: bookedRoomsCount, // Số phòng đã bị đặt trong thời gian này
-      available_rooms: availableCount, // Số phòng còn trống thực tế
-      is_available: availableCount > 0, // Trạng thái còn phòng hay đã hết phòng
-      capacity_matched: capacityMatched, // Loại phòng có đủ sức chứa cho số khách yêu cầu
-      available_room_list: availableRoomNumbers, // Danh sách phòng trống để lễ tân chọn tại quầy
-    };
+    return RoomAvailabilityModel.fromAvailability({
+      type,
+      totalRooms,
+      bookedRooms: bookedRoomsCount,
+      availableCount,
+      capacityMatched,
+      availableRoomNumbers,
+    });
   });
 }
 
@@ -224,7 +215,7 @@ async function getAvailableRoomsForType({ roomTypeId, checkInDate, checkOutDate 
       ORDER BY r.room_number;
     `);
 
-  return result.recordset;
+  return RoomModel.fromRows(result.recordset);
 }
 
 async function getRoomList() {
