@@ -17,7 +17,7 @@ const { getAdminStatistics } = require('../controllers/statisticsController');
 const promotionController = require('../controllers/promotionController');
 const amenityController = require('../controllers/amenityController');
 const roomTypeController = require('../controllers/roomTypeController');
-const { getUserList } = require('../controllers/userController');
+const { getUserList, getUserDetails } = require('../controllers/userController');
 const router = express.Router();
 const vnpayEnabled = String(process.env.VNPAY_ENABLED || '').toLowerCase() === 'true';
 const uploadsDir = path.join(__dirname, '../../uploads');
@@ -41,6 +41,7 @@ router.put('/profile', requireProfileAccess, updateProfile);
 
 // --- User management APIs ---
 router.get('/admin/users', requireAdmin, getUserList);
+router.get('/admin/users/:id', requireAdmin, getUserDetails);
 
 // --- Authentication APIs ---
 // Đăng ký tài khoản mới cho khách hàng

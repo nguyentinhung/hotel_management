@@ -12,3 +12,6 @@ export type User = {
 
 export const getUserList = (token: string) =>
     api.get<{ users: User[] }>('/api/admin/users', token);
+
+export const getUserDetails = (token: string, id: number) =>
+    api.get<{ user: User }>(`/api/admin/users/${id}`, token);

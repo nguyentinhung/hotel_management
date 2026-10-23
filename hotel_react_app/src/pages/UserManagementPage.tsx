@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { getUserList, type User } from '../services/userService';
+import UserDetailsModal from '../components/UserDetailsModal';
 
 export default function UserManagementPage() {
     const [users, setUsers] = useState<User[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
 
     const loadUsers = async () => {
         const token = localStorage.getItem('accessToken');
@@ -161,6 +163,7 @@ export default function UserManagementPage() {
                                 <th style={headerStyle}>Số điện thoại</th>
                                 <th style={headerStyle}>Vai trò</th>
                                 <th style={headerStyle}>Trạng thái</th>
+                                <th style={headerStyle}>Thao tác</th>
                             </tr>
                         </thead>
 
@@ -198,11 +201,27 @@ export default function UserManagementPage() {
                                             {getStatusLabel(user.status)}
                                         </span>
                                     </td>
+                                    <td style={cellStyle}>
+                                        <button
+                                            type="button"
+                                            className="btn btn-outline"
+                                            onClick={() => setSelectedUserId(user.id)}
+                                        >
+                                            Chi tiết
+                                        </button>
+                                    </td>
                                 </tr>
                             ))}
                         </tbody>
                     </table>
                 </div>
+            )}
+            {selectedUserId !== null && (
+                <UserDetailsModal
+                    userId={selectedUserId}
+                    token={localStorage.getItem('accessToken') || ''}
+                    onClose={() => setSelectedUserId(null)}
+                />
             )}
         </div>
     );
