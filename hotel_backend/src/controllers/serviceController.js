@@ -1,24 +1,4 @@
 const serviceService = require('../services/serviceService');
-const jwt = require('jsonwebtoken');
-const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
-const roleCodeById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
-
-function requireAdmin(req, res, next) {
-    const authorization = req.headers.authorization || '';
-    const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
-    if (!token) return res.status(401).json({ message: 'Vui lòng đăng nhập để tiếp tục.' });
-
-    try {
-        const claims = jwt.verify(token, JWT_SECRET);
-        const roleCode = String(claims.role_code || '').toUpperCase() || roleCodeById[Number(claims.role_id)];
-        if (roleCode !== 'ADMIN') {
-            return res.status(403).json({ message: 'Chỉ quản trị viên được quản lý dịch vụ.' });
-        }
-        return next();
-    } catch {
-        return res.status(401).json({ message: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.' });
-    }
-}
 
 const getServices = async (req, res) => {
     try {
@@ -72,7 +52,6 @@ const deleteService = async (req, res) => {
 };
 
 module.exports = {
-    requireAdmin,
     getServices,
     getServiceById,
     createService,

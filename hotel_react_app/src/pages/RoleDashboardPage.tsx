@@ -52,9 +52,6 @@ const dashboardConfig: Record<
       { label: 'Room Type Management', description: 'Manage room types.' },
       { label: 'Service Management', description: 'Manage hotel services.' },
       { label: 'Payment Management', description: 'Review payment transactions.' },
-      { label: 'Booking Management', description: 'Manage bookings and room assignments.' },
-      { label: 'Check-in Guest', description: 'Check in arriving guests.' },
-      { label: 'Check-out Guest', description: 'Check out departing guests.' },
       { label: 'Reports & Statistics', description: 'Review hotel statistics.' },
       { label: 'Promotion Management', description: 'Manage promotions.' },
       { label: 'Profile', description: 'View and update your profile.' },
@@ -579,6 +576,7 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
         </div>
         {booking.status === 'PENDING_PAYMENT' && <p className="customer-booking-payment-deadline" role="status">Còn {Math.floor(paymentSecondsLeft / 60)} phút {paymentSecondsLeft % 60} giây để thanh toán. Hết hạn sau 15 phút, booking sẽ tự hủy và phòng được mở lại.</p>}
         {booking.cancellation_reason === 'PAYMENT_TIMEOUT' && <p className="customer-booking-expired-notice" role="status">Đã hết thời hạn thanh toán; booking bị hủy và phòng đã được mở lại. Vui lòng tìm phòng và đặt lại.</p>}
+        {booking.cancellation_reason === 'RESERVATION_EXPIRED' && <p className="customer-booking-expired-notice" role="status">Booking đã tự động hủy vì thời hạn lưu trú đã kết thúc mà chưa check-in. Vui lòng liên hệ khách sạn nếu cần hỗ trợ về tiền cọc.</p>}
         {booking.cancellation_reason === 'ROOMS_UNAVAILABLE' && <p className="customer-booking-expired-notice" role="status">Loại phòng đã hết trong lúc chờ thanh toán; booking đã bị hủy. Vui lòng chọn ngày hoặc loại phòng khác.</p>}
       </article>;
     })}{filtered.length === 0 && <p className="room-empty-state">Không tìm thấy đặt phòng phù hợp với bộ lọc.</p>}</div>
@@ -742,22 +740,17 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
     { title: 'QUẢN LÝ PHÒNG', items: [
       { label: 'Room Management', moduleIndex: 0, icon: 'bedDouble' }, { label: 'Room Type Management', moduleIndex: 1, icon: 'room' },
     ] },
-    { title: 'BOOKING', items: [
-      { label: 'Booking Management', moduleIndex: 4, icon: 'calendar' },
-      { label: 'Check-in Guest', moduleIndex: 5, icon: 'checkIn' },
-      { label: 'Check-out Guest', moduleIndex: 6, icon: 'checkOut' },
-    ] },
     { title: 'DỊCH VỤ & VẬN HÀNH', items: [
       { label: 'Service Management', moduleIndex: 2, icon: 'service' }, { label: 'Cleaning Task', icon: 'cleaning' }, { label: 'Equipment Management', icon: 'equipment' }, { label: 'Equipment Inspection', icon: 'maintenance' },
     ] },
     { title: 'KHÁCH HÀNG', items: [
-      { label: 'Customer Management', icon: 'customer' }, { label: 'Promotion Management', moduleIndex: 8, icon: 'tag' }, { label: 'Review Management', icon: 'review' },
+      { label: 'Customer Management', icon: 'customer' }, { label: 'Promotion Management', moduleIndex: 5, icon: 'tag' }, { label: 'Review Management', icon: 'review' },
     ] },
     { title: 'THANH TOÁN', items: [
       { label: 'Payment Management', moduleIndex: 3, icon: 'payment' }, { label: 'Invoice Management', icon: 'invoice' },
     ] },
     { title: 'NHÂN SỰ & TÀI KHOẢN', items: [
-      { label: 'Staff Management', icon: 'staff' }, { label: 'Profile', moduleIndex: 9, icon: 'profile' }, { label: 'Change Password', moduleIndex: 10, icon: 'key' },
+      { label: 'Staff Management', icon: 'staff' }, { label: 'Profile', moduleIndex: 6, icon: 'profile' }, { label: 'Change Password', moduleIndex: 7, icon: 'key' },
     ] },
     { title: 'BÁO CÁO – THỐNG KÊ', items: [
       { label: 'Reports & Statistics', icon: 'chart' },
@@ -898,12 +891,6 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
             <div className="module-content"><PromotionListPage role="ADMIN" /></div>
           ) : ['ADMIN', 'RECEPTIONIST', 'CUSTOMER'].includes(currentRole) && ['Review Management', 'Review'].includes(activeItem.label) ? (
             <ReviewListPage role={currentRole} />
-          ) : currentRole === 'ADMIN' && activeItem.label === 'Booking Management' ? (
-            <ReceptionRoomBooking mode="management" />
-          ) : currentRole === 'ADMIN' && activeItem.label === 'Check-in Guest' ? (
-            <ReceptionRoomBooking mode="checkin" />
-          ) : currentRole === 'ADMIN' && activeItem.label === 'Check-out Guest' ? (
-            <ReceptionRoomBooking mode="checkout" />
           ) : currentRole === 'CUSTOMER' && activeItem.label === 'My Bookings' ? (
 
             <ReceptionBookingHistory customerMode />

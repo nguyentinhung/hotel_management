@@ -1,34 +1,10 @@
 const path = require('path');
 const fs = require('fs');
-const jwt = require('jsonwebtoken');
 const roomTypeService = require('../services/roomTypeService');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
 const uploadsDir = path.join(__dirname, '../../uploads');
 
-function requireRoomTypeAdmin(req, res, action) {
-  const authorization = req.headers.authorization || '';
-  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
-  if (!token) {
-    res.status(401).json({ message: 'Vui lòng đăng nhập để tiếp tục.' });
-    return false;
-  }
-  try {
-    const user = jwt.verify(token, JWT_SECRET);
-    if (user.role_code !== 'ADMIN') {
-      const actionText = { create: 'thêm', update: 'cập nhật', delete: 'xóa' }[action];
-      res.status(403).json({ message: `Chỉ quản trị viên được ${actionText} loại phòng.` });
-      return false;
-    }
-    return true;
-  } catch {
-    res.status(401).json({ message: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.' });
-    return false;
-  }
-}
-
 async function createRoomType(req, res) {
-  if (!requireRoomTypeAdmin(req, res, 'create')) return;
   try {
     const roomType = await roomTypeService.createRoomType(req.body);
     return res.status(201).json({ message: 'Thêm loại phòng thành công.', roomType });
@@ -43,7 +19,6 @@ async function createRoomType(req, res) {
 }
 
 async function updateRoomType(req, res) {
-  if (!requireRoomTypeAdmin(req, res, 'update')) return;
   const roomTypeId = Number(req.params.roomTypeId);
   try {
     const roomType = await roomTypeService.updateRoomType(roomTypeId, req.body);
@@ -57,7 +32,6 @@ async function updateRoomType(req, res) {
 }
 
 async function deleteRoomType(req, res) {
-  if (!requireRoomTypeAdmin(req, res, 'delete')) return;
   const roomTypeId = Number(req.params.roomTypeId);
   try {
     const result = await roomTypeService.deleteRoomType(roomTypeId);

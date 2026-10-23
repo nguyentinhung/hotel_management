@@ -1,4 +1,5 @@
 const { sql, getPool } = require('../config/db');
+const UserModel = require('../models/userModel');
 
 async function findUserIdByEmail(email) {
   const pool = await getPool();
@@ -34,7 +35,7 @@ async function createUser({ roleId, email, passwordHash, fullName, phone }) {
       OUTPUT INSERTED.*
       VALUES (@role_id, @email, @password_hash, @full_name, @phone, @status);
     `);
-  return result.recordset[0];
+  return UserModel.fromRow(result.recordset[0]);
 }
 
 async function createEmailVerification(userId, token, expiresAt) {
@@ -81,7 +82,7 @@ async function getUserByEmail(email) {
     FROM users u LEFT JOIN roles r ON r.id = u.role_id
     WHERE LOWER(u.email) = LOWER(@email);
   `);
-  return result.recordset[0] || null;
+  return UserModel.fromRow(result.recordset[0]);
 }
 
 async function createRefreshToken(userId, token, expiresAt) {
@@ -104,7 +105,7 @@ async function getActiveUserByEmail(email) {
     SELECT TOP 1 id, email, full_name, status FROM users
     WHERE email = @email AND status = 'ACTIVE';
   `);
-  return result.recordset[0] || null;
+  return UserModel.fromRow(result.recordset[0]);
 }
 
 async function invalidateUnusedPasswordResets(userId) {

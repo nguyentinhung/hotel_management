@@ -1,4 +1,5 @@
 const reviewDao = require('../dao/reviewDao');
+const ReviewModel = require('../models/reviewModel');
 
 function parseId(value, label) {
   const id = Number(value);
@@ -10,20 +11,7 @@ function parseId(value, label) {
   return id;
 }
 
-function validatePayload(input) {
-  const rating = Number(input?.rating);
-  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-    const error = new Error('Điểm đánh giá phải là số nguyên từ 1 đến 5.');
-    error.statusCode = 400;
-    throw error;
-  }
-  if (input?.comment != null && typeof input.comment !== 'string') {
-    const error = new Error('Nội dung đánh giá không hợp lệ.');
-    error.statusCode = 400;
-    throw error;
-  }
-  return { rating, comment: input?.comment?.trim() || null };
-}
+
 
 async function dashboardList(roleCode) {
   return reviewDao.listDashboardReviews(roleCode === 'ADMIN');
@@ -45,14 +33,14 @@ async function getMine(reviewId, customerId) {
 
 async function create(input, customerId) {
   const bookingId = parseId(input?.booking_id, 'Booking');
-  const { rating, comment } = validatePayload(input);
+  const { rating, comment } = ReviewModel.validatePayload(input);
   const id = await reviewDao.createCustomerReview({ bookingId, customerId: parseId(customerId, 'Tài khoản'), rating, comment });
   return getMine(id, customerId);
 }
 
 async function update(reviewId, input, customerId) {
   const id = parseId(reviewId, 'Review');
-  const { rating, comment } = validatePayload(input);
+  const { rating, comment } = ReviewModel.validatePayload(input);
   const updated = await reviewDao.updateCustomerReview({ reviewId: id, customerId: parseId(customerId, 'Tài khoản'), rating, comment });
   if (!updated) {
     const error = new Error('Không tìm thấy review thuộc tài khoản của bạn.');

@@ -1,0 +1,16 @@
+module.exports = {
+  amenity: require('./amenityModel'),
+  user: require('./userModel'),
+  booking: require('./bookingModel'),
+  bookingService: require('./bookingServiceModel'),
+  room: require('./roomModel'),
+  roomType: require('./roomTypeModel'),
+  service: require('./serviceModel'),
+  promotion: require('./promotionModel'),
+  review: require('./reviewModel'),
+  payment: require('./paymentModel'),
+  invoice: require('./invoiceModel'),
+  profile: require('./profileModel'),
+  statistics: require('./statisticsModel'),
+  home: require('./homeModel'),
+};

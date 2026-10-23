@@ -1,25 +1,5 @@
-﻿const jwt = require('jsonwebtoken');
 const promotionService = require('../services/promotionService');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
-const roleCodeById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
-
-function requireAdmin(req, res, next) {
-  const authorization = req.headers.authorization || '';
-  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
-  if (!token) return res.status(401).json({ message: 'Vui long dang nhap de tiep tuc.' });
-
-  try {
-    const claims = jwt.verify(token, JWT_SECRET);
-    const roleCode = roleCodeById[Number(claims.role_id)] || String(claims.role_code || '').toUpperCase();
-    if (roleCode !== 'ADMIN') {
-      return res.status(403).json({ message: 'Chi quan tri vien duoc quan ly khuyen mai.' });
-    }
-    return next();
-  } catch {
-    return res.status(401).json({ message: 'Phien dang nhap khong hop le hoac da het han.' });
-  }
-}
 
 async function getPromotions(req, res) {
   try {
@@ -86,7 +66,6 @@ async function deletePromotion(req, res) {
 }
 
 module.exports = {
-  requireAdmin,
   getPromotions,
   getActivePromotions,
   validatePromotion,

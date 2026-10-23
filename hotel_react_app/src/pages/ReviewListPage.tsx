@@ -55,9 +55,9 @@ export default function ReviewListPage({ role }: { role: Role }) {
   };
 
   const saveReview = async (rating: number, comment: string) => {
-    if (!editingReview && !selectedBookingId) return;
     if (editingReview) await updateReview(editingReview.id, rating, comment);
-    else await createReview(selectedBookingId, rating, comment);
+    else if (selectedBookingId != null) await createReview(selectedBookingId, rating, comment);
+    else return;
     setBookings(await getMyReviewBookings());
     setReviewSaved(true);
   };

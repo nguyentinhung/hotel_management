@@ -3,14 +3,12 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
 const authService = require('../services/authService');
+const UserModel = require('../models/userModel');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
 
-const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
 
-const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
 
-const isValidPhone = (phone) => /^\+?[0-9\s\-()]{9,20}$/.test(String(phone || '').trim());
 
 function createMailTransporter() {
   const user = process.env.SMTP_USER?.trim();
@@ -125,15 +123,15 @@ async function register(req, res) {
       return res.status(400).json({ message: 'Vui lòng nhập đầy đủ email, mật khẩu, họ tên và số điện thoại.' });
     }
 
-    const normalizedEmail = normalizeEmail(email);
+    const normalizedEmail = UserModel.normalizeEmail(email);
     const normalizedName = String(full_name).trim();
-    const normalizedPhone = String(phone_number).trim();
+    const normalizedPhone = UserModel.normalizePhone(phone_number);
 
-    if (!isValidEmail(normalizedEmail)) {
+    if (!UserModel.isValidEmail(normalizedEmail)) {
       return res.status(400).json({ message: 'Email không đúng định dạng.' });
     }
 
-    if (!isValidPhone(normalizedPhone)) {
+    if (!UserModel.isValidPhone(normalizedPhone)) {
       return res.status(400).json({ message: 'Số điện thoại không đúng định dạng.' });
     }
 
@@ -215,7 +213,7 @@ async function login(req, res) {
       return res.status(400).json({ message: 'Vui lòng nhập email và mật khẩu.' });
     }
 
-    const user = await authService.getUserByEmail(normalizeEmail(email));
+    const user = await authService.getUserByEmail(UserModel.normalizeEmail(email));
 
     if (!user) {
       return res.status(401).json({ message: 'Email hoặc mật khẩu không chính xác.' });
@@ -284,9 +282,9 @@ module.exports = {
 };
 async function forgotPassword(req, res) {
   try {
-    const email = normalizeEmail(req.body?.email);
+    const email = UserModel.normalizeEmail(req.body?.email);
 
-    if (!isValidEmail(email)) {
+    if (!UserModel.isValidEmail(email)) {
       return res.status(400).json({
         message: 'Email không hợp lệ.',
       });
@@ -359,11 +357,11 @@ async function forgotPassword(req, res) {
 }
 async function resetPassword(req, res) {
   try {
-    const email = normalizeEmail(req.body?.email);
+    const email = UserModel.normalizeEmail(req.body?.email);
     const otp = String(req.body?.otp || '').trim();
     const newPassword = String(req.body?.newPassword || '');
 
-    if (!isValidEmail(email)) {
+    if (!UserModel.isValidEmail(email)) {
       return res.status(400).json({
         message: 'Email không hợp lệ.',
       });

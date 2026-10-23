@@ -1,13 +1,15 @@
+const BookingModel = require('../models/bookingModel');
 const bookingDao = require('../dao/bookingDao');
 
 module.exports = {
   expirePendingBookings: (...args) => bookingDao.expirePendingBookings(...args),
-  createWalkInBooking: (...args) => bookingDao.createWalkInBooking(...args),
-  createCustomerBooking: (...args) => bookingDao.createCustomerBooking(...args),
+  expireStaleBookings: (...args) => bookingDao.expireStaleBookings(...args),
+  createWalkInBooking: async (...args) => BookingModel.fromRow(await bookingDao.createWalkInBooking(...args)),
+  createCustomerBooking: async (...args) => BookingModel.fromRow(await bookingDao.createCustomerBooking(...args)),
   checkInBooking: (...args) => bookingDao.checkInBooking(...args),
   getRecentBookings: (...args) => bookingDao.getRecentBookings(...args),
   getActiveBookings: (...args) => bookingDao.getActiveBookings(...args),
-  updateBooking: (...args) => bookingDao.updateBooking(...args),
+  updateBooking: async (...args) => BookingModel.fromRow(await bookingDao.updateBooking(...args)),
   cancelBooking: (...args) => bookingDao.cancelBooking(...args),
   checkOutBooking: (...args) => bookingDao.checkOutBooking(...args),
   updateRoomStatus: (...args) => bookingDao.updateRoomStatus(...args),

@@ -109,8 +109,8 @@ async function checkInBookingHandler(req, res) {
   } catch {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.' });
   }
-  if (!hasRole(claims, 'RECEPTIONIST', 'ADMIN')) {
-    return res.status(403).json({ success: false, message: 'Chỉ lễ tân hoặc quản trị viên mới được xác nhận check-in.' });
+  if (!hasRole(claims, 'RECEPTIONIST')) {
+    return res.status(403).json({ success: false, message: 'Chỉ lễ tân mới được xác nhận check-in.' });
   }
 
   const idCardNumber = String(req.body?.id_card_number || '').trim();
@@ -272,7 +272,7 @@ async function getRecentBookingsHandler(req, res) {
   } catch {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.' });
   }
-  if (!hasRole(claims, 'RECEPTIONIST', 'ADMIN')) {
+  if (!hasRole(claims, 'RECEPTIONIST')) {
     return res.status(403).json({ success: false, message: 'Bạn không có quyền xem danh sách đặt phòng.' });
   }
 
@@ -301,7 +301,7 @@ async function getBookingHistoryHandler(req, res) {
   try { claims = jwt.verify(token, JWT_SECRET); } catch {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
   }
-  if (!isCustomerClaims(claims) && !hasRole(claims, 'RECEPTIONIST', 'ADMIN')) return res.status(403).json({ success: false, message: 'Bạn không có quyền xem lịch sử booking.' });
+  if (!isCustomerClaims(claims) && !hasRole(claims, 'RECEPTIONIST')) return res.status(403).json({ success: false, message: 'Bạn không có quyền xem lịch sử booking.' });
   try {
     if (isCustomerClaims(claims) && !claims.user_id) return res.status(403).json({ success: false, message: 'Không xác định được tài khoản khách hàng.' });
     const customerId = isCustomerClaims(claims) ? claims.user_id : null;
@@ -320,7 +320,7 @@ async function updateBookingHandler(req, res) {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
   }
   const customer = isCustomerClaims(claims);
-  if (!customer && !hasRole(claims, 'RECEPTIONIST', 'ADMIN')) return res.status(403).json({ success: false, message: 'Bạn không có quyền cập nhật booking.' });
+  if (!customer && !hasRole(claims, 'RECEPTIONIST')) return res.status(403).json({ success: false, message: 'Bạn không có quyền cập nhật booking.' });
   const { check_in_date, check_out_date, guest_full_name, guest_phone, guest_email, adults, children, special_request, room_selections } = req.body || {};
   const datePattern = /^\d{4}-\d{2}-\d{2}$/;
   const isRealDate = (value) => {
@@ -380,7 +380,7 @@ async function cancelBookingHandler(req, res) {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
   }
   const customer = isCustomerClaims(claims);
-  if (!customer && !hasRole(claims, 'RECEPTIONIST', 'ADMIN')) return res.status(403).json({ success: false, message: 'Bạn không có quyền hủy booking.' });
+  if (!customer && !hasRole(claims, 'RECEPTIONIST')) return res.status(403).json({ success: false, message: 'Bạn không có quyền hủy booking.' });
   try {
     const booking = await cancelBooking({ bookingId: req.params.bookingId, customerId: customer ? claims.user_id : null });
     return res.json({ success: true, message: 'Đã hủy booking.', booking });
@@ -395,7 +395,7 @@ async function getActiveBookingsHandler(req, res) {
   try { claims = jwt.verify(token, JWT_SECRET); } catch {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
   }
-  if (!hasRole(claims, 'RECEPTIONIST', 'ADMIN')) return res.status(403).json({ success: false, message: 'Bạn không có quyền xem booking đang hoạt động.' });
+  if (!hasRole(claims, 'RECEPTIONIST')) return res.status(403).json({ success: false, message: 'Bạn không có quyền xem booking đang hoạt động.' });
   try {
     const bookings = await getActiveBookings();
     return res.json({ success: true, count: bookings.length, bookings });
@@ -411,7 +411,7 @@ async function checkOutBookingHandler(req, res) {
   try { claims = jwt.verify(token, JWT_SECRET); } catch {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
   }
-  if (!hasRole(claims, 'RECEPTIONIST', 'ADMIN')) return res.status(403).json({ success: false, message: 'Chỉ lễ tân hoặc quản trị viên mới được check-out.' });
+  if (!hasRole(claims, 'RECEPTIONIST')) return res.status(403).json({ success: false, message: 'Chỉ lễ tân mới được check-out.' });
   try {
     const result = await makeReceptionCheckoutPayment({
       bookingId: req.params.bookingId,
@@ -556,7 +556,7 @@ async function getAssignableRoomsHandler(req, res) {
   try { claims = jwt.verify(token, JWT_SECRET); } catch {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
   }
-  if (!hasRole(claims, 'RECEPTIONIST', 'ADMIN')) return res.status(403).json({ success: false, message: 'Chỉ lễ tân hoặc admin được xem phòng có thể gán.' });
+  if (!hasRole(claims, 'RECEPTIONIST')) return res.status(403).json({ success: false, message: 'Chỉ lễ tân được xem phòng có thể gán.' });
   try { return res.json({ success: true, ...(await getAssignableRooms(req.params.bookingId)) }); }
   catch (error) {
     const notFound = /not found/i.test(error.message);
@@ -570,7 +570,7 @@ async function assignRoomHandler(req, res) {
   try { claims = jwt.verify(token, JWT_SECRET); } catch {
     return res.status(401).json({ success: false, message: 'Phiên đăng nhập đã hết hạn.' });
   }
-  if (!hasRole(claims, 'RECEPTIONIST', 'ADMIN')) return res.status(403).json({ success: false, message: 'Chỉ lễ tân hoặc admin được gán phòng.' });
+  if (!hasRole(claims, 'RECEPTIONIST')) return res.status(403).json({ success: false, message: 'Chỉ lễ tân được gán phòng.' });
   const roomAssignments = req.body?.room_assignments;
   if (!Array.isArray(roomAssignments) || !roomAssignments.length || roomAssignments.some((item) => !Number.isInteger(Number(item.booking_room_id)) || Number(item.booking_room_id) <= 0 || !Number.isInteger(Number(item.room_id)) || Number(item.room_id) <= 0)) return res.status(400).json({ success: false, message: 'Please assign a room to every booking room.' });
   try {

@@ -1,3 +1,4 @@
+const HomeModel = require('../models/homeModel');
 const {
   getRoomTypes: getRoomTypesFromDao,
   getRoomTypeById,
