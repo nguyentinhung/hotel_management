@@ -125,10 +125,73 @@ async function createUser({
   return userModel.fromRow(result.recordset[0] ?? null);
 }
 
+async function getUserByEmailExceptId(email, id) {
+  const pool = await getPool();
+
+  const result = await pool.request()
+    .input('email', sql.VarChar, email)
+    .input('id', sql.Int, id)
+    .query(`
+            SELECT id FROM users
+            WHERE email = @email AND id <> @id
+        `);
+
+  return result.recordset[0] ?? null;
+}
+
+async function getUserByPhoneExceptId(phone, id) {
+  const pool = await getPool();
+
+  const result = await pool.request()
+    .input('phone', sql.VarChar, phone)
+    .input('id', sql.Int, id)
+    .query(`
+            SELECT id FROM users
+            WHERE phone = @phone AND id <> @id
+        `);
+
+  return result.recordset[0] ?? null;
+}
+
+async function updateUser(id, data) {
+  const pool = await getPool();
+
+  const result = await pool.request()
+    .input('id', sql.Int, id)
+    .input('fullName', sql.NVarChar, data.fullName)
+    .input('email', sql.VarChar, data.email)
+    .input('phone', sql.VarChar, data.phone)
+    .query(`
+            UPDATE users
+            SET
+                full_name = @fullName,
+                email = @email,
+                phone = @phone
+            WHERE id = @id;
+
+            SELECT
+                u.id,
+                u.full_name,
+                u.email,
+                u.phone,
+                u.status,
+                r.code AS role_code,
+                r.name AS role_name
+            FROM users u
+            LEFT JOIN roles r ON r.id = u.role_id
+            WHERE u.id = @id;
+        `);
+
+  return userModel.fromRow(result.recordset[0] ?? null);
+}
+
 module.exports = {
   getUserList,
   getUserById,
   getUserByEmail,
   getUserByPhone,
   createUser,
+  getUserByEmailExceptId,
+  getUserByPhoneExceptId,
+  updateUser,
 };

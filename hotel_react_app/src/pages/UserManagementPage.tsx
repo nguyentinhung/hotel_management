@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { getUserList, type User } from '../services/userService';
 import UserDetailsModal from '../components/UserDetailsModal';
 import CreateUserModal from '../components/CreateUserModal';
+import UpdateUserModal from '../components/UpdateUserModal';
 export default function UserManagementPage() {
     const [users, setUsers] = useState<User[]>([]);
     const [loading, setLoading] = useState(true);
@@ -9,6 +10,7 @@ export default function UserManagementPage() {
     const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
     const [showCreateModal, setShowCreateModal] = useState(false);
     const [successMessage, setSuccessMessage] = useState('');
+    const [editingUser, setEditingUser] = useState<User | null>(null);
 
     const loadUsers = async () => {
         const token = localStorage.getItem('accessToken');
@@ -229,6 +231,13 @@ export default function UserManagementPage() {
                                         >
                                             Chi tiết
                                         </button>
+                                        <button
+                                            type="button"
+                                            className="btn btn-outline"
+                                            onClick={() => setEditingUser(user)}
+                                        >
+                                            Sửa
+                                        </button>
                                     </td>
                                 </tr>
                             ))}
@@ -257,6 +266,17 @@ export default function UserManagementPage() {
                         setShowCreateModal(false);
                         setSuccessMessage('Tạo tài khoản thành công.');
                         void loadUsers();
+                    }}
+                />
+            )}
+            {editingUser && (
+                <UpdateUserModal
+                    user={editingUser}
+                    token={localStorage.getItem('accessToken') || ''}
+                    onClose={() => setEditingUser(null)}
+                    onUpdated={() => {
+                        void loadUsers();
+                        setSuccessMessage('Cập nhật người dùng thành công.');
                     }}
                 />
             )}

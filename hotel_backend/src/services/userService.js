@@ -87,8 +87,75 @@ async function createUser(data) {
     });
 }
 
+async function updateUser(id, data) {
+    const userId = Number(id);
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+        const error = new Error('ID người dùng không hợp lệ.');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const fullName = String(data.full_name || '').trim();
+    const email = userModel.normalizeEmail(data.email);
+    const phone = userModel.normalizePhone(data.phone);
+
+    if (!fullName || !email || !phone) {
+        const error = new Error('Vui lòng nhập đầy đủ thông tin.');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    if (!userModel.isValidEmail(email)) {
+        const error = new Error('Email không đúng định dạng.');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    if (!userModel.isValidPhone(phone)) {
+        const error = new Error('Số điện thoại không đúng định dạng.');
+        error.statusCode = 400;
+        throw error;
+    }
+
+    const user = await userDao.getUserById(userId);
+
+    if (!user) {
+        const error = new Error('Không tìm thấy người dùng.');
+        error.statusCode = 404;
+        throw error;
+    }
+
+    const existingEmail =
+        await userDao.getUserByEmailExceptId(email, userId);
+
+    if (existingEmail) {
+        const error = new Error('Email đã được tài khoản khác sử dụng.');
+        error.statusCode = 409;
+        throw error;
+    }
+
+    const existingPhone =
+        await userDao.getUserByPhoneExceptId(phone, userId);
+
+    if (existingPhone) {
+        const error = new Error(
+            'Số điện thoại đã được tài khoản khác sử dụng.'
+        );
+        error.statusCode = 409;
+        throw error;
+    }
+
+    return userDao.updateUser(userId, {
+        fullName,
+        email,
+        phone,
+    });
+}
+
 module.exports = {
     getUserList,
     getUserById,
     createUser,
+    updateUser,
 };

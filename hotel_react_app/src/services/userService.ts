@@ -30,3 +30,25 @@ export const createUser = (token: string, data: CreateUserInput) =>
         data,
         token,
     );
+
+export type UpdateUserInput = {
+    full_name: string;
+    email: string;
+    phone: string;
+};
+
+export type UpdateUserResponse = {
+    message: string;
+    user: User;
+};
+
+export const updateUser = (
+    token: string,
+    id: number,
+    data: UpdateUserInput,
+) =>
+    api.putWithAuth<UpdateUserResponse>(
+        `/api/admin/users/${id}`,
+        data,
+        token,
+    );

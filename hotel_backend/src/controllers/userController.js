@@ -63,8 +63,31 @@ async function createUser(req, res) {
     }
 }
 
+async function updateUser(req, res) {
+    try {
+        const user = await userService.updateUser(
+            req.params.id,
+            req.body || {}
+        );
+
+        return res.status(200).json({
+            message: 'Cập nhật người dùng thành công.',
+            user,
+        });
+    } catch (error) {
+        console.error('updateUser error:', error);
+
+        return res.status(error.statusCode || 500).json({
+            message: error.statusCode
+                ? error.message
+                : 'Lỗi máy chủ khi cập nhật người dùng.',
+        });
+    }
+}
+
 module.exports = {
     getUserList,
     getUserDetails,
     createUser,
+    updateUser,
 };
