@@ -44,7 +44,27 @@ async function getUserDetails(req, res) {
     }
 }
 
+async function createUser(req, res) {
+    try {
+        const user = await userService.createUser(req.body || {});
+
+        return res.status(201).json({
+            message: 'Tạo tài khoản thành công.',
+            user,
+        });
+    } catch (error) {
+        console.error('Create user error:', error);
+
+        return res.status(error.statusCode || 500).json({
+            message: error.statusCode
+                ? error.message
+                : 'Không thể tạo tài khoản người dùng.',
+        });
+    }
+}
+
 module.exports = {
     getUserList,
     getUserDetails,
+    createUser,
 };

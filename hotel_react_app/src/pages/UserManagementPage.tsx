@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
 import { getUserList, type User } from '../services/userService';
 import UserDetailsModal from '../components/UserDetailsModal';
-
+import CreateUserModal from '../components/CreateUserModal';
 export default function UserManagementPage() {
     const [users, setUsers] = useState<User[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
+    const [showCreateModal, setShowCreateModal] = useState(false);
+    const [successMessage, setSuccessMessage] = useState('');
 
     const loadUsers = async () => {
         const token = localStorage.getItem('accessToken');
@@ -124,14 +126,32 @@ export default function UserManagementPage() {
                         Xem thông tin các tài khoản trong hệ thống.
                     </p>
                 </div>
-
-                <button
-                    type="button"
-                    className="btn btn-outline"
-                    onClick={() => void loadUsers()}
+                <div
+                    style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                    }}
                 >
-                    Làm mới
-                </button>
+                    <button
+                        type="button"
+                        className="btn btn-outline"
+                        onClick={() => void loadUsers()}
+                    >
+                        Làm mới
+                    </button>
+
+                    <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => {
+                            setSuccessMessage('');
+                            setShowCreateModal(true);
+                        }}
+                    >
+                        + Thêm người dùng
+                    </button>
+                </div>
             </div>
 
             {users.length === 0 ? (
@@ -221,6 +241,23 @@ export default function UserManagementPage() {
                     userId={selectedUserId}
                     token={localStorage.getItem('accessToken') || ''}
                     onClose={() => setSelectedUserId(null)}
+                />
+            )}
+            {successMessage && (
+                <p role="status" style={{ color: '#166534' }}>
+                    {successMessage}
+                </p>
+            )}
+
+            {showCreateModal && (
+                <CreateUserModal
+                    token={localStorage.getItem('accessToken') || ''}
+                    onClose={() => setShowCreateModal(false)}
+                    onCreated={() => {
+                        setShowCreateModal(false);
+                        setSuccessMessage('Tạo tài khoản thành công.');
+                        void loadUsers();
+                    }}
                 />
             )}
         </div>
