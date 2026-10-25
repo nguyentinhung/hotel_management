@@ -18,6 +18,8 @@ const promotionController = require('../controllers/promotionController');
 const amenityController = require('../controllers/amenityController');
 const roomTypeController = require('../controllers/roomTypeController');
 const equipmentItemController = require('../controllers/equipmentItemController');
+const equipmentAssetController = require('../controllers/equipmentAssetController');
+const roomEquipmentAssignmentController = require('../controllers/roomEquipmentAssignmentController');
 
 const router = express.Router();
 const vnpayEnabled = String(process.env.VNPAY_ENABLED || '').toLowerCase() === 'true';
@@ -68,6 +70,15 @@ router.get('/admin/equipment-items/:id', requireAdmin, equipmentItemController.g
 router.post('/admin/equipment-items', requireAdmin, equipmentItemController.createEquipmentItem);
 router.put('/admin/equipment-items/:id', requireAdmin, equipmentItemController.updateEquipmentItem);
 router.delete('/admin/equipment-items/:id', requireAdmin, equipmentItemController.deleteEquipmentItem);
+router.get('/admin/equipment-items/:equipmentItemId/assets', requireAdmin, equipmentAssetController.getEquipmentAssets);
+router.post('/admin/equipment-items/:equipmentItemId/assets', requireAdmin, equipmentAssetController.createEquipmentAsset);
+router.get('/admin/equipment-items/:equipmentItemId/assets/:assetId', requireAdmin, equipmentAssetController.getEquipmentAsset);
+router.put('/admin/equipment-items/:equipmentItemId/assets/:assetId', requireAdmin, equipmentAssetController.updateEquipmentAsset);
+router.delete('/admin/equipment-items/:equipmentItemId/assets/:assetId', requireAdmin, equipmentAssetController.deleteEquipmentAsset);
+router.get('/rooms/:roomId/equipment-assets', requireRoomListAccess, roomEquipmentAssignmentController.getRoomEquipment);
+router.get('/rooms/:roomId/assignable-equipment-assets', requireAdmin, roomEquipmentAssignmentController.getAssignableAssets);
+router.post('/rooms/:roomId/equipment-assets', requireAdmin, roomEquipmentAssignmentController.assignEquipmentToRoom);
+router.delete('/rooms/:roomId/equipment-assets/:equipmentAssetId', requireAdmin, roomEquipmentAssignmentController.unassignEquipmentFromRoom);
 
 router.post('/room-types', requireAdmin, roomTypeController.createRoomType);
 router.put('/room-types/:roomTypeId', requireAdmin, roomTypeController.updateRoomType);

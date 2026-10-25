@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useToast } from '../components/ToastProvider';
 import DataTable from '../components/DataTable';
+import RoomEquipmentAssignments from '../components/RoomEquipmentAssignments';
 import {
   finishRoomCleaning,
   addRoom,
@@ -314,7 +315,8 @@ export default function RoomsPage({ role = 'ADMIN' }: { role?: Role }) {
         <section className="room-crud-dialog room-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="room-detail-title">
           <header><div><small>Chi tiết phòng</small><h2 id="room-detail-title">{roomDetail ? `Phòng ${roomDetail.room_number}` : 'Thông tin phòng'}</h2></div><button type="button" className="room-crud-close" aria-label="Đóng" onClick={() => { setRoomDetail(null); setRoomDetailError(''); setConfirmDeleteOpen(false); }}>×</button></header>
           {roomDetailLoading && <p>Đang tải chi tiết phòng...</p>}{roomDetailError && <p className="inline-error" role="alert">{roomDetailError}</p>}
-          {roomDetail && <><dl><div><dt>Trạng thái</dt><dd>{roomStatusLabels[roomDetail.status]}</dd></div><div><dt>Loại phòng</dt><dd>{roomDetail.room_type_name}</dd></div><div><dt>Tầng</dt><dd>{roomDetail.floor}</dd></div><div><dt>Giá cơ bản</dt><dd>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(roomDetail.base_price)}</dd></div><div><dt>Sức chứa</dt><dd>{roomDetail.max_adults} người lớn · {roomDetail.max_children} trẻ em</dd></div>{roomDetail.room_type_description && <div className="room-detail-wide"><dt>Mô tả loại phòng</dt><dd>{roomDetail.room_type_description}</dd></div>}</dl>
+          {roomDetail && <><dl><div><dt>Trạng thái</dt><dd>{roomStatusLabels[roomDetail.status]}</dd></div><div><dt>Loại phòng</dt><dd>{roomDetail.room_type_name}</dd></div><div><dt>Tầng</dt><dd>{roomDetail.floor}</dd></div><div><dt>Giá cơ bản</dt><dd>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(roomDetail.base_price)}</dd></div><div><dt>Sức chứa</dt><dd>{roomDetail.max_adults} người lớn · {roomDetail.max_children} trẻ em</dd></div>{roomDetail.room_type_description && <div className="room-detail-description"><dt>Mô tả loại phòng</dt><dd>{roomDetail.room_type_description}</dd></div>}</dl>
+            <RoomEquipmentAssignments roomId={roomDetail.id} roomNumber={roomDetail.room_number} roomTypeName={roomDetail.room_type_name} canAssign={isAdmin} />
             {confirmDeleteOpen ? <div className="room-delete-confirm"><p>Xóa phòng {roomDetail.room_number}? Chỉ xóa được phòng chưa được booking hoặc báo cáo bảo trì sử dụng.</p><button className="btn btn-outline btn-sm" type="button" onClick={() => setConfirmDeleteOpen(false)} disabled={deletePending}>Giữ lại</button><button className="btn btn-danger btn-sm" type="button" onClick={() => void confirmDeleteRoom()} disabled={deletePending}>{deletePending ? 'Đang xóa...' : 'Xác nhận xóa'}</button></div> : <footer>{isAdmin && <><button className="btn btn-outline" type="button" onClick={() => { const selected = roomDetail; setRoomDetail(null); void openRoomForm(selected); }}>Sửa thông tin</button><button className="btn btn-danger" type="button" onClick={() => setConfirmDeleteOpen(true)}>Xóa phòng</button></>}<button className="btn btn-outline" type="button" onClick={() => setRoomDetail(null)}>Đóng</button></footer>}
           </>}
         </section>

@@ -14,13 +14,21 @@ class EquipmentItemModel extends BaseModel {
       throw Object.assign(new Error('Active status is required.'), { statusCode: 400 });
     }
 
-    return { name, is_active: input.is_active };
+    const equipmentItem = { name, is_active: input.is_active };
+    if (Object.prototype.hasOwnProperty.call(input, 'description')) {
+      if (input.description !== null && (typeof input.description !== 'string' || input.description.length > 500)) {
+        throw Object.assign(new Error('Equipment description must be text and must not exceed 500 characters.'), { statusCode: 400 });
+      }
+      const description = typeof input.description === 'string' ? input.description.trim() : '';
+      equipmentItem.description = description || null;
+    }
+    return equipmentItem;
   }
 
   static get schema() {
     return {
       name: 'EquipmentItemModel', table: 'equipment_items', primaryKey: 'id',
-      fields: ['id', 'name', 'is_active'],
+      fields: ['id', 'name', 'description', 'is_active'],
     };
   }
 }

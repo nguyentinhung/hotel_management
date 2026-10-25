@@ -1,7 +1,29 @@
 export interface EquipmentItem {
   id: number;
   name: string;
+  description: string | null;
   is_active: boolean | 0 | 1;
+}
+
+export type EquipmentAssetStatus = 'AVAILABLE' | 'MAINTENANCE' | 'RETIRED';
+
+export interface EquipmentAsset {
+  id: number | string;
+  equipment_item_id: number;
+  asset_code: string;
+  serial_number: string | null;
+  status: EquipmentAssetStatus;
+  purchase_date: string | null;
+  notes: string | null;
+  current_room_name: string | null;
+}
+
+export interface EquipmentAssetInput {
+  asset_code: string;
+  serial_number: string;
+  status: EquipmentAssetStatus;
+  purchase_date: string;
+  notes: string;
 }
 
 export class EquipmentApiError extends Error {
@@ -35,7 +57,7 @@ export async function getEquipmentItemById(id: number): Promise<EquipmentItem> {
   return readResponse(await fetch(`${API_URL}/${id}`, { headers: authHeaders() }));
 }
 
-export async function createEquipmentItem(input: { name: string; is_active: boolean }): Promise<EquipmentItem> {
+export async function createEquipmentItem(input: { name: string; description?: string | null; is_active: boolean }): Promise<EquipmentItem> {
   return readResponse(await fetch(API_URL, {
     method: 'POST',
     headers: authHeaders(true),
@@ -43,7 +65,7 @@ export async function createEquipmentItem(input: { name: string; is_active: bool
   }));
 }
 
-export async function updateEquipmentItem(id: number, input: { name: string; is_active: boolean }): Promise<{ message: string; equipmentItem: EquipmentItem }> {
+export async function updateEquipmentItem(id: number, input: { name: string; description?: string | null; is_active: boolean }): Promise<{ message: string; equipmentItem: EquipmentItem }> {
   return readResponse(await fetch(`${API_URL}/${id}`, {
     method: 'PUT',
     headers: authHeaders(true),
@@ -53,6 +75,42 @@ export async function updateEquipmentItem(id: number, input: { name: string; is_
 
 export async function deleteEquipmentItem(id: number): Promise<{ message: string; id: number }> {
   return readResponse(await fetch(`${API_URL}/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  }));
+}
+
+function assetUrl(equipmentItemId: number, assetId?: number | string): string {
+  const base = `${API_URL}/${equipmentItemId}/assets`;
+  return assetId === undefined ? base : `${base}/${encodeURIComponent(String(assetId))}`;
+}
+
+export async function getEquipmentAssets(equipmentItemId: number): Promise<EquipmentAsset[]> {
+  return readResponse(await fetch(assetUrl(equipmentItemId), { headers: authHeaders() }));
+}
+
+export async function getEquipmentAsset(equipmentItemId: number, assetId: number | string): Promise<EquipmentAsset> {
+  return readResponse(await fetch(assetUrl(equipmentItemId, assetId), { headers: authHeaders() }));
+}
+
+export async function createEquipmentAsset(equipmentItemId: number, input: EquipmentAssetInput): Promise<EquipmentAsset> {
+  return readResponse(await fetch(assetUrl(equipmentItemId), {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify(input),
+  }));
+}
+
+export async function updateEquipmentAsset(equipmentItemId: number, assetId: number | string, input: EquipmentAssetInput): Promise<{ message: string; equipmentAsset: EquipmentAsset }> {
+  return readResponse(await fetch(assetUrl(equipmentItemId, assetId), {
+    method: 'PUT',
+    headers: authHeaders(true),
+    body: JSON.stringify(input),
+  }));
+}
+
+export async function deleteEquipmentAsset(equipmentItemId: number, assetId: number | string): Promise<{ message: string; id: number | string }> {
+  return readResponse(await fetch(assetUrl(equipmentItemId, assetId), {
     method: 'DELETE',
     headers: authHeaders(),
   }));

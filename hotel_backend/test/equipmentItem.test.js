@@ -33,6 +33,21 @@ test('equipment active status is required and must be boolean', () => {
   assert.equal(EquipmentItemModel.normalizeInput({ name: 'TV', is_active: false }).is_active, false);
 });
 
+test('equipment description is optional, nullable, trimmed, and limited to 500 characters', () => {
+  const withoutDescription = EquipmentItemModel.normalizeInput({ name: 'TV', is_active: true });
+  assert.equal(Object.hasOwn(withoutDescription, 'description'), false);
+  assert.equal(EquipmentItemModel.normalizeInput({ name: 'TV', is_active: true, description: '  Room display  ' }).description, 'Room display');
+  assert.equal(EquipmentItemModel.normalizeInput({ name: 'TV', is_active: true, description: '' }).description, null);
+  assert.equal(EquipmentItemModel.normalizeInput({ name: 'TV', is_active: true, description: null }).description, null);
+  assert.equal(EquipmentItemModel.normalizeInput({ name: 'TV', is_active: true, description: 'x'.repeat(500) }).description.length, 500);
+  for (const description of ['x'.repeat(501), ' '.repeat(501), 42, false]) {
+    assert.throws(() => EquipmentItemModel.normalizeInput({ name: 'TV', is_active: true, description }), {
+      message: 'Equipment description must be text and must not exceed 500 characters.',
+      statusCode: 400,
+    });
+  }
+});
+
 test('client supplied IDs are discarded before persistence', () => {
   assert.deepEqual(
     EquipmentItemModel.normalizeInput({ id: 987, name: 'TV', is_active: true }),
@@ -40,10 +55,42 @@ test('client supplied IDs are discarded before persistence', () => {
   );
 });
 
+test('equipment creation DAO inserts description as a parameter and returns the generated row', async () => {
+  let queryText = '';
+  const supplied = {};
+  const originalGetPool = database.getPool;
+  database.getPool = async () => ({
+    request: () => ({
+      input(name, _type, value) { supplied[name] = value; return this; },
+      query: async (query) => {
+        queryText = query;
+        return { recordset: [{ id: 51, name: 'Air conditioner', description: 'Room cooling unit', is_active: true }] };
+      },
+    }),
+  });
+  delete require.cache[require.resolve('../src/dao/equipmentItemDao')];
+  const equipmentItemDao = require('../src/dao/equipmentItemDao');
+
+  try {
+    const row = await equipmentItemDao.create({ id: 999, name: 'Air conditioner', description: 'Room cooling unit', is_active: true });
+    assert.deepEqual({ id: row.id, name: row.name, description: row.description, is_active: row.is_active }, { id: 51, name: 'Air conditioner', description: 'Room cooling unit', is_active: true });
+    assert.deepEqual(supplied, { name: 'Air conditioner', description: 'Room cooling unit', is_active: true });
+    assert.match(queryText, /INSERT INTO dbo\.equipment_items \(name, description, is_active\)[\s\S]*OUTPUT INSERTED\.id, INSERTED\.name, INSERTED\.description, INSERTED\.is_active[\s\S]*VALUES \(@name, @description, @is_active\)/i);
+    assert.doesNotMatch(queryText, /VALUES\s*\([^)]*@id/i);
+
+    supplied.description = undefined;
+    await equipmentItemDao.create({ name: 'Table lamp', is_active: true });
+    assert.equal(supplied.description, null);
+  } finally {
+    database.getPool = originalGetPool;
+    delete require.cache[require.resolve('../src/dao/equipmentItemDao')];
+  }
+});
+
 test('equipment list reads all statuses from dbo.equipment_items without writes', async () => {
   const rows = [
-    { id: 1, name: 'Television', is_active: true },
-    { id: 2, name: 'Hair dryer', is_active: false },
+    { id: 1, name: 'Television', description: 'Room display', is_active: true },
+    { id: 2, name: 'Hair dryer', description: null, is_active: false },
   ];
   let queryText = '';
   const originalGetPool = database.getPool;
@@ -55,8 +102,8 @@ test('equipment list reads all statuses from dbo.equipment_items without writes'
 
   try {
     const result = await equipmentItemDao.findAll();
-    assert.deepEqual(result.map(({ id, name, is_active }) => ({ id, name, is_active })), rows);
-    assert.match(queryText, /SELECT\s+id, name, is_active\s+FROM dbo\.equipment_items/i);
+    assert.deepEqual(result.map(({ id, name, description, is_active }) => ({ id, name, description, is_active })), rows);
+    assert.match(queryText, /SELECT\s+id, name, description, is_active\s+FROM dbo\.equipment_items/i);
     assert.doesNotMatch(queryText, /WHERE\s+is_active/i);
     assert.doesNotMatch(queryText, /INSERT|UPDATE|DELETE/i);
   } finally {
@@ -65,14 +112,14 @@ test('equipment list reads all statuses from dbo.equipment_items without writes'
   }
 });
 
-test('equipment details DAO uses the selected ID as a parameter and performs a read only', async () => {
+test('equipment details DAO returns description for the selected ID using a read-only parameterized query', async () => {
   let queryText = '';
   let suppliedId;
   const originalGetPool = database.getPool;
   database.getPool = async () => ({
     request: () => ({
       input(_name, _type, value) { suppliedId = value; return this; },
-      query: async (query) => { queryText = query; return { recordset: [{ id: 42, name: 'Mini fridge', is_active: false }] }; },
+      query: async (query) => { queryText = query; return { recordset: [{ id: 42, name: 'Mini fridge', description: 'Compact refrigerator', is_active: false }] }; },
     }),
   });
   delete require.cache[require.resolve('../src/dao/equipmentItemDao')];
@@ -80,9 +127,9 @@ test('equipment details DAO uses the selected ID as a parameter and performs a r
 
   try {
     const item = await equipmentItemDao.findById(42);
-    assert.deepEqual({ id: item.id, name: item.name, is_active: item.is_active }, { id: 42, name: 'Mini fridge', is_active: false });
+    assert.deepEqual({ id: item.id, name: item.name, description: item.description, is_active: item.is_active }, { id: 42, name: 'Mini fridge', description: 'Compact refrigerator', is_active: false });
     assert.equal(suppliedId, 42);
-    assert.match(queryText, /SELECT\s+id, name, is_active\s+FROM dbo\.equipment_items\s+WHERE id = @id/i);
+    assert.match(queryText, /SELECT\s+id, name, description, is_active\s+FROM dbo\.equipment_items\s+WHERE id = @id/i);
     assert.doesNotMatch(queryText, /INSERT|UPDATE|DELETE/i);
   } finally {
     database.getPool = originalGetPool;
@@ -114,7 +161,7 @@ test('equipment details validates IDs before querying and passes the selected ID
   const equipmentItemDao = require('../src/dao/equipmentItemDao');
   const originalFindById = equipmentItemDao.findById;
   const queriedIds = [];
-  equipmentItemDao.findById = async (id) => { queriedIds.push(id); return { id, name: 'Mini fridge', is_active: false }; };
+    equipmentItemDao.findById = async (id) => { queriedIds.push(id); return { id, name: 'Mini fridge', description: 'Compact refrigerator', is_active: false }; };
   const equipmentItemService = require('../src/services/equipmentItemService');
 
   try {
@@ -123,7 +170,7 @@ test('equipment details validates IDs before querying and passes the selected ID
     }
     assert.deepEqual(queriedIds, []);
     assert.deepEqual(await equipmentItemService.getEquipmentItemById('42'), {
-      id: 42, name: 'Mini fridge', is_active: false,
+      id: 42, name: 'Mini fridge', description: 'Compact refrigerator', is_active: false,
     });
     assert.deepEqual(queriedIds, [42]);
   } finally {
@@ -148,10 +195,10 @@ test('equipment details controller separates not-found, validation, and server e
 
   try {
     console.error = () => {};
-    equipmentItemService.getEquipmentItemById = async (id) => ({ id: Number(id), name: 'Television', is_active: true });
+    equipmentItemService.getEquipmentItemById = async (id) => ({ id: Number(id), name: 'Television', description: 'Room display', is_active: true });
     const found = await callController('7');
     assert.equal(found.statusCode, 200);
-    assert.deepEqual(found.body, { id: 7, name: 'Television', is_active: true });
+    assert.deepEqual(found.body, { id: 7, name: 'Television', description: 'Room display', is_active: true });
     equipmentItemService.getEquipmentItemById = async () => null;
     assert.equal((await callController('999')).statusCode, 404);
     equipmentItemService.getEquipmentItemById = async () => { throw Object.assign(new Error('Invalid ID.'), { statusCode: 400 }); };
@@ -161,6 +208,26 @@ test('equipment details controller separates not-found, validation, and server e
   } finally {
     equipmentItemService.getEquipmentItemById = originalGetById;
     console.error = originalConsoleError;
+  }
+});
+
+test('equipment create controller returns the description passed through the API body', async () => {
+  const equipmentItemService = require('../src/services/equipmentItemService');
+  const equipmentItemController = require('../src/controllers/equipmentItemController');
+  const originalCreate = equipmentItemService.createEquipmentItem;
+  const response = {
+    statusCode: 200,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return this; },
+  };
+
+  try {
+    equipmentItemService.createEquipmentItem = async (body) => ({ id: 51, ...body });
+    await equipmentItemController.createEquipmentItem({ body: { name: 'Air conditioner', description: 'Room cooling unit', is_active: true } }, response);
+    assert.equal(response.statusCode, 201);
+    assert.deepEqual(response.body, { id: 51, name: 'Air conditioner', description: 'Room cooling unit', is_active: true });
+  } finally {
+    equipmentItemService.createEquipmentItem = originalCreate;
   }
 });
 
@@ -201,14 +268,14 @@ test('equipment update validates ID and payload before issuing an update', async
   }
 });
 
-test('equipment update DAO uses parameterized selected ID and UPDATE OUTPUT only', async () => {
+test('equipment update DAO returns description and preserves it when omitted from the update payload', async () => {
   let queryText = '';
   const supplied = {};
   const originalGetPool = database.getPool;
   database.getPool = async () => ({
     request: () => ({
       input(name, _type, value) { supplied[name] = value; return this; },
-      query: async (query) => { queryText = query; return { recordset: [{ id: 42, name: 'Mini fridge', is_active: false }] }; },
+      query: async (query) => { queryText = query; return { recordset: [{ id: 42, name: 'Mini fridge', description: 'Existing description', is_active: false }] }; },
     }),
   });
   delete require.cache[require.resolve('../src/dao/equipmentItemDao')];
@@ -216,10 +283,18 @@ test('equipment update DAO uses parameterized selected ID and UPDATE OUTPUT only
 
   try {
     const result = await equipmentItemDao.update(42, { name: 'Mini fridge', is_active: false });
-    assert.deepEqual({ id: result.id, name: result.name, is_active: result.is_active }, { id: 42, name: 'Mini fridge', is_active: false });
-    assert.deepEqual(supplied, { id: 42, name: 'Mini fridge', is_active: false });
-    assert.match(queryText, /UPDATE dbo\.equipment_items\s+SET name = @name, is_active = @is_active\s+OUTPUT INSERTED\.id, INSERTED\.name, INSERTED\.is_active\s+WHERE id = @id/i);
+    assert.deepEqual({ id: result.id, name: result.name, description: result.description, is_active: result.is_active }, { id: 42, name: 'Mini fridge', description: 'Existing description', is_active: false });
+    assert.deepEqual(supplied, { id: 42, name: 'Mini fridge', descriptionProvided: false, description: null, is_active: false });
+    assert.match(queryText, /UPDATE dbo\.equipment_items\s+SET name = @name,\s+is_active = @is_active,\s+description = CASE WHEN @descriptionProvided = 1 THEN @description ELSE description END\s+OUTPUT INSERTED\.id, INSERTED\.name, INSERTED\.description, INSERTED\.is_active\s+WHERE id = @id/i);
     assert.doesNotMatch(queryText, /INSERT INTO/i);
+
+    await equipmentItemDao.update(42, { name: 'Mini fridge', description: 'Updated description', is_active: false });
+    assert.equal(supplied.descriptionProvided, true);
+    assert.equal(supplied.description, 'Updated description');
+
+    await equipmentItemDao.update(42, { name: 'Mini fridge', description: null, is_active: false });
+    assert.equal(supplied.descriptionProvided, true);
+    assert.equal(supplied.description, null);
   } finally {
     database.getPool = originalGetPool;
     delete require.cache[require.resolve('../src/dao/equipmentItemDao')];
@@ -244,9 +319,9 @@ test('equipment update controller returns success, validation, not-found, and da
   try {
     console.error = () => {};
     equipmentItemService.updateEquipmentItem = async (id, body) => ({ id: Number(id), ...body });
-    const success = await callController('7', { name: 'TV', is_active: false });
+    const success = await callController('7', { name: 'TV', description: 'Wall mounted display', is_active: false });
     assert.equal(success.statusCode, 200);
-    assert.deepEqual(success.body.equipmentItem, { id: 7, name: 'TV', is_active: false });
+    assert.deepEqual(success.body.equipmentItem, { id: 7, name: 'TV', description: 'Wall mounted display', is_active: false });
 
     equipmentItemService.updateEquipmentItem = async () => null;
     assert.equal((await callController('999', { name: 'TV', is_active: true })).statusCode, 404);
