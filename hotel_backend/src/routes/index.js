@@ -9,6 +9,7 @@ const serviceController = require('../controllers/serviceController');
 const { requireCustomer, requireReceptionist, requirePaymentStaff, requirePaymentActor, requireReviewStaff, requireProfileAccess, requireChangePassword } = require('../utils/middleware/customerAuth');
 const { requireAdmin, requireRoomListAccess, requirePromotionReadAccess, requireStaffReadAccess } = require('../utils/middleware/roleMiddleware');
 const staffController = require('../controllers/staffController');
+const userController = require('../controllers/userController');
 const reviewController = require('../controllers/reviewController');
 const { getProfile, updateProfile } = require('../controllers/profileController');
 const { createPayment, getPaymentList, getCustomerPaymentList, getInvoiceList, getInvoiceDetail, getPaymentStatusRequest, confirmPaymentRequest, simulateDepositPaymentRequest } = require('../controllers/paymentController');
@@ -18,6 +19,7 @@ const { getAdminStatistics } = require('../controllers/statisticsController');
 const promotionController = require('../controllers/promotionController');
 const amenityController = require('../controllers/amenityController');
 const roomTypeController = require('../controllers/roomTypeController');
+const equipmentItemController = require('../controllers/equipmentItemController');
 
 const router = express.Router();
 const vnpayEnabled = String(process.env.VNPAY_ENABLED || '').toLowerCase() === 'true';
@@ -44,6 +46,13 @@ router.get('/health', (req, res) => {
 });
 
 router.get('/admin/statistics', requireAdmin, getAdminStatistics);
+router.get('/admin/users', requireAdmin, userController.getUserList);
+router.get('/admin/users/:id', requireAdmin, userController.getUserDetails);
+router.post('/admin/users', requireAdmin, userController.createUser);
+router.put('/admin/users/:id', requireAdmin, userController.updateUser);
+router.patch('/admin/users/:id/lock', requireAdmin, userController.lockUser);
+router.patch('/admin/users/:id/unlock', requireAdmin, userController.unlockUser);
+router.patch('/admin/users/:id/role', requireAdmin, userController.assignUserRole);
 router.get('/profile', requireProfileAccess, getProfile);
 router.put('/profile', requireProfileAccess, updateProfile);
 router.get('/staff', requireStaffReadAccess, staffController.getStaffList);
@@ -74,6 +83,13 @@ router.get('/home', getHomeData);
 router.get('/room-types', getRoomTypes);
 router.get('/room-types/:roomTypeId', getRoomTypeDetails);
 router.get('/admin/amenities', requireAdmin, amenityController.getAdminAmenities);
+router.get('/admin/equipment-items', requireAdmin, equipmentItemController.getEquipmentItems);
+router.get('/admin/equipment-items/:id', requireAdmin, equipmentItemController.getEquipmentItemById);
+router.get('/admin/equipment-items/:id/rooms', requireAdmin, equipmentItemController.getEquipmentRooms);
+router.put('/admin/equipment-items/:id/rooms', requireAdmin, equipmentItemController.assignEquipmentToRooms);
+router.post('/admin/equipment-items', requireAdmin, equipmentItemController.createEquipmentItem);
+router.put('/admin/equipment-items/:id', requireAdmin, equipmentItemController.updateEquipmentItem);
+router.delete('/admin/equipment-items/:id', requireAdmin, equipmentItemController.deleteEquipmentItem);
 
 router.post('/room-types', requireAdmin, roomTypeController.createRoomType);
 router.put('/room-types/:roomTypeId', requireAdmin, roomTypeController.updateRoomType);

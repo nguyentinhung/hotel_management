@@ -127,7 +127,7 @@ export default function ReceptionRoomBooking({
   mode?: ReceptionBookingMode;
   onViewBookingHistory?: () => void;
 }) {
-  const { showToast } = useToast();
+  const { showToast, confirmAction } = useToast();
   const today = useMemo(() => formatDateInput(new Date()), []);
   const tomorrow = useMemo(() => addDays(today, 1), [today]);
 
@@ -461,7 +461,7 @@ export default function ReceptionRoomBooking({
 
   const handleCancelSelectedBooking = async () => {
     if (!selectedBookingDetail || selectedBookingDetail.status !== 'CONFIRMED') return;
-    if (!window.confirm(`Bạn có chắc muốn hủy booking ${selectedBookingDetail.booking_code}?`)) return;
+    if (!await confirmAction({ title: 'Hủy booking?', message: `Bạn có chắc muốn hủy booking ${selectedBookingDetail.booking_code}?`, confirmLabel: 'Hủy booking', destructive: true })) return;
     const accessToken = localStorage.getItem('accessToken');
     if (!accessToken) {
       showToast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.', 'error');

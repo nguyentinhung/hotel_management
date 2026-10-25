@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { getStaff, getStaffDetails, updateStaff, updateStaffStatus, type StaffMember } from '../services/staffService';
+import { useToast } from '../components/ToastProvider';
 
 const employmentLabel = (status: string) => status === 'ACTIVE' ? 'Đang làm việc' : status === 'INACTIVE' ? 'Ngừng làm việc' : status;
 const dateValue = (value: string | null) => value ? value.slice(0, 10) : '';
 
 export default function StaffManagementPage({ canEdit }: { canEdit: boolean }) {
+  const { confirmAction } = useToast();
   const [staff, setStaff] = useState<StaffMember[]>([]);
   const [selected, setSelected] = useState<StaffMember | null>(null);
   const [search, setSearch] = useState('');
@@ -57,7 +59,8 @@ export default function StaffManagementPage({ canEdit }: { canEdit: boolean }) {
 
   const toggleStatus = async (member: StaffMember) => {
     const nextStatus = member.employment_status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
-    if (!window.confirm(nextStatus === 'INACTIVE' ? `Chuyển ${member.full_name} sang trạng thái ngừng làm việc?` : `Đánh dấu ${member.full_name} đang làm việc?`)) return;
+    const isLeaving = nextStatus === 'INACTIVE';
+    if (!await confirmAction({ title: isLeaving ? 'Ngừng làm việc?' : 'Kích hoạt nhân viên?', message: isLeaving ? `Chuyển ${member.full_name} sang trạng thái ngừng làm việc?` : `Đánh dấu ${member.full_name} đang làm việc?`, confirmLabel: isLeaving ? 'Ngừng làm việc' : 'Kích hoạt', destructive: isLeaving })) return;
     setSaving(true);
     setError('');
     try {

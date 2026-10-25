@@ -9806,4 +9806,32 @@ a:focus-visible {
 .review-star { border: 0; padding: 2px 4px; color: #c68b20; background: transparent; font-size: 1.8rem; cursor: pointer; }
 .review-form textarea, #review-booking { width: 100%; }
 .review-page { display: grid; gap: 14px; }
+.app-confirm-backdrop { position: fixed; inset: 0; z-index: 5200; display: grid; place-items: center; padding: 20px; background: rgba(9, 29, 29, .58); }
+.app-confirm-dialog { width: min(100%, 480px); padding: 24px; border: 1px solid var(--line, #dce8e4); border-radius: 18px; background: #fff; box-shadow: 0 24px 70px rgba(0, 0, 0, .25); }
+.app-confirm-eyebrow { color: var(--muted, #64748b); font-size: .78rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.app-confirm-dialog h2 { margin: 8px 0 10px; color: var(--primary, #174d56); font-size: 1.25rem; }
+.app-confirm-dialog p { margin: 0 0 24px; color: var(--text-muted, #53616b); line-height: 1.6; }
+.app-confirm-dialog footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
+.app-confirm-danger { min-height: 40px; padding: 8px 16px; border: 1px solid #b82b32; border-radius: 8px; background: #b82b32; color: #fff; font: inherit; font-weight: 650; cursor: pointer; }
+.app-confirm-danger:hover { border-color: #962128; background: #962128; }
 @media (max-width: 600px) { .review-management-heading { align-items: flex-start; flex-direction: column; } }
+.dashboard-shell-unified .equipment-table { min-width: 760px; table-layout: fixed; }
+.dashboard-shell-unified .equipment-table th:nth-child(1), .dashboard-shell-unified .equipment-table td:nth-child(1) { width: 90px; text-align: center; }
+.dashboard-shell-unified .equipment-table th:nth-child(2) { width: 48%; }
+.dashboard-shell-unified .equipment-table th:nth-child(3), .dashboard-shell-unified .equipment-table td:nth-child(3) { width: 150px; white-space: nowrap; }
+.dashboard-shell-unified .equipment-table th:last-child, .dashboard-shell-unified .equipment-table td:last-child { width: 140px; text-align: center; white-space: nowrap; }
+.dashboard-shell-unified .equipment-row-actions { justify-content: center; gap: 6px; }
+.dashboard-shell-unified .equipment-row-actions button { width: 32px; height: 32px; }
+.dashboard-shell-unified .equipment-table .equipment-name-cell { overflow-wrap: anywhere; }
+.dashboard-shell-unified .service-assign-action { background: #e7efff; color: #315c9b; font-size: 19px; }
+.dashboard-shell-unified .service-assign-action:hover { background: #d7e4ff; }
+.dashboard-shell-unified .equipment-modal { width: min(100%, 680px); }
+.dashboard-shell-unified .equipment-details-modal { width: min(100%, 760px); }
+.dashboard-shell-unified .equipment-form-grid { grid-template-columns: minmax(0, 1fr); }
+.dashboard-shell-unified .equipment-room-checklist { display: grid; max-height: min(55vh, 460px); gap: 8px; overflow-y: auto; margin: 18px 0; }
+.dashboard-shell-unified .equipment-room-checklist label { display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; cursor: pointer; }
+.dashboard-shell-unified .equipment-room-checklist input { width: 18px; height: 18px; margin: 0; accent-color: var(--primary); }
+.dashboard-shell-unified .equipment-room-checklist label > span { display: grid; gap: 3px; }
+.dashboard-shell-unified .equipment-room-checklist small { color: var(--muted); }
+.dashboard-shell-unified .equipment-assignment-modal { width: min(100%, 600px); }
+@media (max-width: 600px) { .dashboard-shell-unified .equipment-modal { padding: 20px; } }

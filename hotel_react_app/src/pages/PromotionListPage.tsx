@@ -40,7 +40,7 @@ function toRequest(promotion: Promotion): PromotionRequest {
 }
 
 export default function PromotionListPage({ role = 'ADMIN' }: PromotionListPageProps) {
-    const { showToast } = useToast();
+    const { showToast, confirmAction } = useToast();
     const [promotions, setPromotions] = useState<Promotion[]>([]);
     const [selectedPromotion, setSelectedPromotion] = useState<Promotion | null>(null);
     const [view, setView] = useState<'list' | 'create' | 'details' | 'edit'>('list');
@@ -112,7 +112,7 @@ export default function PromotionListPage({ role = 'ADMIN' }: PromotionListPageP
     };
 
     const handleDelete = async (id: number) => {
-        if (!window.confirm('Ban co chac chan muon xoa khuyen mai nay?')) return;
+        if (!await confirmAction({ title: 'Xóa khuyến mãi?', message: 'Bạn có chắc muốn xóa khuyến mãi này?', confirmLabel: 'Xóa', destructive: true })) return;
 
         try {
             await deletePromotion(id);

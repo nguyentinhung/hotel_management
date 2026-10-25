@@ -26,6 +26,8 @@ import lotusLogo from '../assets/lumiere-lotus.png';
 import ReportsStatisticsPage from './ReportsStatisticsPage';
 import ReviewListPage from './ReviewListPage';
 import StaffManagementPage from './StaffManagementPage';
+import UserManagementPage from './UserManagementPage';
+import EquipmentListPage from './EquipmentListPage';
 
 /**
  * ============================================================================
@@ -57,6 +59,7 @@ const dashboardConfig: Record<
       { label: 'Promotion Management', description: 'Manage promotions.' },
       { label: 'Profile', description: 'View and update your profile.' },
       { label: 'Change Password', description: 'Update your password.' },
+      { label: 'Equipment Management', description: 'Manage the equipment catalog and assign equipment to rooms.' },
     ],
   },
   RECEPTIONIST: {
@@ -234,7 +237,7 @@ function RoomStatusPanel({ role }: { role: Role }) {
 }
 
 function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: { customerMode?: boolean; onBackToManagement?: () => void }) {
-  const { showToast } = useToast();
+  const { showToast, confirmAction } = useToast();
   const navigate = useNavigate();
   const [bookings, setBookings] = useState<RecentBooking[]>([]);
   const [selectedBooking, setSelectedBooking] = useState<RecentBooking | null>(null);
@@ -369,7 +372,7 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
     finally { setSaving(false); }
   };
   const cancelSelectedBooking = async () => {
-    if (!selectedBooking || !window.confirm(`Bạn có chắc muốn hủy booking ${selectedBooking.booking_code}?`)) return;
+    if (!selectedBooking || !await confirmAction({ title: 'Hủy booking?', message: `Bạn có chắc muốn hủy booking ${selectedBooking.booking_code}?`, confirmLabel: 'Hủy booking', destructive: true })) return;
     const accessToken = localStorage.getItem('accessToken');
     if (!accessToken) return showToast('Vui lòng đăng nhập lại.', 'error');
     try {
@@ -478,7 +481,7 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
   };
   const formatMoney = (amount: number) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(amount);
   const cancelCustomerBooking = async (booking: RecentBooking) => {
-    if (!window.confirm(`Bạn có chắc muốn hủy đặt phòng ${booking.booking_code}?`)) return;
+    if (!await confirmAction({ title: 'Hủy đặt phòng?', message: `Bạn có chắc muốn hủy đặt phòng ${booking.booking_code}?`, confirmLabel: 'Hủy đặt phòng', destructive: true })) return;
     const accessToken = localStorage.getItem('accessToken');
     if (!accessToken) return showToast('Vui lòng đăng nhập lại.', 'error');
     try {
@@ -694,6 +697,8 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
             ? { label: 'Promotion Management', description: 'Xem danh sách và chi tiết các chương trình khuyến mãi.' }
             : activeModule === 'Staff Management'
               ? { label: 'Staff Management', description: 'Xem danh sách, chi tiết và quản lý thông tin nhân viên.' }
+              : activeModule === 'Account Management'
+                ? { label: 'Account Management', description: 'Tạo, tìm kiếm, cập nhật tài khoản, khóa/mở khóa và phân quyền người dùng.' }
             : config.nav[0]);
 
   const pageTitle = currentRole === 'RECEPTIONIST' && activeItem.label === config.nav[3].label
@@ -745,7 +750,7 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
       { label: 'Room Management', moduleIndex: 0, icon: 'bedDouble' }, { label: 'Room Type Management', moduleIndex: 1, icon: 'room' },
     ] },
     { title: 'DỊCH VỤ & VẬN HÀNH', items: [
-      { label: 'Service Management', moduleIndex: 2, icon: 'service' }, { label: 'Cleaning Task', icon: 'cleaning' }, { label: 'Equipment Management', icon: 'equipment' }, { label: 'Equipment Inspection', icon: 'maintenance' },
+      { label: 'Service Management', moduleIndex: 2, icon: 'service' }, { label: 'Cleaning Task', icon: 'cleaning' }, { label: 'Equipment Management', moduleIndex: 8, icon: 'equipment' }, { label: 'Equipment Inspection', icon: 'maintenance' },
     ] },
     { title: 'KHÁCH HÀNG', items: [
       { label: 'Customer Management', icon: 'customer' }, { label: 'Promotion Management', moduleIndex: 5, icon: 'tag' }, { label: 'Review Management', icon: 'review' },
@@ -805,15 +810,17 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
                 const reviewModule = item.label === 'Review Management';
                 const promotionModule = item.label === 'Promotion Management';
                 const staffModule = item.label === 'Staff Management';
+                const accountModule = item.label === 'Account Management';
                 const isActive = Boolean(
                   (module && module === activeItem.label) ||
                   (invoiceModule && activeItem.label === 'Invoice Management') ||
                   (reportsModule && activeItem.label === 'Reports & Statistics') ||
                   (reviewModule && activeItem.label === 'Review Management') ||
                   (promotionModule && activeItem.label === 'Promotion Management') ||
-                  (staffModule && activeItem.label === 'Staff Management')
+                  (staffModule && activeItem.label === 'Staff Management') ||
+                  (accountModule && activeItem.label === 'Account Management')
                 );
-                const isDisabled = !module && !invoiceModule && !reportsModule && !reviewModule && !promotionModule && !staffModule;
+                const isDisabled = !module && !invoiceModule && !reportsModule && !reviewModule && !promotionModule && !staffModule && !accountModule;
                 return <button
                   key={item.label}
                   type="button"
@@ -827,6 +834,7 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
                     else if (reviewModule) setActiveModule('Review Management');
                     else if (promotionModule) setActiveModule('Promotion Management');
                     else if (staffModule) setActiveModule('Staff Management');
+                    else if (accountModule) setActiveModule('Account Management');
                   }}
                 >
                   <span className="dashboard-nav-icon"><DashboardNavIcon name={item.icon} /></span>
@@ -913,6 +921,8 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
             <ReviewListPage role={currentRole} />
           ) : ['ADMIN', 'RECEPTIONIST'].includes(currentRole) && activeItem.label === 'Staff Management' ? (
             <StaffManagementPage canEdit={currentRole === 'ADMIN'} />
+          ) : currentRole === 'ADMIN' && activeItem.label === 'Account Management' ? (
+            <UserManagementPage />
           ) : currentRole === 'CUSTOMER' && activeItem.label === 'My Bookings' ? (
 
             <ReceptionBookingHistory customerMode />
@@ -928,6 +938,8 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
             <RoomStatusPanel role={currentRole} />
           ) : currentRole === 'ADMIN' && activeItem.label === 'Service Management' ? (
             <ServiceListPage role={currentRole} />
+          ) : currentRole === 'ADMIN' && activeItem.label === 'Equipment Management' ? (
+            <div className="module-content"><EquipmentListPage /></div>
           ) : currentRole === 'ADMIN' && activeItem.label === 'Reports & Statistics' ? (
             <ReportsStatisticsPage />
           ) : currentRole === 'RECEPTIONIST' && activeItem.label === config.nav[5].label ? (
