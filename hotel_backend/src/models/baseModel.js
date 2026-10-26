@@ -12,6 +12,15 @@ class BaseModel {
     return rows.map((row) => this.fromRow(row));
   }
 
+  static fromResult(result) {
+    if (Array.isArray(result)) return this.fromRows(result);
+    if (result == null || typeof result !== 'object' || Buffer.isBuffer(result)) return result;
+
+    const prototype = Object.getPrototypeOf(result);
+    if (prototype !== Object.prototype && prototype !== null) return result;
+    return this.fromRow(result);
+  }
+
   toJSON() {
     return { ...this };
   }

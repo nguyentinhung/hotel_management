@@ -1,7 +1,8 @@
 ﻿import type { Promotion, PromotionRequest } from '../types/Promotion';
+import { API_BASE_URL } from './api';
 
-const API_BASE_URL = 'http://localhost:5000/api/admin/promotions';
-const PUBLIC_API_BASE_URL = 'http://localhost:5000/api/promotions';
+const ADMIN_PROMOTIONS_URL = `${API_BASE_URL}/api/admin/promotions`;
+const PUBLIC_PROMOTIONS_URL = `${API_BASE_URL}/api/promotions`;
 
 function getAuthHeaders(includeJson = false): HeadersInit {
     const token = localStorage.getItem('accessToken');
@@ -17,7 +18,7 @@ async function readError(response: Response, fallback: string) {
 }
 
 export async function getPromotions(role = 'ADMIN'): Promise<Promotion[]> {
-    const response = await fetch(role === 'ADMIN' ? API_BASE_URL : PUBLIC_API_BASE_URL, {
+    const response = await fetch(role === 'ADMIN' ? ADMIN_PROMOTIONS_URL : PUBLIC_PROMOTIONS_URL, {
         headers: getAuthHeaders()
     });
 
@@ -29,7 +30,7 @@ export async function getPromotions(role = 'ADMIN'): Promise<Promotion[]> {
 }
 
 export async function getPromotionById(id: number, role = 'ADMIN'): Promise<Promotion> {
-    const response = await fetch(`${role === 'ADMIN' ? API_BASE_URL : PUBLIC_API_BASE_URL}/${id}`, {
+    const response = await fetch(`${role === 'ADMIN' ? ADMIN_PROMOTIONS_URL : PUBLIC_PROMOTIONS_URL}/${id}`, {
         headers: getAuthHeaders()
     });
 
@@ -41,7 +42,7 @@ export async function getPromotionById(id: number, role = 'ADMIN'): Promise<Prom
 }
 
 export async function createPromotion(data: PromotionRequest): Promise<Promotion> {
-    const response = await fetch(API_BASE_URL, {
+    const response = await fetch(ADMIN_PROMOTIONS_URL, {
         method: 'POST',
         headers: getAuthHeaders(true),
         body: JSON.stringify(data)
@@ -55,7 +56,7 @@ export async function createPromotion(data: PromotionRequest): Promise<Promotion
 }
 
 export async function updatePromotion(id: number, data: PromotionRequest): Promise<Promotion> {
-    const response = await fetch(`${API_BASE_URL}/${id}`, {
+    const response = await fetch(`${ADMIN_PROMOTIONS_URL}/${id}`, {
         method: 'PUT',
         headers: getAuthHeaders(true),
         body: JSON.stringify(data)
@@ -69,7 +70,7 @@ export async function updatePromotion(id: number, data: PromotionRequest): Promi
 }
 
 export async function deletePromotion(id: number): Promise<{ message: string }> {
-    const response = await fetch(`${API_BASE_URL}/${id}`, {
+    const response = await fetch(`${ADMIN_PROMOTIONS_URL}/${id}`, {
         method: 'DELETE',
         headers: getAuthHeaders()
     });

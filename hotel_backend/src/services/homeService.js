@@ -86,12 +86,12 @@ async function fetchHomeData() {
     getReviews(),
   ]);
 
-  return {
+  return HomeModel.fromRow({
     roomTypes: normalizeRoomTypes(roomTypes),
     promotions: normalizePromotions(promotions),
     services: normalizeServices(services),
     reviews: normalizeReviews(reviews),
-  };
+  });
 }
 
 module.exports = {

@@ -968,6 +968,34 @@ async function getPaymentStatus({ paymentCode, customerId = null }) {
   return PaymentModel.fromRow(result.recordset[0]);
 }
 
+async function getPaymentDetails({ paymentCode, customerId = null }) {
+  const pool = await getPool();
+  const request = pool.request().input('paymentCode', sql.VarChar(30), paymentCode);
+  const ownerFilter = customerId == null ? '' : 'AND b.customer_id = @customerId';
+  if (customerId != null) request.input('customerId', sql.BigInt, customerId);
+  const result = await request.query(`
+    SELECT TOP (1)
+      p.id,
+      p.payment_code,
+      p.booking_id,
+      p.invoice_id,
+      p.payment_type,
+      p.amount,
+      p.method,
+      p.status,
+      p.created_at,
+      p.paid_at,
+      p.vnpay_transaction_no,
+      b.booking_code,
+      i.invoice_number
+    FROM dbo.payments p
+    JOIN dbo.bookings b ON b.id = p.booking_id
+    LEFT JOIN dbo.invoices i ON i.id = p.invoice_id
+    WHERE p.payment_code = @paymentCode ${ownerFilter};
+  `);
+  return PaymentModel.fromRow(result.recordset[0]);
+}
+
 async function confirmPaymentByCode(paymentCode) {
   const pool = await getPool();
   const transaction = new sql.Transaction(pool);
@@ -1071,4 +1099,4 @@ async function confirmPaymentByCode(paymentCode) {
   }
 }
 
-module.exports = { createFinalPayment, createCustomerDepositPayment, completeSimulatedDepositPayment, createReceptionCheckoutPayment, createReceptionInvoice, completeVnpayPayment, getVnpayPaymentContext, getPaymentList, getCustomerPaymentList, getInvoiceList, getInvoiceDetails, getPaymentStatus, confirmPaymentByCode };
+module.exports = { createFinalPayment, createCustomerDepositPayment, completeSimulatedDepositPayment, createReceptionCheckoutPayment, createReceptionInvoice, completeVnpayPayment, getVnpayPaymentContext, getPaymentList, getCustomerPaymentList, getInvoiceList, getInvoiceDetails, getPaymentStatus, getPaymentDetails, confirmPaymentByCode };

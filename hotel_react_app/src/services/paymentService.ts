@@ -185,6 +185,29 @@ export interface PaymentStatusResponse {
   invoice_id?: number | null;
 }
 
+export interface PaymentDetailsResponse {
+  id: number;
+  payment_code: string;
+  booking_id: number;
+  booking_code: string;
+  invoice_id: number | null;
+  invoice_number: string | null;
+  payment_type: 'DEPOSIT' | 'FINAL';
+  amount: number;
+  method: 'VNPAY' | 'CASH' | 'SIMULATED' | 'CARD';
+  status: 'PENDING' | 'SUCCESS' | 'FAILED' | 'CANCELLED';
+  created_at: string;
+  paid_at: string | null;
+  vnpay_transaction_no: string | null;
+}
+
+export function getPaymentDetails(paymentCode: string): Promise<PaymentDetailsResponse> {
+  return api.get<PaymentDetailsResponse>(
+    `/api/payments/${encodeURIComponent(paymentCode)}`,
+    localStorage.getItem('accessToken') || undefined,
+  );
+}
+
 export function getPaymentStatus(paymentCode: string): Promise<PaymentStatusResponse> {
   return api.get<PaymentStatusResponse>(
     `/api/payments/${encodeURIComponent(paymentCode)}/status`,

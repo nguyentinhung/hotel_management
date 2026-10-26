@@ -1,7 +1,8 @@
 import type { Service, ServiceRequest } from '../types/Service';
+import { API_BASE_URL } from './api';
 
-const API_BASE_URL = 'http://localhost:5000/api/admin/services';
-const PUBLIC_API_BASE_URL = 'http://localhost:5000/api/services';
+const ADMIN_SERVICES_URL = `${API_BASE_URL}/api/admin/services`;
+const PUBLIC_SERVICES_URL = `${API_BASE_URL}/api/services`;
 
 function getAuthHeaders(includeJson = false): HeadersInit {
     const token = localStorage.getItem('accessToken');
@@ -12,7 +13,7 @@ function getAuthHeaders(includeJson = false): HeadersInit {
 }
 
 export async function getServices(role = 'ADMIN'): Promise<Service[]> {
-    const response = await fetch(role === 'ADMIN' ? API_BASE_URL : PUBLIC_API_BASE_URL, { headers: getAuthHeaders() });
+    const response = await fetch(role === 'ADMIN' ? ADMIN_SERVICES_URL : PUBLIC_SERVICES_URL, { headers: getAuthHeaders() });
     if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         if (response.status === 401 || response.status === 403) {
@@ -24,7 +25,7 @@ export async function getServices(role = 'ADMIN'): Promise<Service[]> {
 }
 
 export async function getServiceById(id: number, role = 'ADMIN'): Promise<Service> {
-    const response = await fetch(`${role === 'ADMIN' ? API_BASE_URL : PUBLIC_API_BASE_URL}/${id}`, { headers: getAuthHeaders() });
+    const response = await fetch(`${role === 'ADMIN' ? ADMIN_SERVICES_URL : PUBLIC_SERVICES_URL}/${id}`, { headers: getAuthHeaders() });
     if (!response.ok) {
         throw new Error('Cannot load service.');
     }
@@ -32,7 +33,7 @@ export async function getServiceById(id: number, role = 'ADMIN'): Promise<Servic
 }
 
 export async function createService(data: ServiceRequest): Promise<Service> {
-    const response = await fetch(API_BASE_URL, {
+    const response = await fetch(ADMIN_SERVICES_URL, {
         method: 'POST',
         headers: getAuthHeaders(true),
         body: JSON.stringify(data)
@@ -45,7 +46,7 @@ export async function createService(data: ServiceRequest): Promise<Service> {
 }
 
 export async function updateService(id: number, data: ServiceRequest): Promise<Service> {
-    const response = await fetch(`${API_BASE_URL}/${id}`, {
+    const response = await fetch(`${ADMIN_SERVICES_URL}/${id}`, {
         method: 'PUT',
         headers: getAuthHeaders(true),
         body: JSON.stringify(data)
@@ -58,7 +59,7 @@ export async function updateService(id: number, data: ServiceRequest): Promise<S
 }
 
 export async function deleteService(id: number): Promise<{ message: string }> {
-    const response = await fetch(`${API_BASE_URL}/${id}`, {
+    const response = await fetch(`${ADMIN_SERVICES_URL}/${id}`, {
         method: 'DELETE',
         headers: getAuthHeaders()
     });

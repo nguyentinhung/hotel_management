@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
+const { jwtSecret: JWT_SECRET } = require('../config/auth');
 const ROLE_CODE_BY_ID = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
 
 function requireAdmin(req, res, next) {

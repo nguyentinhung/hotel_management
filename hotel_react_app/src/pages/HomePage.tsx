@@ -106,6 +106,13 @@ export default function HomePage() {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [selectedRoomDetails, setSelectedRoomDetails] = useState<RoomTypeDetails | null>(null);
   const [isRoomDetailsOpen, setIsRoomDetailsOpen] = useState(false);
+  const [isAllRoomsOpen, setIsAllRoomsOpen] = useState(false);
+  const [allRoomTypes, setAllRoomTypes] = useState<RoomAvailabilityItem[]>([]);
+  const [allRoomsSearch, setAllRoomsSearch] = useState<SearchFormState>(search);
+  const [allRoomsPriceRange, setAllRoomsPriceRange] = useState<[number, number]>([0, 0]);
+  const [allRoomsSort, setAllRoomsSort] = useState<'PRICE_ASC' | 'PRICE_DESC'>('PRICE_ASC');
+  const [isApplyingAllRoomsFilter, setIsApplyingAllRoomsFilter] = useState(false);
+  const [allRoomsError, setAllRoomsError] = useState('');
   const [isRoomDetailsLoading, setIsRoomDetailsLoading] = useState(false);
   const [roomDetailsError, setRoomDetailsError] = useState('');
   const [selectedService, setSelectedService] = useState<ServiceItem | null>(null);
@@ -198,6 +205,7 @@ export default function HomePage() {
 
         const roomData = availabilityRes.data || [];
         setRoomTypes(roomData);
+        setAllRoomTypes(roomData);
         setPromotions(promotionData);
         setServices(serviceData);
         setReviews(reviewData);
@@ -215,6 +223,47 @@ export default function HomePage() {
   }, [today, tomorrow]);
 
   const nightCount = useMemo(() => daysBetween(search.check_in_date, search.check_out_date), [search]);
+  const visibleRoomTypes = filteredRoomTypes.slice(0, 6);
+  const allRoomsPriceBounds = useMemo(() => {
+    const prices = allRoomTypes.map((room) => Number(room.base_price)).filter(Number.isFinite);
+    if (!prices.length) return [0, 0] as [number, number];
+    return [Math.min(...prices), Math.max(...prices)] as [number, number];
+  }, [allRoomTypes]);
+  const visibleAllRoomTypes = useMemo(() => allRoomTypes
+    .filter((room) => room.max_adults >= allRoomsSearch.adults && room.max_children >= allRoomsSearch.children)
+    .filter((room) => allRoomsPriceRange[0] === 0 && allRoomsPriceRange[1] === 0 || room.base_price >= allRoomsPriceRange[0] && room.base_price <= allRoomsPriceRange[1])
+    .sort((a, b) => allRoomsSort === 'PRICE_ASC' ? a.base_price - b.base_price : b.base_price - a.base_price),
+  [allRoomTypes, allRoomsSearch.adults, allRoomsSearch.children, allRoomsPriceRange, allRoomsSort]);
+
+  const openAllRooms = () => {
+    setAllRoomTypes(roomTypes);
+    setAllRoomsSearch(search);
+    setAllRoomsPriceRange([0, 0]);
+    setAllRoomsSort('PRICE_ASC');
+    setAllRoomsError('');
+    setIsAllRoomsOpen(true);
+  };
+
+  const applyAllRoomsFilters = async () => {
+    if (allRoomsSearch.check_in_date < today) {
+      setAllRoomsError('Ngày nhận phòng không thể ở quá khứ.');
+      return;
+    }
+    if (allRoomsSearch.check_out_date <= allRoomsSearch.check_in_date) {
+      setAllRoomsError('Ngày trả phòng phải sau ngày nhận phòng.');
+      return;
+    }
+    setIsApplyingAllRoomsFilter(true);
+    setAllRoomsError('');
+    try {
+      const result = await checkRoomAvailability(allRoomsSearch);
+      setAllRoomTypes(result.data);
+    } catch (value) {
+      setAllRoomsError(value instanceof Error ? value.message : 'Không thể áp dụng bộ lọc phòng.');
+    } finally {
+      setIsApplyingAllRoomsFilter(false);
+    }
+  };
 
   useEffect(() => {
     const baseList = roomTypes.filter(
@@ -548,9 +597,9 @@ export default function HomePage() {
                 Xem tất cả loại phòng
               </button>
             )}
-            <a className="btn btn-primary" href={`/booking?${new URLSearchParams({ check_in_date: search.check_in_date, check_out_date: search.check_out_date, adults: String(search.adults), children: String(search.children) }).toString()}`}>
+            <button className="btn btn-primary" type="button" onClick={openAllRooms}>
               Xem tất cả phòng
-            </a>
+            </button>
           </div>
 
           {filteredRoomTypes.length === 0 ? (
@@ -559,7 +608,7 @@ export default function HomePage() {
             </div>
           ) : (
             <div className="room-grid">
-              {filteredRoomTypes.map((room) => {
+              {visibleRoomTypes.map((room) => {
                 const total = room.base_price * nightCount;
                 const roomImage = getRoomImage(room);
                 return (
@@ -633,6 +682,68 @@ export default function HomePage() {
             </div>
           )}
         </section>
+
+        {isAllRoomsOpen && (
+          <div className="room-type-modal-backdrop all-room-types-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setIsAllRoomsOpen(false); }}>
+            <section className="room-type-modal room-type-details-modal all-room-types-modal" role="dialog" aria-modal="true" aria-labelledby="all-room-types-title">
+              <div className="room-type-modal-heading">
+                <div>
+                  <h3 id="all-room-types-title">Tất cả loại phòng</h3>
+                  <p>Khám phá các loại phòng phù hợp với nhu cầu của bạn</p>
+                </div>
+                <button className="room-type-close" type="button" aria-label="Đóng danh sách phòng" onClick={() => setIsAllRoomsOpen(false)}>×</button>
+              </div>
+              <div className="all-room-types-layout">
+                <aside className="all-room-types-filters" aria-label="Bộ lọc phòng">
+                  <div className="all-room-filter-group">
+                    <h4>Ngày nhận phòng - trả phòng</h4>
+                    <label>Nhận phòng<input type="date" value={allRoomsSearch.check_in_date} onChange={(event) => setAllRoomsSearch({ ...allRoomsSearch, check_in_date: event.target.value })} /></label>
+                    <label>Trả phòng<input type="date" value={allRoomsSearch.check_out_date} onChange={(event) => setAllRoomsSearch({ ...allRoomsSearch, check_out_date: event.target.value })} /></label>
+                  </div>
+                  <div className="all-room-filter-group all-room-guests">
+                    <h4>Số khách</h4>
+                    <label>Người lớn<select value={allRoomsSearch.adults} onChange={(event) => setAllRoomsSearch({ ...allRoomsSearch, adults: Number(event.target.value) })}>{Array.from({ length: 8 }, (_, index) => index + 1).map((count) => <option key={count} value={count}>{count} người lớn</option>)}</select></label>
+                    <label>Trẻ em<select value={allRoomsSearch.children} onChange={(event) => setAllRoomsSearch({ ...allRoomsSearch, children: Number(event.target.value) })}>{Array.from({ length: 6 }, (_, index) => index).map((count) => <option key={count} value={count}>{count} trẻ em</option>)}</select></label>
+                  </div>
+                  <div className="all-room-filter-group">
+                    <h4>Khoảng giá (1 đêm)</h4>
+                    <div className="all-room-price-labels"><span>{formatCurrency(allRoomsPriceRange[0] || allRoomsPriceBounds[0])}</span><span>{formatCurrency(allRoomsPriceRange[1] || allRoomsPriceBounds[1])}</span></div>
+                    <input aria-label="Giá thấp nhất" type="range" min={allRoomsPriceBounds[0]} max={allRoomsPriceBounds[1] || allRoomsPriceBounds[0]} step="50000" value={allRoomsPriceRange[0] || allRoomsPriceBounds[0]} onChange={(event) => setAllRoomsPriceRange(([currentMin, currentMax]) => [Math.min(Number(event.target.value), currentMax || allRoomsPriceBounds[1]), currentMax || allRoomsPriceBounds[1]])} />
+                    <input aria-label="Giá cao nhất" type="range" min={allRoomsPriceBounds[0]} max={allRoomsPriceBounds[1] || allRoomsPriceBounds[0]} step="50000" value={allRoomsPriceRange[1] || allRoomsPriceBounds[1]} onChange={(event) => setAllRoomsPriceRange(([currentMin]) => [currentMin || allRoomsPriceBounds[0], Math.max(Number(event.target.value), currentMin || allRoomsPriceBounds[0])])} />
+                  </div>
+                  <button className="btn btn-primary all-room-apply-button" type="button" onClick={() => void applyAllRoomsFilters()} disabled={isApplyingAllRoomsFilter}>{isApplyingAllRoomsFilter ? 'Đang áp dụng...' : '⌕ Áp dụng bộ lọc'}</button>
+                  {allRoomsError && <p className="error-text" role="alert">{allRoomsError}</p>}
+                </aside>
+                <div className="all-room-types-results">
+                  <div className="all-room-results-toolbar"><span>Hiển thị {visibleAllRoomTypes.length} phòng nghỉ</span><label>Sắp xếp theo<select value={allRoomsSort} onChange={(event) => setAllRoomsSort(event.target.value as 'PRICE_ASC' | 'PRICE_DESC')}><option value="PRICE_ASC">Giá thấp đến cao</option><option value="PRICE_DESC">Giá cao đến thấp</option></select></label></div>
+                  {isLoading ? <p role="status">Đang tải danh sách phòng...</p> : error ? <p className="error-text" role="alert">{error}</p> : visibleAllRoomTypes.length === 0 ? <p className="empty-state">Không tìm thấy loại phòng phù hợp với bộ lọc.</p> : <div className="room-grid all-room-types-grid">
+                    {visibleAllRoomTypes.map((room) => {
+                      const roomImage = getRoomImage(room);
+                      return <article
+                        className="room-card room-card-clickable"
+                        key={room.id}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Xem chi tiết loại phòng ${room.name}`}
+                        onClick={() => void openRoomDetails(room.id)}
+                        onKeyDown={(event) => {
+                          if (event.target !== event.currentTarget) return;
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            void openRoomDetails(room.id);
+                          }
+                        }}
+                      >
+                        <div className="room-image-wrap">{roomImage ? <img src={roomImage} alt={room.name} className="room-image" /> : <div className="room-image placeholder">Chưa có ảnh</div>}<small className={`availability-badge${room.available_rooms > 0 ? '' : ' sold-out'}`}>{room.available_rooms > 0 ? `Còn ${room.available_rooms} phòng` : 'Hết phòng'}</small></div>
+                        <div className="room-body"><div className="room-header-row"><h3>{room.name}</h3><div className="rating-badge">{room.average_rating.toFixed(1)} ★ ({room.review_count})</div></div><p className="room-description">{room.description}</p><p className="room-guest-limit">♙ Tối đa {room.max_adults} người lớn, {room.max_children} trẻ em</p><ul className="amenities-list">{room.amenities.map((amenity) => <li key={amenity}>{amenity}</li>)}</ul><div className="room-bottom"><div><div className="price">{formatCurrency(room.base_price)} / đêm</div><div className="base-total">{daysBetween(allRoomsSearch.check_in_date, allRoomsSearch.check_out_date)} đêm: {formatCurrency(room.base_price * daysBetween(allRoomsSearch.check_in_date, allRoomsSearch.check_out_date))}</div></div><a className="btn btn-primary" onClick={(event) => event.stopPropagation()} href={`/booking?room_type_id=${room.id}&check_in_date=${allRoomsSearch.check_in_date}&check_out_date=${allRoomsSearch.check_out_date}&adults=${allRoomsSearch.adults}&children=${allRoomsSearch.children}`}>Đặt phòng</a></div></div>
+                      </article>;
+                    })}
+                  </div>}
+                </div>
+              </div>
+            </section>
+          </div>
+        )}
 
         {isRoomDetailsOpen && (
           <div className="room-type-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setIsRoomDetailsOpen(false); }}>

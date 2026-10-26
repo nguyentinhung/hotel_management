@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
-const { createWalkInBooking, createCustomerBooking, checkInBooking, getRecentBookings, getActiveBookings, updateBooking, cancelBooking, checkOutBooking, updateRoomStatus, reportRoomMaintenance, getOpenRoomMaintenanceReports, resolveRoomMaintenanceReport, getRoomStatuses, getAssignableRooms, assignRoomToBooking } = require('../services/bookingService');
+const { createWalkInBooking, createCustomerBooking, checkInBooking, getRecentBookings, getBookingDetails, getActiveBookings, updateBooking, cancelBooking, checkOutBooking, reportRoomMaintenance, getOpenRoomMaintenanceReports, resolveRoomMaintenanceReport, getRoomStatuses, getAssignableRooms, assignRoomToBooking } = require('../services/bookingService');
+const { updateRoomStatus } = require('../services/roomService');
 
 function isValidIdCardImage(file) {
   if (!file?.buffer?.length) return false;
@@ -16,7 +17,7 @@ function isValidIdCardImage(file) {
   return false;
 }
 const { makeReceptionCheckoutPayment, createReceptionInvoice } = require('../services/paymentService');
-const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
+const { jwtSecret: JWT_SECRET } = require('../config/auth');
 const roleCodeById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
 const hasRole = (claims, ...roles) => {
   const roleCode = String(claims.role_code || '').toUpperCase() || roleCodeById[Number(claims.role_id)];
@@ -337,6 +338,23 @@ async function getBookingHistoryHandler(req, res) {
   }
 }
 
+async function getBookingDetailsHandler(req, res) {
+  const bookingId = Number(req.params.bookingId);
+  if (!Number.isSafeInteger(bookingId) || bookingId < 1) {
+    return res.status(400).json({ success: false, message: 'MÃ£ booking khÃ´ng há»£p lá»‡.' });
+  }
+
+  try {
+    const customerId = req.auth.roleCode === 'CUSTOMER' ? req.auth.userId : null;
+    const booking = await getBookingDetails(bookingId, customerId);
+    if (!booking) return res.status(404).json({ success: false, message: 'KhÃ´ng tÃ¬m tháº¥y booking.' });
+    return res.json({ success: true, booking });
+  } catch (error) {
+    console.error('Get booking details error:', error);
+    return res.status(500).json({ success: false, message: 'KhÃ´ng thá»ƒ táº£i chi tiáº¿t booking.' });
+  }
+}
+
 async function updateBookingHandler(req, res) {
   const token = (req.headers.authorization || '').replace(/^Bearer\s+/, '');
   let claims;
@@ -617,12 +635,14 @@ module.exports = {
   createWalkInBookingHandler,
   getRecentBookingsHandler,
   getBookingHistoryHandler,
+  getBookingDetailsHandler,
   updateBookingHandler,
   cancelBookingHandler,
   getActiveBookingsHandler,
   checkOutBookingHandler,
   createReceptionInvoiceHandler,
   finishRoomCleaningHandler,
+  updateRoomStatusHandler: finishRoomCleaningHandler,
   reportRoomMaintenanceHandler,
   getRoomMaintenanceReportsHandler,
   resolveRoomMaintenanceReportHandler,

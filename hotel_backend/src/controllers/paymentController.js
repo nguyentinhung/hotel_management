@@ -1,4 +1,4 @@
-const { makePayment, simulateDepositPayment, getPayments, getCustomerPayments, getInvoices, getInvoiceDetails, getPaymentStatus, confirmPayment } = require('../services/paymentService');
+const { makePayment, simulateDepositPayment, getPayments, getCustomerPayments, getInvoices, getInvoiceDetails, getPaymentStatus, getPaymentDetails, confirmPayment } = require('../services/paymentService');
 
 async function getInvoiceList(req, res) {
   try {
@@ -137,6 +137,36 @@ async function getPaymentStatusRequest(req, res) {
   }
 }
 
+async function getPaymentDetailsRequest(req, res) {
+  try {
+    const paymentCode = String(req.params?.paymentCode || '').trim();
+    if (!paymentCode || paymentCode.length > 30) {
+      return res.status(400).json({ message: 'MÃ£ giao dá»‹ch khÃ´ng há»£p lá»‡.' });
+    }
+    const customerId = req.auth.roleCode === 'CUSTOMER' ? req.auth.userId : null;
+    const payment = await getPaymentDetails(paymentCode, customerId);
+    if (!payment) return res.status(404).json({ message: 'KhÃ´ng tÃ¬m tháº¥y giao dá»‹ch.' });
+    return res.json({
+      id: Number(payment.id),
+      payment_code: payment.payment_code,
+      booking_id: Number(payment.booking_id),
+      booking_code: payment.booking_code,
+      invoice_id: payment.invoice_id == null ? null : Number(payment.invoice_id),
+      invoice_number: payment.invoice_number || null,
+      payment_type: payment.payment_type,
+      amount: Number(payment.amount),
+      method: payment.method,
+      status: payment.status,
+      created_at: payment.created_at,
+      paid_at: payment.paid_at,
+      vnpay_transaction_no: payment.vnpay_transaction_no || null,
+    });
+  } catch (error) {
+    console.error('Get payment details error:', error);
+    return res.status(500).json({ message: 'KhÃ´ng thá»ƒ táº£i chi tiáº¿t giao dá»‹ch.' });
+  }
+}
+
 async function confirmPaymentRequest(req, res) {
   try {
     const paymentCode = String(req.params?.paymentCode || '').trim();
@@ -176,4 +206,4 @@ async function simulateDepositPaymentRequest(req, res) {
   }
 }
 
-module.exports = { createPayment, getPaymentList, getCustomerPaymentList, getInvoiceList, getInvoiceDetail, getPaymentStatusRequest, confirmPaymentRequest, simulateDepositPaymentRequest };
+module.exports = { createPayment, getPaymentList, getCustomerPaymentList, getInvoiceList, getInvoiceDetail, getPaymentStatusRequest, getPaymentDetailsRequest, confirmPaymentRequest, simulateDepositPaymentRequest };

@@ -1,17 +1,18 @@
 ﻿const equipmentItemDao = require('../dao/equipmentItemDao');
 const EquipmentItemModel = require('../models/equipmentItemModel');
+const RoomModel = require('../models/roomModel');
 
 async function getEquipmentItems() {
-  return equipmentItemDao.findAll();
+  return EquipmentItemModel.fromResult(await equipmentItemDao.findAll());
 }
 
 async function getEquipmentItemById(id) {
-  return equipmentItemDao.findById(parseEquipmentId(id));
+  return EquipmentItemModel.fromResult(await equipmentItemDao.findById(parseEquipmentId(id)));
 }
 
 async function createEquipmentItem(input) {
   const equipmentItem = EquipmentItemModel.normalizeInput(input);
-  return equipmentItemDao.create(equipmentItem);
+  return EquipmentItemModel.fromResult(await equipmentItemDao.create(equipmentItem));
 }
 
 function parseEquipmentId(id) {
@@ -29,18 +30,18 @@ function parseEquipmentId(id) {
 async function updateEquipmentItem(id, input) {
   const parsedId = parseEquipmentId(id);
   const equipmentItem = EquipmentItemModel.normalizeInput(input);
-  return equipmentItemDao.update(parsedId, equipmentItem);
+  return EquipmentItemModel.fromResult(await equipmentItemDao.update(parsedId, equipmentItem));
 }
 
 async function deleteEquipmentItem(id) {
-  return equipmentItemDao.deleteById(parseEquipmentId(id));
+  return EquipmentItemModel.fromResult(await equipmentItemDao.deleteById(parseEquipmentId(id)));
 }
 
 async function getEquipmentRooms(id) {
   const equipmentId = parseEquipmentId(id);
   const equipmentItem = await equipmentItemDao.findById(equipmentId);
   if (!equipmentItem) return null;
-  return equipmentItemDao.findRoomsForEquipment(equipmentId);
+  return RoomModel.fromResult(await equipmentItemDao.findRoomsForEquipment(equipmentId));
 }
 
 async function assignEquipmentToRooms(id, input) {
@@ -48,7 +49,7 @@ async function assignEquipmentToRooms(id, input) {
   const roomIds = EquipmentItemModel.normalizeRoomIds(input?.room_ids);
   const updated = await equipmentItemDao.replaceRoomAssignments(equipmentId, roomIds);
   if (!updated) return null;
-  return equipmentItemDao.findRoomsForEquipment(equipmentId);
+  return RoomModel.fromResult(await equipmentItemDao.findRoomsForEquipment(equipmentId));
 }
 
 module.exports = { getEquipmentItems, getEquipmentItemById, createEquipmentItem, updateEquipmentItem, deleteEquipmentItem, getEquipmentRooms, assignEquipmentToRooms };

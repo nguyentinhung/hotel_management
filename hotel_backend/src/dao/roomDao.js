@@ -1,6 +1,7 @@
 const { sql, getPool } = require('../config/db');
 const RoomModel = require('../models/roomModel');
 const RoomAvailabilityModel = require('../models/roomAvailabilityModel');
+const RoomStatusModel = require('../models/roomStatusModel');
 
 function quoteSqlIdentifier(identifier) {
   return `[${String(identifier).replace(/]/g, ']]')}]`;
@@ -456,6 +457,28 @@ async function deleteRoom(roomId) {
   }
 }
 
+async function updateRoomStatus(roomId, status, currentStatus = 'CLEANING') {
+  const pool = await getPool();
+  const result = await pool.request()
+    .input('roomId', sql.Int, roomId)
+    .input('status', sql.VarChar(20), status)
+    .input('currentStatus', sql.VarChar(20), currentStatus)
+    .query(`
+      UPDATE dbo.rooms
+      SET status = CASE
+        WHEN @currentStatus = 'CLEANING' AND @status = 'AVAILABLE' AND EXISTS (
+          SELECT 1 FROM dbo.room_problem_reports report
+          WHERE report.room_id = dbo.rooms.id AND report.status = 'OPEN'
+        ) THEN 'MAINTENANCE'
+        ELSE @status
+      END
+      WHERE id = @roomId AND status = @currentStatus;
+      SELECT @@ROWCOUNT AS updated_count, (SELECT status FROM dbo.rooms WHERE id = @roomId) AS status;
+    `);
+  if (!result.recordset[0]?.updated_count) throw new Error('Room is not waiting for cleaning completion.');
+  return RoomStatusModel.fromRow({ room_id: roomId, status: result.recordset[0].status });
+}
+
 module.exports = {
   checkRoomAvailability,
   getAvailableRoomsForType,
@@ -464,4 +487,5 @@ module.exports = {
   createRoom,
   updateRoom,
   deleteRoom,
+  updateRoomStatus,
 };

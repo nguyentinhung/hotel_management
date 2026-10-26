@@ -9,6 +9,7 @@ const {
   getInvoiceList: getInvoiceListDao,
   getInvoiceDetails: getInvoiceDetailsDao,
   getPaymentStatus: getPaymentStatusByCode,
+  getPaymentDetails: getPaymentDetailsDao,
   confirmPaymentByCode,
   completeVnpayPayment,
   getVnpayPaymentContext,
@@ -57,9 +58,10 @@ async function makePayment({ customerId, bookingCode, paymentType, method, ipAdd
     paymentCode,
     method: normalizedMethod,
   });
+  const paymentModel = PaymentModel.fromResult(payment);
   return normalizedMethod === 'VNPAY'
-    ? { ...payment, payment_url: buildVnpayPaymentUrl({ paymentCode, amount: payment.amount, ipAddress }) }
-    : payment;
+    ? { ...paymentModel, payment_url: buildVnpayPaymentUrl({ paymentCode, amount: payment.amount, ipAddress }) }
+    : paymentModel;
 }
 
 async function simulateDepositPayment({ paymentCode, customerId, succeeded }) {
@@ -68,7 +70,7 @@ async function simulateDepositPayment({ paymentCode, customerId, succeeded }) {
     error.statusCode = 409;
     throw error;
   }
-  return completeSimulatedDepositPayment({ paymentCode, customerId, succeeded });
+  return PaymentModel.fromResult(await completeSimulatedDepositPayment({ paymentCode, customerId, succeeded }));
 }
 
 async function makeReceptionCheckoutPayment({ bookingId, method, ipAddress, createdByUserId }) {
@@ -81,39 +83,44 @@ async function makeReceptionCheckoutPayment({ bookingId, method, ipAddress, crea
   if (normalizedMethod === 'VNPAY') getVnpayConfig();
   const paymentCode = PaymentModel.generateCode();
   const payment = await createReceptionCheckoutPayment({ bookingId, paymentCode, method: normalizedMethod, createdByUserId });
+  const paymentModel = PaymentModel.fromResult(payment);
   return normalizedMethod === 'VNPAY' && payment.amount > 0
-    ? { ...payment, payment_url: buildVnpayPaymentUrl({ paymentCode: payment.payment_code, amount: payment.amount, ipAddress }) }
-    : payment;
+    ? { ...paymentModel, payment_url: buildVnpayPaymentUrl({ paymentCode: payment.payment_code, amount: payment.amount, ipAddress }) }
+    : paymentModel;
 }
 
 async function createReceptionInvoice(bookingId, createdByUserId) {
-  return createReceptionInvoiceDao(bookingId, createdByUserId);
+  return InvoiceModel.fromResult(await createReceptionInvoiceDao(bookingId, createdByUserId));
 }
 
 async function getPayments() {
-  return getPaymentList(null, true);
+  return PaymentModel.fromResult(await getPaymentList(null, true));
 }
 
 async function getCustomerPayments(customerId) {
-  return getCustomerPaymentList(customerId);
+  return PaymentModel.fromResult(await getCustomerPaymentList(customerId));
 }
 
 async function getInvoices(customerId = null) {
   const rows = await getInvoiceListDao(customerId);
-  return rows.map((invoice) => InvoiceModel.normalizeListItem(invoice));
+  return rows.map((invoice) => InvoiceModel.fromResult(InvoiceModel.normalizeListItem(invoice)));
 }
 
 async function getInvoiceDetails(invoiceId, customerId = null) {
   const invoice = await getInvoiceDetailsDao(invoiceId, customerId);
-  return invoice ? InvoiceModel.normalizeDetails(invoice) : null;
+  return invoice ? InvoiceModel.fromResult(InvoiceModel.normalizeDetails(invoice)) : null;
 }
 
 async function getPaymentStatus(paymentCode, customerId = null) {
-  return getPaymentStatusByCode({ paymentCode, customerId });
+  return PaymentModel.fromResult(await getPaymentStatusByCode({ paymentCode, customerId }));
+}
+
+async function getPaymentDetails(paymentCode, customerId = null) {
+  return PaymentModel.fromResult(await getPaymentDetailsDao({ paymentCode, customerId }));
 }
 
 async function confirmPayment(paymentCode) {
-  return confirmPaymentByCode(paymentCode);
+  return PaymentModel.fromResult(await confirmPaymentByCode(paymentCode));
 }
 
 async function handleVnpayCallback(params) {
@@ -138,7 +145,7 @@ async function handleVnpayCallback(params) {
     transactionNo: params.vnp_TransactionNo,
     succeeded,
   });
-  return { ...result, paymentCode, succeeded };
+  return PaymentModel.fromResult({ ...result, paymentCode, succeeded });
 }
 
 async function inspectVnpayReturn(params) {
@@ -156,7 +163,7 @@ async function inspectVnpayReturn(params) {
   }
   const payment = await getVnpayPaymentContext({ paymentCode, amountMinor });
   const succeeded = params.vnp_ResponseCode === '00' && params.vnp_TransactionStatus === '00';
-  return { ...payment, paymentCode, succeeded };
+  return PaymentModel.fromResult({ ...payment, paymentCode, succeeded });
 }
 
-module.exports = { makePayment, simulateDepositPayment, makeReceptionCheckoutPayment, createReceptionInvoice, getPayments, getCustomerPayments, getInvoices, getInvoiceDetails, getPaymentStatus, confirmPayment, handleVnpayCallback, inspectVnpayReturn };
+module.exports = { makePayment, simulateDepositPayment, makeReceptionCheckoutPayment, createReceptionInvoice, getPayments, getCustomerPayments, getInvoices, getInvoiceDetails, getPaymentStatus, getPaymentDetails, confirmPayment, handleVnpayCallback, inspectVnpayReturn };

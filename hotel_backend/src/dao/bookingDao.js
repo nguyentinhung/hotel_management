@@ -1,5 +1,7 @@
 const { sql, getPool } = require('../config/db');
 const BookingModel = require('../models/bookingModel');
+const RoomStatusModel = require('../models/roomStatusModel');
+const RoomMaintenanceReportModel = require('../models/roomMaintenanceReportModel');
 
 /**
  * ============================================================================
@@ -650,11 +652,11 @@ async function checkInBooking({ bookingId, idCardImageBuffer = null, idCardImage
   }
 }
 
-async function getRecentBookings(limit = 10, activeOnly = false, customerId = null) {
-  await expireStaleBookings();
+async function getRecentBookings(limit = 10, activeOnly = false, customerId = null, bookingId = null, reconcileState = true) {
+  if (reconcileState) await expireStaleBookings();
   const pool = await getPool();
 
-  await pool.request().query(`
+  if (reconcileState) await pool.request().query(`
     UPDATE rooms
     SET status = 'OCCUPIED'
     WHERE EXISTS (
@@ -676,6 +678,10 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
   if (customerId !== null) {
     request.input('customerId', sql.BigInt, Number(customerId));
     filters.push('b.customer_id = @customerId');
+  }
+  if (bookingId !== null) {
+    request.input('bookingId', sql.BigInt, Number(bookingId));
+    filters.push('b.id = @bookingId');
   }
   const activeFilter = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
   const result = await request.query(`
@@ -806,6 +812,12 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
     room_status: item.room_status,
     has_guest_id_card: Boolean(item.has_guest_id_card),
   }));
+}
+
+async function getBookingDetails(bookingId, customerId = null) {
+  await expireStaleBookings();
+  const rows = await getRecentBookings(null, false, customerId, bookingId, false);
+  return rows[0] ?? null;
 }
 
 async function getActiveBookings() {
@@ -1156,28 +1168,6 @@ async function checkOutBooking(bookingId) {
   }
 }
 
-async function updateRoomStatus(roomId, status, currentStatus = 'CLEANING') {
-  const pool = await getPool();
-  const result = await pool.request()
-    .input('roomId', sql.Int, roomId)
-    .input('status', sql.VarChar(20), status)
-    .input('currentStatus', sql.VarChar(20), currentStatus)
-    .query(`
-      UPDATE dbo.rooms
-      SET status = CASE
-        WHEN @currentStatus = 'CLEANING' AND @status = 'AVAILABLE' AND EXISTS (
-          SELECT 1 FROM dbo.room_problem_reports report
-          WHERE report.room_id = dbo.rooms.id AND report.status = 'OPEN'
-        ) THEN 'MAINTENANCE'
-        ELSE @status
-      END
-      WHERE id = @roomId AND status = @currentStatus;
-      SELECT @@ROWCOUNT AS updated_count, (SELECT status FROM dbo.rooms WHERE id = @roomId) AS status;
-    `);
-  if (!result.recordset[0]?.updated_count) throw new Error('Room is not waiting for cleaning completion.');
-  return { room_id: roomId, status: result.recordset[0].status };
-}
-
 async function reportRoomMaintenance({ roomId, reportedBy, description }) {
   const pool = await getPool();
   const transaction = new sql.Transaction(pool);
@@ -1232,7 +1222,7 @@ async function getOpenRoomMaintenanceReports() {
     WHERE report.status = 'OPEN'
     ORDER BY report.reported_at DESC;
   `);
-  return result.recordset;
+  return RoomMaintenanceReportModel.fromRows(result.recordset);
 }
 
 async function resolveRoomMaintenanceReport(reportId) {
@@ -1303,7 +1293,7 @@ async function getRoomStatuses() {
     FROM rooms r JOIN room_types rt ON rt.id = r.room_type_id
     ORDER BY r.floor, r.room_number;
   `);
-  return result.recordset;
+  return RoomStatusModel.fromRows(result.recordset);
 }
 
 module.exports = {
@@ -1313,11 +1303,11 @@ module.exports = {
   expireStaleBookings,
   checkInBooking,
   getRecentBookings,
+  getBookingDetails,
   updateBooking,
   cancelBooking,
   getActiveBookings,
   checkOutBooking,
-  updateRoomStatus,
   reportRoomMaintenance,
   getOpenRoomMaintenanceReports,
   resolveRoomMaintenanceReport,
