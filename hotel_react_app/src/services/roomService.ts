@@ -32,11 +32,13 @@ export const checkRoomAvailability = async (
 
 export const createWalkInBooking = async (
   payload: WalkInBookingPayload,
+  idCardImage: File,
 ): Promise<{ success: boolean; message: string; booking: WalkInBookingResponse }> => {
-  return api.post<{ success: boolean; message: string; booking: WalkInBookingResponse }>(
-    '/api/bookings/walk-in',
-    payload,
-    localStorage.getItem('accessToken') || undefined,
+  const formData = new FormData();
+  formData.append('payload', JSON.stringify(payload));
+  formData.append('id_card_image', idCardImage);
+  return api.postFormWithAuth<{ success: boolean; message: string; booking: WalkInBookingResponse }>(
+    '/api/bookings/walk-in', formData, localStorage.getItem('accessToken') || undefined,
   );
 };
 
@@ -54,13 +56,11 @@ export const createCustomerBooking = async (
 export const checkInBooking = async (
   bookingId: string | number,
   accessToken: string,
-  idCardNumber?: string,
+  idCardImage?: File,
 ): Promise<{ success: boolean; message: string }> => {
-  return api.post<{ success: boolean; message: string }>(
-    `/api/bookings/${bookingId}/check-in`,
-    idCardNumber ? { id_card_number: idCardNumber } : {},
-    accessToken,
-  );
+  const formData = new FormData();
+  if (idCardImage) formData.append('id_card_image', idCardImage);
+  return api.postFormWithAuth<{ success: boolean; message: string }>(`/api/bookings/${bookingId}/check-in`, formData, accessToken);
 };
 
 export const checkOutBooking = async (bookingId: string | number, accessToken: string) =>
@@ -115,6 +115,11 @@ export const assignRoomToBooking = (bookingId: string | number, roomAssignments:
 export const finishRoomCleaning = (roomId: number, accessToken: string, currentStatus: 'AVAILABLE' | 'OCCUPIED' | 'CLEANING' | 'MAINTENANCE' = 'CLEANING', status: 'AVAILABLE' | 'MAINTENANCE' = 'AVAILABLE') =>
   api.post<{ success: boolean; message: string }>(`/api/rooms/${roomId}/cleaning-complete`, { status, current_status: currentStatus }, accessToken);
 
+export const updateRoomStatus = (roomId: number, accessToken: string, currentStatus: RoomStatusRecord['status'], status: RoomStatusRecord['status']) =>
+  api.putWithAuth<{ success: boolean; message: string; room: { room_id: number; status: RoomStatusRecord['status'] } }>(
+    `/api/rooms/${roomId}/status`, { current_status: currentStatus, status }, accessToken,
+  );
+
 export interface RoomMaintenanceReport {
   id: number;
   room_id: number;
@@ -143,6 +148,9 @@ export const getRecentBookings = async (limit = 10, accessToken?: string): Promi
 
 export const getBookingHistory = (accessToken: string) =>
   api.get<{ success: boolean; count: number; bookings: RecentBooking[] }>('/api/bookings/history', accessToken);
+
+export const getBookingDetails = (bookingId: string | number, accessToken: string) =>
+  api.get<{ success: boolean; booking: RecentBooking }>(`/api/bookings/${bookingId}`, accessToken);
 
 export const getRoomTypeImageUrl = (roomTypeId: number) =>
   `${API_BASE_URL}/api/room-types/${roomTypeId}/image`;

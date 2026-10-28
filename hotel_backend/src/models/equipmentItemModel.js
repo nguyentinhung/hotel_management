@@ -1,4 +1,4 @@
-const BaseModel = require('./baseModel');
+﻿const BaseModel = require('./baseModel');
 
 class EquipmentItemModel extends BaseModel {
   static normalizeInput(input) {
@@ -14,21 +14,24 @@ class EquipmentItemModel extends BaseModel {
       throw Object.assign(new Error('Active status is required.'), { statusCode: 400 });
     }
 
-    const equipmentItem = { name, is_active: input.is_active };
-    if (Object.prototype.hasOwnProperty.call(input, 'description')) {
-      if (input.description !== null && (typeof input.description !== 'string' || input.description.length > 500)) {
-        throw Object.assign(new Error('Equipment description must be text and must not exceed 500 characters.'), { statusCode: 400 });
-      }
-      const description = typeof input.description === 'string' ? input.description.trim() : '';
-      equipmentItem.description = description || null;
+    return { name, is_active: input.is_active };
+  }
+
+  static normalizeRoomIds(input) {
+    if (!Array.isArray(input) || input.length > 500) {
+      throw Object.assign(new Error('Room IDs must be an array containing no more than 500 rooms.'), { statusCode: 400 });
     }
-    return equipmentItem;
+    const roomIds = input.map((value) => Number(value));
+    if (roomIds.some((id) => !Number.isSafeInteger(id) || id < 1 || id > 2147483647)) {
+      throw Object.assign(new Error('Every room ID must be a positive integer.'), { statusCode: 400 });
+    }
+    return [...new Set(roomIds)];
   }
 
   static get schema() {
     return {
       name: 'EquipmentItemModel', table: 'equipment_items', primaryKey: 'id',
-      fields: ['id', 'name', 'description', 'is_active'],
+      fields: ['id', 'name', 'is_active'],
     };
   }
 }

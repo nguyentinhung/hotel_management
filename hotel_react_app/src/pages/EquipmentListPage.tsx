@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+﻿import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { createEquipmentItem, deleteEquipmentItem, EquipmentApiError, getEquipmentItemById, getEquipmentItems, updateEquipmentItem, type EquipmentItem } from '../services/equipmentItemService';
 import { useToast } from '../components/ToastProvider';
 import DataTable from '../components/DataTable';
-import EquipmentAssetManager from '../components/EquipmentAssetManager';
-import { equipmentDescriptionText, equipmentDescriptionTitle } from '../utils/equipmentDescription';
+import AssignEquipmentRoomsModal from '../components/AssignEquipmentRoomsModal';
 
 const EQUIPMENT_PAGE_SIZE = 5;
 
@@ -20,7 +19,7 @@ function RefreshIcon() {
 }
 
 export default function EquipmentListPage() {
-  const { showToast } = useToast();
+  const { showToast, confirmAction } = useToast();
   const [items, setItems] = useState<EquipmentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -30,10 +29,8 @@ export default function EquipmentListPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
   const [activeStatus, setActiveStatus] = useState('');
   const [nameError, setNameError] = useState('');
-  const [descriptionError, setDescriptionError] = useState('');
   const [statusError, setStatusError] = useState('');
   const [saving, setSaving] = useState(false);
   const [selectedItem, setSelectedItem] = useState<EquipmentItem | null>(null);
@@ -46,21 +43,16 @@ export default function EquipmentListPage() {
   const [editLoading, setEditLoading] = useState(false);
   const [editLoadError, setEditLoadError] = useState('');
   const [editName, setEditName] = useState('');
-  const [editDescription, setEditDescription] = useState('');
   const [editActiveStatus, setEditActiveStatus] = useState('');
   const [editNameError, setEditNameError] = useState('');
-  const [editDescriptionError, setEditDescriptionError] = useState('');
   const [editStatusError, setEditStatusError] = useState('');
   const [editSaveError, setEditSaveError] = useState('');
   const [updating, setUpdating] = useState(false);
   const editRequestSequence = useRef(0);
   const updateInFlight = useRef(false);
-  const [pendingDeleteItem, setPendingDeleteItem] = useState<EquipmentItem | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [checkingDelete, setCheckingDelete] = useState(false);
-  const [deleteUnverified, setDeleteUnverified] = useState(false);
-  const [deleteError, setDeleteError] = useState('');
   const deleteInFlight = useRef(false);
+  const [assigningItem, setAssigningItem] = useState<EquipmentItem | null>(null);
 
   const loadItems = async () => {
     setLoading(true);
@@ -102,10 +94,8 @@ export default function EquipmentListPage() {
     if (saving) return;
     setShowForm(false);
     setName('');
-    setDescription('');
     setActiveStatus('');
     setNameError('');
-    setDescriptionError('');
     setStatusError('');
   };
 
@@ -113,7 +103,6 @@ export default function EquipmentListPage() {
     if (saving || updating || deleting) return;
     clearEdit();
     closeDetails();
-    setPendingDeleteItem(null);
     setShowForm(true);
   };
 
@@ -122,20 +111,17 @@ export default function EquipmentListPage() {
     const normalizedName = name.trim();
     const nextNameError = !normalizedName || normalizedName.length > 100
       ? 'Equipment name is required and must not exceed 100 characters.' : '';
-    const nextDescriptionError = description.length > 500 ? 'Description must not exceed 500 characters.' : '';
     const nextStatusError = activeStatus === '' ? 'Active status is required.' : '';
     setNameError(nextNameError);
-    setDescriptionError(nextDescriptionError);
     setStatusError(nextStatusError);
-    if (nextNameError || nextDescriptionError || nextStatusError) return;
+    if (nextNameError || nextStatusError) return;
 
     setSaving(true);
     try {
-      await createEquipmentItem({ name: normalizedName, description, is_active: activeStatus === 'true' });
+      await createEquipmentItem({ name: normalizedName, is_active: activeStatus === 'true' });
       showToast('Equipment added successfully.', 'success');
       setShowForm(false);
       setName('');
-      setDescription('');
       setActiveStatus('');
       await loadItems();
     } catch (error) {
@@ -149,7 +135,6 @@ export default function EquipmentListPage() {
     editRequestSequence.current += 1;
     setEditingEquipmentId(null);
     setEditingItem(null);
-    setPendingDeleteItem(null);
     const requestSequence = ++detailRequestSequence.current;
     setSelectedEquipmentId(id);
     setSelectedItem(null);
@@ -190,10 +175,8 @@ export default function EquipmentListPage() {
     setEditLoading(false);
     setEditLoadError('');
     setEditName('');
-    setEditDescription('');
     setEditActiveStatus('');
     setEditNameError('');
-    setEditDescriptionError('');
     setEditStatusError('');
     setEditSaveError('');
   };
@@ -202,7 +185,6 @@ export default function EquipmentListPage() {
     if (saving || updating || deleting) return;
     setShowForm(false);
     closeDetails();
-    setPendingDeleteItem(null);
     const requestSequence = ++editRequestSequence.current;
     setEditingEquipmentId(id);
     setEditingItem(null);
@@ -215,7 +197,6 @@ export default function EquipmentListPage() {
       if (item.id !== id) throw new Error('Equipment details did not match the selected record.');
       setEditingItem(item);
       setEditName(item.name);
-      setEditDescription(item.description ?? '');
       setEditActiveStatus(item.is_active === true || item.is_active === 1 ? 'true' : 'false');
     } catch (error) {
       if (requestSequence !== editRequestSequence.current) return;
@@ -237,20 +218,17 @@ export default function EquipmentListPage() {
     const normalizedName = editName.trim();
     const nextNameError = !normalizedName || normalizedName.length > 100
       ? 'Equipment name is required and must not exceed 100 characters.' : '';
-    const nextDescriptionError = editDescription.length > 500 ? 'Description must not exceed 500 characters.' : '';
     const nextStatusError = editActiveStatus === '' ? 'Active status is required.' : '';
     setEditNameError(nextNameError);
-    setEditDescriptionError(nextDescriptionError);
     setEditStatusError(nextStatusError);
     setEditSaveError('');
-    if (nextNameError || nextDescriptionError || nextStatusError) return;
+    if (nextNameError || nextStatusError) return;
 
     updateInFlight.current = true;
     setUpdating(true);
     try {
       const result = await updateEquipmentItem(editingEquipmentId, {
         name: normalizedName,
-        description: editDescription,
         is_active: editActiveStatus === 'true',
       });
       if (result.equipmentItem.id !== editingEquipmentId) throw new Error('Updated equipment ID did not match the selected record.');
@@ -258,7 +236,6 @@ export default function EquipmentListPage() {
       setEditingEquipmentId(null);
       setEditingItem(null);
       setEditName('');
-      setEditDescription('');
       setEditActiveStatus('');
       void loadItems();
     } catch (error) {
@@ -280,52 +257,38 @@ export default function EquipmentListPage() {
     }
   };
 
-  const cancelDelete = () => {
-    if (deleting || checkingDelete) return;
-    setPendingDeleteItem(null);
-    setDeleteError('');
-    setDeleteUnverified(false);
-  };
-
   const reconcileDeleteState = async (id: number) => {
-    setCheckingDelete(true);
     try {
       await getEquipmentItemById(id);
-      setDeleteUnverified(false);
-      setDeleteError('The equipment is still present. You can retry deletion.');
       showToast('The equipment is still present. You can retry deletion.', 'error');
     } catch (error) {
       if (error instanceof EquipmentApiError && error.status === 404) {
-        setPendingDeleteItem(null);
-        setDeleteUnverified(false);
         showToast('This equipment record is no longer available.', 'error');
         void loadItems();
       } else {
-        setDeleteUnverified(true);
-        setDeleteError('Unable to confirm whether this equipment was deleted. Check its status before retrying.');
         showToast('Unable to confirm whether this equipment was deleted. Check its status before retrying.', 'error');
       }
-    } finally {
-      setCheckingDelete(false);
     }
   };
 
-  const confirmDelete = async () => {
-    if (!pendingDeleteItem || deleteUnverified || deleteInFlight.current) return;
-    const selectedId = pendingDeleteItem.id;
+  const confirmDelete = async (item: EquipmentItem) => {
+    if (deleting || deleteInFlight.current) return;
+    if (!await confirmAction({
+      title: 'Delete Equipment?',
+      message: `Are you sure you want to delete “${item.name}” (ID: ${item.id})? This action cannot be undone.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    })) return;
+    const selectedId = item.id;
     deleteInFlight.current = true;
     setDeleting(true);
-    setDeleteError('');
-    setDeleteUnverified(false);
     try {
       const result = await deleteEquipmentItem(selectedId);
       if (result.id !== selectedId) throw new Error('Deleted equipment ID did not match the selected record.');
-      setPendingDeleteItem(null);
       showToast(result.message || 'Equipment deleted successfully.', 'success');
-      void loadItems();
+      await loadItems();
     } catch (error) {
       if (error instanceof EquipmentApiError && error.status === 404) {
-        setPendingDeleteItem(null);
         showToast('This equipment record is no longer available.', 'error');
         void loadItems();
       } else {
@@ -335,7 +298,6 @@ export default function EquipmentListPage() {
         if (!(error instanceof EquipmentApiError) || error.status >= 500) {
           await reconcileDeleteState(selectedId);
         } else {
-          setDeleteError(message);
           showToast(message, 'error');
         }
       }
@@ -378,7 +340,7 @@ export default function EquipmentListPage() {
             : <>
               <DataTable className="service-table-scroll">
               <table className="service-table equipment-table">
-                <thead><tr><th>ID</th><th>Name</th><th>Description</th><th>Status</th><th>Actions</th></tr></thead>
+                <thead><tr><th>Equipment ID</th><th>Equipment Name</th><th>Active Status</th><th>Actions</th></tr></thead>
                 <tbody>{pageItems.map((item) => <tr key={item.id} className="service-table-row-clickable" tabIndex={0}
                   aria-label={`View details for ${item.name}, equipment ID ${item.id}`}
                   title={`View details for ${item.name}`}
@@ -394,13 +356,15 @@ export default function EquipmentListPage() {
                   }}>
                   <td>{item.id}</td>
                   <td className="equipment-name-cell">{item.name}</td>
-                  <td className="equipment-description-cell" title={equipmentDescriptionTitle(item.description)}>{equipmentDescriptionText(item.description)}</td>
                   <td><span className={`status-badge ${isActive(item) ? 'active' : 'inactive'}`}>{isActive(item) ? 'Active' : 'Inactive'}</span></td>
                   <td><div className="service-row-actions equipment-row-actions">
                     <button className="service-edit-action" type="button" aria-label={`Update ${item.name}`} title={`Update ${item.name}`} onClick={(event) => { event.stopPropagation(); void openUpdate(item.id); }}>
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 5 4 4M4 20l4-.8L19 8a2.1 2.1 0 0 0-3-3L5 16z"/><path d="M13 7 17 11"/></svg>
                     </button>
-                      <button className="service-delete-action" type="button" aria-label={`Delete ${item.name}`} title={`Delete ${item.name}`} onClick={(event) => { event.stopPropagation(); closeDetails(); clearEdit(); setShowForm(false); setDeleteError(''); setPendingDeleteItem(item); }}>
+                      <button className="service-assign-action" type="button" aria-label={`Assign ${item.name} to rooms`} title={`Assign ${item.name} to rooms`} onClick={(event) => { event.stopPropagation(); closeDetails(); clearEdit(); setShowForm(false); setAssigningItem(item); }}>
+                        <span aria-hidden="true">⌂</span>
+                      </button>
+                      <button className="service-delete-action" type="button" aria-label={`Delete ${item.name}`} title={`Delete ${item.name}`} onClick={(event) => { event.stopPropagation(); closeDetails(); clearEdit(); setShowForm(false); void confirmDelete(item); }}>
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m4 4v6m6-6v6"/></svg>
                     </button>
                   </div></td>
@@ -433,18 +397,9 @@ export default function EquipmentListPage() {
                 onChange={(event) => { setName(event.target.value); if (nameError) setNameError(''); }} />
               {nameError && <small id="equipment-name-error" role="alert">{nameError}</small>}
             </label>
-            <label className="room-type-field room-type-field-wide" htmlFor="equipment-description">
-              <span>Description</span>
-              <textarea id="equipment-description" name="description" rows={3} maxLength={500} value={description}
-                placeholder="Optional description (up to 500 characters)" aria-invalid={Boolean(descriptionError)}
-                aria-describedby={descriptionError ? 'equipment-description-error' : 'equipment-description-hint'}
-                onChange={(event) => { setDescription(event.target.value); if (descriptionError) setDescriptionError(''); }} />
-              {descriptionError ? <small id="equipment-description-error" role="alert">{descriptionError}</small>
-                : <small id="equipment-description-hint">Optional; up to 500 characters.</small>}
-            </label>
             <label className="room-type-field room-type-field-wide" htmlFor="equipment-active">
               <span>Active Status <b>*</b></span>
-              <select id="equipment-active" className="equipment-status-select" name="is_active" value={activeStatus} aria-invalid={Boolean(statusError)}
+              <select id="equipment-active" name="is_active" value={activeStatus} aria-invalid={Boolean(statusError)}
                 aria-describedby={statusError ? 'equipment-active-error' : undefined}
                 onChange={(event) => { setActiveStatus(event.target.value); if (statusError) setStatusError(''); }}>
                 <option value="">Select a status</option>
@@ -490,19 +445,9 @@ export default function EquipmentListPage() {
                     onChange={(event) => { setEditName(event.target.value); if (editNameError) setEditNameError(''); }} />
                   {editNameError && <small id="equipment-update-name-error" role="alert">{editNameError}</small>}
                 </label>
-                <label className="room-type-field room-type-field-wide" htmlFor="equipment-update-description">
-                  <span>Description</span>
-                  <textarea id="equipment-update-description" name="description" rows={3} maxLength={500}
-                    value={editDescription} aria-invalid={Boolean(editDescriptionError)}
-                    aria-describedby={editDescriptionError ? 'equipment-update-description-error' : 'equipment-update-description-hint'}
-                    placeholder="Optional description (up to 500 characters)"
-                    onChange={(event) => { setEditDescription(event.target.value); if (editDescriptionError) setEditDescriptionError(''); }} />
-                  {editDescriptionError ? <small id="equipment-update-description-error" role="alert">{editDescriptionError}</small>
-                    : <small id="equipment-update-description-hint">{editDescription.length}/500 characters</small>}
-                </label>
                 <label className="room-type-field room-type-field-wide" htmlFor="equipment-update-active">
                   <span>Active Status <b>*</b></span>
-                  <select id="equipment-update-active" className="equipment-status-select" name="is_active" value={editActiveStatus}
+                  <select id="equipment-update-active" name="is_active" value={editActiveStatus}
                     aria-invalid={Boolean(editStatusError)} aria-describedby={editStatusError ? 'equipment-update-active-error' : undefined}
                     onChange={(event) => { setEditActiveStatus(event.target.value); if (editStatusError) setEditStatusError(''); }}>
                     <option value="">Select a status</option>
@@ -517,24 +462,6 @@ export default function EquipmentListPage() {
                 <button className="btn btn-primary" type="submit" disabled={updating}>{updating ? 'Saving...' : 'Save Changes'}</button>
               </div>
             </form>}
-      </section>
-    </div>}
-
-    {pendingDeleteItem && <div className="room-type-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) cancelDelete(); }}>
-      <section className="room-type-modal room-type-confirm-modal equipment-modal" role="alertdialog" aria-modal="true" aria-labelledby="equipment-delete-title" aria-describedby="equipment-delete-description">
-        <div className="room-type-modal-heading">
-          <div>
-            <h3 id="equipment-delete-title">Delete Equipment</h3>
-            <p id="equipment-delete-description">Are you sure you want to delete equipment &quot;{pendingDeleteItem.name}&quot; (ID: {pendingDeleteItem.id})? This action cannot be undone.</p>
-          </div>
-          <button className="room-type-close" type="button" aria-label="Close delete confirmation" disabled={deleting || checkingDelete} onClick={cancelDelete}>×</button>
-        </div>
-        {deleteError && <div className="error-text" role="alert">{deleteError}</div>}
-        <div className="room-type-form-actions">
-          {deleteUnverified && <button className="room-type-search-refresh" type="button" disabled={checkingDelete} onClick={() => void reconcileDeleteState(pendingDeleteItem.id)}>{checkingDelete ? 'Checking...' : 'Check Status'}</button>}
-          <button className="btn btn-outline" type="button" disabled={deleting || checkingDelete} onClick={cancelDelete}>Cancel</button>
-          <button className="btn room-type-confirm-delete" type="button" disabled={deleting || checkingDelete || deleteUnverified} onClick={() => void confirmDelete()}>{deleting ? 'Deleting...' : 'Delete'}</button>
-        </div>
       </section>
     </div>}
 
@@ -560,11 +487,6 @@ export default function EquipmentListPage() {
                 <div className="room-type-details-facts equipment-details-facts">
                   <div><span>Equipment ID</span><strong>{selectedItem.id}</strong></div>
                 </div>
-                <div className="room-type-details-section equipment-details-description">
-                  <h4>Description</h4>
-                  <p className="room-type-details-description">{selectedItem.description?.trim() || '—'}</p>
-                </div>
-                <EquipmentAssetManager key={selectedItem.id} equipmentItem={selectedItem} />
               </div>
               <div className="room-type-form-actions equipment-details-actions">
                 <button className="btn btn-outline" type="button" onClick={closeDetails}>Return to List</button>
@@ -572,5 +494,6 @@ export default function EquipmentListPage() {
             </>}
       </section>
     </div>}
+    {assigningItem && <AssignEquipmentRoomsModal equipment={assigningItem} onClose={() => setAssigningItem(null)} onAssigned={() => setAssigningItem(null)} />}
   </section>;
 }

@@ -1,5 +1,7 @@
 const { sql, getPool } = require('../config/db');
 const BookingModel = require('../models/bookingModel');
+const RoomStatusModel = require('../models/roomStatusModel');
+const RoomMaintenanceReportModel = require('../models/roomMaintenanceReportModel');
 
 /**
  * ============================================================================
@@ -74,6 +76,8 @@ async function createWalkInBooking(data) {
     guestPhone,
     guestEmail,
     guestIdCard = '',
+    guestIdCardImage = null,
+    guestIdCardImageMimeType = null,
     depositAmount = 0,
     serviceSelections = [],
     promotionCode = '',
@@ -111,7 +115,7 @@ async function createWalkInBooking(data) {
       SELECT TOP 100 r.id, r.room_number, r.status
       FROM rooms r
       WHERE ${roomFilter}
-        AND r.status NOT IN ('MAINTENANCE', 'CLEANING')
+        AND r.status <> 'MAINTENANCE'
         AND NOT EXISTS (
           SELECT 1 FROM booking_rooms br JOIN bookings b ON b.id = br.booking_id
           WHERE br.room_id = r.id AND ${activeReservationPredicate('b')}
@@ -283,10 +287,12 @@ async function createWalkInBooking(data) {
     .input('full_name', sql.NVarChar(150), guestFullName.trim())
     .input('phone', sql.VarChar(20), guestPhone.trim())
     .input('id_card_number', sql.VarChar(50), guestIdCard ? guestIdCard.trim() : null)
-    .input('id_card_verified', sql.Bit, checkInNow && guestIdCard && guestIdCard.trim() ? 1 : 0)
+    .input('idCardImage', sql.VarBinary(sql.MAX), guestIdCardImage)
+    .input('idCardImageMimeType', sql.VarChar(50), guestIdCardImageMimeType)
+    .input('id_card_verified', sql.Bit, checkInNow && (guestIdCardImage || (guestIdCard && guestIdCard.trim())) ? 1 : 0)
     .query(`
-      INSERT INTO booking_guests (booking_id, full_name, phone, id_card_number, id_card_verified)
-      VALUES (@booking_id, @full_name, @phone, @id_card_number, @id_card_verified);
+      INSERT INTO booking_guests (booking_id, full_name, phone, id_card_number, id_card_image, id_card_image_mime_type, id_card_verified)
+      VALUES (@booking_id, @full_name, @phone, @id_card_number, @idCardImage, @idCardImageMimeType, @id_card_verified);
     `);
 
   // 8. Nếu nhận phòng ngay (checkInNow) và đã chọn số phòng, cập nhật trạng thái phòng vật lý
@@ -439,7 +445,7 @@ async function createCustomerBooking(data) {
       discountAmount = Math.max(0, Math.min(originalTotalAmount, discountAmount));
     }
     const totalAmount = originalTotalAmount - discountAmount;
-    const requiredDepositAmount = promotion ? Math.ceil(totalAmount * 0.3) : Math.ceil(totalPerNight * nights * 0.3);
+    const requiredDepositAmount = Math.ceil(totalAmount * 0.3);
     const bookingCode = BookingModel.generateBookingCode();
     const bookingResult = await transaction.request()
       .input('booking_code', sql.VarChar(20), bookingCode)
@@ -542,7 +548,7 @@ async function createCustomerBooking(data) {
   }
 }
 
-async function checkInBooking({ bookingId, idCardNumber = '' }) {
+async function checkInBooking({ bookingId, idCardImageBuffer = null, idCardImageMimeType = null }) {
   const pool = await getPool();
   const transaction = new sql.Transaction(pool);
   await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
@@ -555,22 +561,18 @@ async function checkInBooking({ bookingId, idCardNumber = '' }) {
           b.id, b.booking_code, b.status, b.check_in_date, b.check_out_date, b.deposit_amount,
           deposit_summary.required_deposit_amount, deposit_summary.requires_deposit_payment,
           b.guest_full_name, b.guest_phone,
-          guest_identity.id_card_number
+          guest_identity.id_card_number, guest_identity.id_card_image
         FROM bookings b WITH (UPDLOCK, HOLDLOCK)
         OUTER APPLY (
           SELECT
-            CASE WHEN b.promotion_id IS NOT NULL THEN CEILING(b.total_amount * 0.30)
-              ELSE CEILING(COALESCE(SUM(br_deposit.price_per_night), 0)
-                * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30) END AS required_deposit_amount,
+            CEILING(b.total_amount * 0.30) AS required_deposit_amount,
             CASE WHEN EXISTS (
               SELECT 1 FROM dbo.payments p
               WHERE p.booking_id = b.id AND p.payment_type = 'DEPOSIT'
             ) THEN 1 ELSE 0 END AS requires_deposit_payment
-          FROM dbo.booking_rooms br_deposit
-          WHERE br_deposit.booking_id = b.id
         ) deposit_summary
         OUTER APPLY (
-          SELECT TOP 1 bg.id_card_number
+          SELECT TOP 1 bg.id_card_number, bg.id_card_image
           FROM dbo.booking_guests bg
           WHERE bg.booking_id = b.id
           ORDER BY bg.id
@@ -591,11 +593,9 @@ async function checkInBooking({ bookingId, idCardNumber = '' }) {
     if (today < checkInDate || today >= checkOutDate) {
       throw new Error('Booking is outside its check-in dates.');
     }
-    const normalizedIdCard = String(idCardNumber || '').trim();
-    if (!booking.id_card_number && !/^\d{12}$/.test(normalizedIdCard)) {
-      throw new Error('A valid 12-digit CCCD is required to check in this booking.');
+    if (!booking.id_card_image && !idCardImageBuffer) {
+      throw new Error('A CCCD image is required to check in this booking.');
     }
-    const idCardToSave = normalizedIdCard || booking.id_card_number;
     const bookingRooms = await transaction.request()
       .input('bookingId', sql.BigInt, booking.id)
       .query(`
@@ -613,10 +613,12 @@ async function checkInBooking({ bookingId, idCardNumber = '' }) {
 
     await transaction.request()
       .input('bookingId', sql.BigInt, booking.id)
-      .input('idCardNumber', sql.VarChar(50), idCardToSave)
+      .input('idCardImage', sql.VarBinary(sql.MAX), idCardImageBuffer)
+      .input('idCardImageMimeType', sql.VarChar(50), idCardImageMimeType)
       .query(`
         UPDATE booking_guests
-        SET id_card_number = COALESCE(id_card_number, @idCardNumber),
+        SET id_card_image = COALESCE(@idCardImage, id_card_image),
+            id_card_image_mime_type = COALESCE(@idCardImageMimeType, id_card_image_mime_type),
             id_card_verified = 1
         WHERE booking_id = @bookingId;
       `);
@@ -650,11 +652,11 @@ async function checkInBooking({ bookingId, idCardNumber = '' }) {
   }
 }
 
-async function getRecentBookings(limit = 10, activeOnly = false, customerId = null) {
-  await expireStaleBookings();
+async function getRecentBookings(limit = 10, activeOnly = false, customerId = null, bookingId = null, reconcileState = true) {
+  if (reconcileState) await expireStaleBookings();
   const pool = await getPool();
 
-  await pool.request().query(`
+  if (reconcileState) await pool.request().query(`
     UPDATE rooms
     SET status = 'OCCUPIED'
     WHERE EXISTS (
@@ -676,6 +678,10 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
   if (customerId !== null) {
     request.input('customerId', sql.BigInt, Number(customerId));
     filters.push('b.customer_id = @customerId');
+  }
+  if (bookingId !== null) {
+    request.input('bookingId', sql.BigInt, Number(bookingId));
+    filters.push('b.id = @bookingId');
   }
   const activeFilter = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
   const result = await request.query(`
@@ -714,7 +720,10 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
         room_summary.assigned_room_id,
         room_summary.room_status,
         room_selection_summary.room_selections,
-        CASE WHEN guest_identity.id_card_number IS NULL THEN CAST(0 AS bit) ELSE CAST(1 AS bit) END AS has_guest_id_card
+        CASE WHEN EXISTS (
+          SELECT 1 FROM dbo.booking_guests bg
+          WHERE bg.booking_id = b.id AND bg.id_card_image IS NOT NULL
+        ) THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END AS has_guest_id_card
       FROM bookings b
       OUTER APPLY (
         SELECT MIN(type_counts.room_type_id) AS room_type_id,
@@ -754,15 +763,11 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
       ) payment_summary
       OUTER APPLY (
         SELECT
-          CASE WHEN b.promotion_id IS NOT NULL THEN CEILING(b.total_amount * 0.30)
-            ELSE CEILING(COALESCE(SUM(br_deposit.price_per_night), 0)
-              * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30) END AS required_deposit_amount,
+          CEILING(b.total_amount * 0.30) AS required_deposit_amount,
           CASE WHEN EXISTS (
             SELECT 1 FROM dbo.payments p
             WHERE p.booking_id = b.id AND p.payment_type = 'DEPOSIT'
           ) THEN 1 ELSE 0 END AS requires_deposit_payment
-        FROM dbo.booking_rooms br_deposit
-        WHERE br_deposit.booking_id = b.id
       ) deposit_summary
       OUTER APPLY (
         SELECT MIN(r.id) AS assigned_room_id,
@@ -772,12 +777,6 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
         LEFT JOIN rooms r ON r.id = br3.room_id
         WHERE br3.booking_id = b.id
       ) room_summary
-      OUTER APPLY (
-        SELECT TOP 1 bg.id_card_number
-        FROM dbo.booking_guests bg
-        WHERE bg.booking_id = b.id
-        ORDER BY bg.id
-      ) guest_identity
       ${activeFilter}
       ORDER BY b.id DESC;
     `);
@@ -813,6 +812,12 @@ async function getRecentBookings(limit = 10, activeOnly = false, customerId = nu
     room_status: item.room_status,
     has_guest_id_card: Boolean(item.has_guest_id_card),
   }));
+}
+
+async function getBookingDetails(bookingId, customerId = null) {
+  await expireStaleBookings();
+  const rows = await getRecentBookings(null, false, customerId, bookingId, false);
+  return rows[0] ?? null;
 }
 
 async function getActiveBookings() {
@@ -897,7 +902,7 @@ async function updateBooking({ bookingId, customerId, ...changes }) {
         .input('checkOut', sql.Date, changes.checkOutDate)
         .query(`
           SELECT
-            (SELECT COUNT(*) FROM rooms WHERE room_type_id = @roomTypeId AND status NOT IN ('MAINTENANCE', 'CLEANING')) AS inventory_count,
+            (SELECT COUNT(*) FROM rooms WHERE room_type_id = @roomTypeId AND status <> 'MAINTENANCE') AS inventory_count,
             (SELECT COUNT(*) FROM booking_rooms br JOIN bookings b ON b.id = br.booking_id
              WHERE br.room_type_id = @roomTypeId AND b.id <> @bookingId AND ${activeReservationPredicate('b')}
                AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn) AS reserved_count;
@@ -1163,28 +1168,6 @@ async function checkOutBooking(bookingId) {
   }
 }
 
-async function updateRoomStatus(roomId, status, currentStatus = 'CLEANING') {
-  const pool = await getPool();
-  const result = await pool.request()
-    .input('roomId', sql.Int, roomId)
-    .input('status', sql.VarChar(20), status)
-    .input('currentStatus', sql.VarChar(20), currentStatus)
-    .query(`
-      UPDATE dbo.rooms
-      SET status = CASE
-        WHEN @currentStatus = 'CLEANING' AND @status = 'AVAILABLE' AND EXISTS (
-          SELECT 1 FROM dbo.room_problem_reports report
-          WHERE report.room_id = dbo.rooms.id AND report.status = 'OPEN'
-        ) THEN 'MAINTENANCE'
-        ELSE @status
-      END
-      WHERE id = @roomId AND status = @currentStatus;
-      SELECT @@ROWCOUNT AS updated_count, (SELECT status FROM dbo.rooms WHERE id = @roomId) AS status;
-    `);
-  if (!result.recordset[0]?.updated_count) throw new Error('Room is not waiting for cleaning completion.');
-  return { room_id: roomId, status: result.recordset[0].status };
-}
-
 async function reportRoomMaintenance({ roomId, reportedBy, description }) {
   const pool = await getPool();
   const transaction = new sql.Transaction(pool);
@@ -1239,7 +1222,7 @@ async function getOpenRoomMaintenanceReports() {
     WHERE report.status = 'OPEN'
     ORDER BY report.reported_at DESC;
   `);
-  return result.recordset;
+  return RoomMaintenanceReportModel.fromRows(result.recordset);
 }
 
 async function resolveRoomMaintenanceReport(reportId) {
@@ -1310,7 +1293,7 @@ async function getRoomStatuses() {
     FROM rooms r JOIN room_types rt ON rt.id = r.room_type_id
     ORDER BY r.floor, r.room_number;
   `);
-  return result.recordset;
+  return RoomStatusModel.fromRows(result.recordset);
 }
 
 module.exports = {
@@ -1320,11 +1303,11 @@ module.exports = {
   expireStaleBookings,
   checkInBooking,
   getRecentBookings,
+  getBookingDetails,
   updateBooking,
   cancelBooking,
   getActiveBookings,
   checkOutBooking,
-  updateRoomStatus,
   reportRoomMaintenance,
   getOpenRoomMaintenanceReports,
   resolveRoomMaintenanceReport,

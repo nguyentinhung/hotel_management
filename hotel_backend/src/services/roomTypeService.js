@@ -22,7 +22,7 @@ async function createRoomType(input) {
   const { data, amenityIds } = RoomTypeModel.normalizeInput(input, false);
   await assertRoomTypeReferences(data.name, amenityIds);
   const roomType = await roomTypeDao.createRoomType(data, amenityIds);
-  return { ...roomType, base_price: Number(roomType.base_price), amenities: [], amenity_ids: amenityIds };
+  return RoomTypeModel.fromResult({ ...roomType, base_price: Number(roomType.base_price), amenities: [], amenity_ids: amenityIds });
 }
 
 async function updateRoomType(roomTypeId, input) {
@@ -31,16 +31,16 @@ async function updateRoomType(roomTypeId, input) {
   await assertRoomTypeReferences(data.name, amenityIds, roomTypeId);
   const roomType = await roomTypeDao.updateRoomType(roomTypeId, data, amenityIds);
   if (!roomType) return null;
-  return { ...roomType, base_price: Number(roomType.base_price), amenity_ids: amenityIds };
+  return RoomTypeModel.fromResult({ ...roomType, base_price: Number(roomType.base_price), amenity_ids: amenityIds });
 }
 
 async function deleteRoomType(roomTypeId) {
   if (!Number.isInteger(roomTypeId) || roomTypeId < 1) fail('Mã loại phòng không hợp lệ.');
-  return roomTypeDao.deleteRoomType(roomTypeId);
+  return RoomTypeModel.fromResult(await roomTypeDao.deleteRoomType(roomTypeId));
 }
 
 module.exports = {
   createRoomType, updateRoomType, deleteRoomType,
-  getPrimaryImage: (id) => roomTypeDao.getPrimaryImage(id),
-  savePrimaryImage: (id, url, file) => roomTypeDao.savePrimaryImage(id, url, file),
+  getPrimaryImage: async (id) => RoomTypeModel.fromResult(await roomTypeDao.getPrimaryImage(id)),
+  savePrimaryImage: async (id, url, file) => RoomTypeModel.fromResult(await roomTypeDao.savePrimaryImage(id, url, file)),
 };

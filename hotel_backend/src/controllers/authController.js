@@ -1,52 +1,9 @@
-const crypto = require('crypto');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const nodemailer = require('nodemailer');
 const authService = require('../services/authService');
-const UserModel = require('../models/userModel');
-
-const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
+const emailService = require('../services/emailService');
 
 
 
 
-function createMailTransporter() {
-  const user = process.env.SMTP_USER?.trim();
-  const pass = process.env.SMTP_PASS?.trim();
-  if (!user || !pass) {
-    const error = new Error('Email chưa được cấu hình. Hãy đặt SMTP_USER và SMTP_PASS trong hotel_backend/.env rồi khởi động lại backend.');
-    error.code = 'SMTP_NOT_CONFIGURED';
-    throw error;
-  }
-
-  const port = Number(process.env.SMTP_PORT || 587);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    const error = new Error('SMTP_PORT không hợp lệ.');
-    error.code = 'SMTP_CONFIG_INVALID';
-    throw error;
-  }
-
-  const secureSetting = process.env.SMTP_SECURE?.trim().toLowerCase();
-  if (secureSetting && secureSetting !== 'true' && secureSetting !== 'false') {
-    const error = new Error('SMTP_SECURE chỉ nhận giá trị true hoặc false.');
-    error.code = 'SMTP_CONFIG_INVALID';
-    throw error;
-  }
-
-  return nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'smtp.gmail.com',
-    port,
-    secure: secureSetting ? secureSetting === 'true' : port === 465,
-    auth: { user, pass },
-  });
-}
-
-function sendEmail(message, transporter = createMailTransporter()) {
-  return transporter.sendMail({
-    from: process.env.SMTP_FROM || process.env.SMTP_USER,
-    ...message,
-  });
-}
 
 const buildUserResponse = (user) => ({
   id: user.id,
@@ -65,7 +22,7 @@ async function sendVerificationEmail(user, token, transporter) {
   const verificationUrl =
     `${baseUrl}/verify-email?token=${encodeURIComponent(token)}`;
 
-  await sendEmail({
+  await emailService.sendEmail({
     // QUAN TRỌNG: gửi tới email người vừa đăng ký
     to: user.email,
 
@@ -103,16 +60,6 @@ async function sendVerificationEmail(user, token, transporter) {
   return true;
 }
 // Tạo access token để client dùng cho request tiếp theo trong vòng 1 giờ
-const createAccessToken = (user) => jwt.sign(
-  {
-    user_id: user.id,
-    email: user.email,
-    role_id: user.role_id,
-    role_code: user.role_code,
-  },
-  JWT_SECRET,
-  { expiresIn: '1h' },
-);
 
 // Đăng ký tài khoản mới, hash mật khẩu, tạo token xác thực email
 async function register(req, res) {
@@ -123,29 +70,29 @@ async function register(req, res) {
       return res.status(400).json({ message: 'Vui lòng nhập đầy đủ email, mật khẩu, họ tên và số điện thoại.' });
     }
 
-    const normalizedEmail = UserModel.normalizeEmail(email);
+    const normalizedEmail = authService.normalizeEmail(email);
     const normalizedName = String(full_name).trim();
-    const normalizedPhone = UserModel.normalizePhone(phone_number);
+    const normalizedPhone = authService.normalizePhone(phone_number);
 
-    if (!UserModel.isValidEmail(normalizedEmail)) {
+    if (!authService.isValidEmail(normalizedEmail)) {
       return res.status(400).json({ message: 'Email không đúng định dạng.' });
     }
 
-    if (!UserModel.isValidPhone(normalizedPhone)) {
+    if (!authService.isValidPhone(normalizedPhone)) {
       return res.status(400).json({ message: 'Số điện thoại không đúng định dạng.' });
     }
 
     // Validate mail settings before creating an account that cannot be verified.
-    const mailTransporter = createMailTransporter();
+    const mailTransporter = emailService.createMailTransporter();
     const existingEmail = await authService.findUserIdByEmail(normalizedEmail);
     if (existingEmail) return res.status(409).json({ message: 'Email đã tồn tại trong hệ thống.' });
     const existingPhone = await authService.findUserIdByPhone(normalizedPhone);
     if (existingPhone) return res.status(409).json({ message: 'Số điện thoại đã được sử dụng.' });
     const customerRole = await authService.getCustomerRole();
     if (!customerRole) throw new Error('Customer role is not configured.');
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await authService.hashPassword(password, 10);
     const user = await authService.createUser({ roleId: customerRole.id, email: normalizedEmail, passwordHash, fullName: normalizedName, phone: normalizedPhone });
-    const verificationToken = crypto.randomBytes(32).toString('hex');
+    const verificationToken = authService.createOpaqueToken();
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     await authService.createEmailVerification(user.id, verificationToken, expiresAt);
@@ -213,14 +160,13 @@ async function login(req, res) {
       return res.status(400).json({ message: 'Vui lòng nhập email và mật khẩu.' });
     }
 
-    const user = await authService.getUserByEmail(UserModel.normalizeEmail(email));
+    const user = await authService.getUserByEmail(authService.normalizeEmail(email));
 
     if (!user) {
       return res.status(401).json({ message: 'Email hoặc mật khẩu không chính xác.' });
     }
 
-    const legacyPasswordMatch = user.password_hash === password;
-    const isMatch = legacyPasswordMatch || (await bcrypt.compare(password, user.password_hash).catch(() => false));
+    const isMatch = await authService.passwordMatches(password, user.password_hash);
 
     if (!isMatch) {
       return res.status(401).json({ message: 'Email hoặc mật khẩu không chính xác.' });
@@ -230,8 +176,8 @@ async function login(req, res) {
       return res.status(403).json({ message: 'Tài khoản đang chờ xác thực hoặc đã bị khóa.' });
     }
 
-    const accessToken = createAccessToken(user);
-    const refreshToken = crypto.randomBytes(32).toString('hex');
+    const accessToken = authService.createAccessToken(user);
+    const refreshToken = authService.createOpaqueToken();
     const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
     await authService.createRefreshToken(user.id, refreshToken, refreshExpiresAt);
@@ -282,15 +228,15 @@ module.exports = {
 };
 async function forgotPassword(req, res) {
   try {
-    const email = UserModel.normalizeEmail(req.body?.email);
+    const email = authService.normalizeEmail(req.body?.email);
 
-    if (!UserModel.isValidEmail(email)) {
+    if (!authService.isValidEmail(email)) {
       return res.status(400).json({
         message: 'Email không hợp lệ.',
       });
     }
 
-    const mailTransporter = createMailTransporter();
+    const mailTransporter = emailService.createMailTransporter();
     const user = await authService.getActiveUserByEmail(email);
 
     if (!user) {
@@ -306,7 +252,7 @@ async function forgotPassword(req, res) {
 
     // Tạo OTP 6 số
     const otpCode = String(
-      crypto.randomInt(100000, 1000000)
+      Number(authService.createOtp())
     );
 
     // Tạo password reset record
@@ -314,7 +260,7 @@ async function forgotPassword(req, res) {
 
     // Gửi OTP
     try {
-      await sendEmail({
+      await emailService.sendEmail({
         to: user.email,
         subject: 'Mã OTP đặt lại mật khẩu',
         html: `
@@ -357,11 +303,11 @@ async function forgotPassword(req, res) {
 }
 async function resetPassword(req, res) {
   try {
-    const email = UserModel.normalizeEmail(req.body?.email);
+    const email = authService.normalizeEmail(req.body?.email);
     const otp = String(req.body?.otp || '').trim();
     const newPassword = String(req.body?.newPassword || '');
 
-    if (!UserModel.isValidEmail(email)) {
+    if (!authService.isValidEmail(email)) {
       return res.status(400).json({
         message: 'Email không hợp lệ.',
       });
@@ -401,7 +347,7 @@ async function resetPassword(req, res) {
 
 
     // Hash password mới
-    const passwordHash = await bcrypt.hash(newPassword, 10);
+    const passwordHash = await authService.hashPassword(newPassword, 10);
 
     // Đổi password
     await authService.updatePassword(userId, passwordHash);
@@ -440,14 +386,13 @@ async function changePassword(req, res) {
       return res.status(403).json({ message: 'Tài khoản chưa được kích hoạt hoặc đã bị khóa.' });
     }
 
-    const matches = user.password_hash === currentPassword
-      || await bcrypt.compare(currentPassword, user.password_hash).catch(() => false);
+    const matches = await authService.passwordMatches(currentPassword, user.password_hash);
     if (!matches) return res.status(400).json({ message: 'Mật khẩu hiện tại không đúng.' });
-    if (await bcrypt.compare(newPassword, user.password_hash).catch(() => false)) {
+    if (await authService.passwordHashMatches(newPassword, user.password_hash)) {
       return res.status(400).json({ message: 'Mật khẩu mới phải khác mật khẩu hiện tại.' });
     }
 
-    const passwordHash = await bcrypt.hash(newPassword, 10);
+    const passwordHash = await authService.hashPassword(newPassword, 10);
     await authService.updatePassword(userId, passwordHash);
     return res.json({ message: 'Đổi mật khẩu thành công.' });
   } catch (error) {

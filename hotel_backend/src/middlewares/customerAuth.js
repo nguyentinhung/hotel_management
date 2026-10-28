@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
+const { jwtSecret: JWT_SECRET } = require('../config/auth');
 
 function requireRoles(allowedRoles, unauthorizedMessage) {
   return (req, res, next) => {
@@ -59,6 +59,11 @@ const requirePaymentActor = requireRoles(
   'Bạn không có quyền kiểm tra trạng thái giao dịch này.',
 );
 
+const requireBookingReadAccess = requireRoles(
+  ['CUSTOMER', 'RECEPTIONIST'],
+  'Booking access denied.',
+);
+
 const requireReviewStaff = requireRoles(
   ['RECEPTIONIST', 'ADMIN'],
   'Chỉ lễ tân và quản trị viên mới có thể xem quản lý đánh giá.',
@@ -74,4 +79,4 @@ const requireChangePassword = requireRoles(
   'Bạn không có quyền đổi mật khẩu.',
 );
 
-module.exports = { requireCustomer, requireReceptionist, requirePaymentStaff, requirePaymentActor, requireReviewStaff, requireProfileAccess, requireChangePassword };
+module.exports = { requireCustomer, requireReceptionist, requirePaymentStaff, requirePaymentActor, requireBookingReadAccess, requireReviewStaff, requireProfileAccess, requireChangePassword };

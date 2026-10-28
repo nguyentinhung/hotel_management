@@ -31,7 +31,7 @@ function ServiceIcon() {
 }
 
 export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps) {
-    const { showToast } = useToast();
+    const { showToast, confirmAction } = useToast();
     const [services, setServices] = useState<Service[]>([]);
     const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState('');
@@ -146,10 +146,7 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
     };
 
     const handleDelete = async (id: number) => {
-        // Bấm Cancel thì không làm gì, dịch vụ được giữ nguyên
-        if (!window.confirm('Bạn có chắc chắn muốn xóa dịch vụ này?')) {
-            return;
-        }
+        if (!await confirmAction({ title: 'Xóa dịch vụ?', message: 'Bạn có chắc muốn xóa dịch vụ này?', confirmLabel: 'Xóa', destructive: true })) return;
 
         try {
             await deleteService(id);

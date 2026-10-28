@@ -109,7 +109,6 @@ export interface WalkInBookingPayload {
   guest_full_name: string;
   guest_phone: string;
   guest_email?: string;
-  guest_id_card?: string;
   deposit_amount?: number;
   special_request?: string;
   check_in_now?: boolean;

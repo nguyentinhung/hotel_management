@@ -127,7 +127,7 @@ export default function ReceptionRoomBooking({
   mode?: ReceptionBookingMode;
   onViewBookingHistory?: () => void;
 }) {
-  const { showToast } = useToast();
+  const { showToast, confirmAction } = useToast();
   const today = useMemo(() => formatDateInput(new Date()), []);
   const tomorrow = useMemo(() => addDays(today, 1), [today]);
 
@@ -166,7 +166,6 @@ export default function ReceptionRoomBooking({
     guest_full_name: string;
     guest_phone: string;
     guest_email: string;
-    guest_id_card: string;
     room_id: string; // ID phòng vật lý được chọn (chuỗi rỗng = auto)
     deposit_amount: number;
     check_in_now: boolean;
@@ -175,13 +174,13 @@ export default function ReceptionRoomBooking({
     guest_full_name: '',
     guest_phone: '',
     guest_email: '',
-    guest_id_card: '',
     room_id: '',
     deposit_amount: 0,
     check_in_now: true,
     special_request: '',
   });
   const [isSubmittingBooking, setIsSubmittingBooking] = useState<boolean>(false);
+  const [walkInIdCardImage, setWalkInIdCardImage] = useState<File | null>(null);
 
   // --- STATE DANH SÁCH ĐẶT PHÒNG GẦN ĐÂY ---
   const [recentBookings, setRecentBookings] = useState<RecentBooking[]>([]);
@@ -236,7 +235,7 @@ export default function ReceptionRoomBooking({
   const [checkInRoomSlots, setCheckInRoomSlots] = useState<Awaited<ReturnType<typeof getAssignableRooms>>['room_slots']>([]);
   const [checkInRoomIds, setCheckInRoomIds] = useState<Record<number, string>>({});
   const [isLoadingCheckInRooms, setIsLoadingCheckInRooms] = useState(false);
-  const [checkInIdCard, setCheckInIdCard] = useState('');
+  const [checkInIdCardImage, setCheckInIdCardImage] = useState<File | null>(null);
   const [hasVerifiedOriginalId, setHasVerifiedOriginalId] = useState(false);
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [isCheckingOut, setIsCheckingOut] = useState<string | number | null>(null);
@@ -462,7 +461,7 @@ export default function ReceptionRoomBooking({
 
   const handleCancelSelectedBooking = async () => {
     if (!selectedBookingDetail || selectedBookingDetail.status !== 'CONFIRMED') return;
-    if (!window.confirm(`Bạn có chắc muốn hủy booking ${selectedBookingDetail.booking_code}?`)) return;
+    if (!await confirmAction({ title: 'Hủy booking?', message: `Bạn có chắc muốn hủy booking ${selectedBookingDetail.booking_code}?`, confirmLabel: 'Hủy booking', destructive: true })) return;
     const accessToken = localStorage.getItem('accessToken');
     if (!accessToken) {
       showToast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.', 'error');
@@ -521,8 +520,12 @@ export default function ReceptionRoomBooking({
       showToast('Vui lòng đối chiếu giấy tờ tùy thân bản gốc trước khi check-in.', 'error');
       return;
     }
-    if (!selectedCheckInBooking.has_guest_id_card && !/^\d{12}$/.test(checkInIdCard.trim())) {
-      showToast('Vui lòng nhập CCCD gồm đúng 12 chữ số để check-in booking online.', 'error');
+    if (!selectedCheckInBooking.has_guest_id_card && !checkInIdCardImage) {
+      showToast('Vui lòng tải ảnh CCCD lên để check-in booking online.', 'error');
+      return;
+    }
+    if (checkInIdCardImage && (!['image/jpeg', 'image/png', 'image/webp'].includes(checkInIdCardImage.type) || checkInIdCardImage.size > 5 * 1024 * 1024)) {
+      showToast('Ảnh CCCD phải là JPG, PNG hoặc WEBP và không quá 5 MB.', 'error');
       return;
     }
     const accessToken = localStorage.getItem('accessToken');
@@ -544,13 +547,13 @@ export default function ReceptionRoomBooking({
       const result = await checkInBooking(
         selectedCheckInBooking.id,
         accessToken,
-        selectedCheckInBooking.has_guest_id_card ? undefined : checkInIdCard.trim(),
+        checkInIdCardImage || undefined,
       );
       showToast(result.message, 'success');
       setSelectedCheckInBooking(null);
       setCheckInRoomSlots([]);
       setCheckInRoomIds({});
-      setCheckInIdCard('');
+      setCheckInIdCardImage(null);
       setHasVerifiedOriginalId(false);
       await Promise.all([
         fetchRecent(),
@@ -570,7 +573,7 @@ export default function ReceptionRoomBooking({
       return;
     }
     setSelectedCheckInBooking(booking);
-    setCheckInIdCard('');
+    setCheckInIdCardImage(null);
     setHasVerifiedOriginalId(false);
     setCheckInRoomSlots([]);
     setCheckInRoomIds({});
@@ -602,6 +605,20 @@ export default function ReceptionRoomBooking({
     setCheckOutPaymentNote('');
     setCashTendered('');
     setSelectedCheckOutBooking(booking);
+  };
+
+  const resumeCheckoutPayment = async (booking: RecentBooking) => {
+    try {
+      setIsCheckingOut(booking.id);
+      const result = await createReceptionCheckout(booking.id, 'VNPAY');
+      if (!result.payment_url) throw new Error('Không nhận được đường dẫn thanh toán VNPay.');
+      if (result.invoice_id) sessionStorage.setItem('hotelManagement.checkoutInvoiceId', String(result.invoice_id));
+      sessionStorage.setItem('hotelManagement.checkoutPaymentCode', result.payment_code);
+      window.location.assign(result.payment_url);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Không thể tiếp tục thanh toán.', 'error');
+      setIsCheckingOut(null);
+    }
   };
 
   const confirmCheckOut = async () => {
@@ -792,12 +809,12 @@ export default function ReceptionRoomBooking({
       guest_full_name: '',
       guest_phone: '',
       guest_email: '',
-      guest_id_card: '',
       room_id: defaultRoomId,
       deposit_amount: 0,
       check_in_now: true,
       special_request: 'Khách đặt trực tiếp tại quầy lễ tân',
     });
+    setWalkInIdCardImage(null);
     setSelectedServiceQuantities({});
     setWalkInPromotionId('');
     setWalkInPromotionCode('');
@@ -888,8 +905,12 @@ export default function ReceptionRoomBooking({
       showToast('Số khách vượt quá sức chứa của các phòng đã chọn.', 'error');
       return;
     }
-    if (!/^\d{12}$/.test(walkInForm.guest_id_card.trim())) {
-      showToast('CCCD phải gồm đúng 12 chữ số.', 'error');
+    if (!walkInIdCardImage) {
+      showToast('Vui lòng tải ảnh CCCD của khách lên.', 'error');
+      return;
+    }
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(walkInIdCardImage.type) || walkInIdCardImage.size > 5 * 1024 * 1024) {
+      showToast('Ảnh CCCD phải là JPG, PNG hoặc WEBP và không quá 5 MB.', 'error');
       return;
     }
 
@@ -913,13 +934,12 @@ export default function ReceptionRoomBooking({
         guest_full_name: walkInForm.guest_full_name,
         guest_phone: normalizedPhone,
         guest_email: normalizedEmail || undefined,
-        guest_id_card: walkInForm.guest_id_card || undefined,
         deposit_amount: Number(walkInForm.deposit_amount || 0),
         special_request: walkInForm.special_request,
         check_in_now: true,
       };
 
-      const res = await createWalkInBooking(payload);
+      const res = await createWalkInBooking(payload, walkInIdCardImage);
 
       showToast(`${res.message} (Khách: ${res.booking.guest_full_name}, Phòng: ${res.booking.room_number || 'Tự gán'}${Number(res.booking.discount_amount || 0) > 0 ? `, Promotion ${res.booking.promotion_code}: giảm ${formatCurrency(Number(res.booking.discount_amount))}` : ''}, Tổng: ${formatCurrency(res.booking.total_amount)})`, 'success');
       setIsModalOpen(false);
@@ -1324,19 +1344,10 @@ export default function ReceptionRoomBooking({
 
               <div className="form-row-2">
                 <div className="form-group">
-                  <label htmlFor="guest_id_card">Số CCCD <span className="req">*</span></label>
-                  <input
-                    id="guest_id_card"
-                    type="text"
-                    placeholder="001200001234"
-                    value={walkInForm.guest_id_card}
-                    inputMode="numeric"
-                    minLength={12}
-                    maxLength={12}
-                    pattern="[0-9]{12}"
-                    required
-                    onChange={(e) => setWalkInForm({ ...walkInForm, guest_id_card: e.target.value })}
-                  />
+                  <label htmlFor="guest_id_card_image">Ảnh CCCD khách hàng <span className="req">*</span></label>
+                  <input id="guest_id_card_image" type="file" accept="image/jpeg,image/png,image/webp" required onChange={(event) => setWalkInIdCardImage(event.target.files?.[0] || null)} />
+                  <small>Chấp nhận JPG, PNG hoặc WEBP, tối đa 5 MB.</small>
+                  {walkInIdCardImage && <small>Đã chọn: {walkInIdCardImage.name}</small>}
                 </div>
 
                 <div className="form-group">
@@ -1843,7 +1854,9 @@ export default function ReceptionRoomBooking({
                           }}>Xác nhận check-in</button>
                         )
                       ) : mode === 'checkout' && b.has_pending_final_payment ? (
-                        <button type="button" disabled>Đang chờ thanh toán</button>
+                        <button type="button" className="reception-booking-action" disabled={String(isCheckingOut) === String(b.id)} onClick={() => void resumeCheckoutPayment(b)}>
+                          {String(isCheckingOut) === String(b.id) ? 'Đang mở thanh toán…' : 'Tiếp tục thanh toán'}
+                        </button>
                       ) : mode === 'checkout' && b.status === 'CHECKED_IN' ? (
                         <button type="button" className="reception-booking-action" disabled={String(isCheckingOut) === String(b.id)} onClick={() => void handleCheckOut(b)}>
                           {String(isCheckingOut) === String(b.id) ? 'Đang xử lý…' : 'Checkout & thanh toán'}
@@ -1959,19 +1972,15 @@ export default function ReceptionRoomBooking({
                     <label>Họ và tên<input value={selectedCheckInBooking.guest_full_name} readOnly /></label>
                     <label>Số điện thoại<input value={selectedCheckInBooking.guest_phone} readOnly /></label>
                     <label>Email<input value={selectedCheckInBooking.guest_email || 'Chưa cung cấp'} readOnly /></label>
-                    {selectedCheckInBooking.has_guest_id_card ? (
-                      <div className="checkin-identity-saved"><strong>CCCD/CMND</strong><span>Đã lưu trong hồ sơ khách</span></div>
-                    ) : (
-                      <label>CCCD khách đặt online <span className="req">*</span><input
-                        type="text"
-                        inputMode="numeric"
-                        maxLength={12}
-                        value={checkInIdCard}
-                        onChange={(event) => setCheckInIdCard(event.target.value)}
-                        autoComplete="off"
-                        placeholder="Nhập CCCD gồm 12 chữ số"
-                      /></label>
-                    )}
+                    <div className="checkin-identity-upload">
+                      {selectedCheckInBooking.has_guest_id_card && <div className="checkin-identity-saved"><strong>Ảnh CCCD</strong><span>Đã lưu trong hồ sơ khách; chọn ảnh mới nếu cần cập nhật.</span></div>}
+                      <label>{selectedCheckInBooking.has_guest_id_card ? 'Cập nhật ảnh CCCD' : <>Ảnh CCCD khách đặt online <span className="req">*</span></>}<input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        required={!selectedCheckInBooking.has_guest_id_card}
+                        onChange={(event) => setCheckInIdCardImage(event.target.files?.[0] || null)}
+                      />{checkInIdCardImage && <small>Ảnh mới: {checkInIdCardImage.name}</small>}<small>JPG, PNG hoặc WEBP, tối đa 5 MB.</small></label>
+                    </div>
                   </div>
                   <label className="checkbox-inline checkin-identity-confirmation">
                     <input type="checkbox" checked={hasVerifiedOriginalId} onChange={(event) => setHasVerifiedOriginalId(event.target.checked)} />

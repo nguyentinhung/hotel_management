@@ -1,106 +1,43 @@
-const jwt = require('jsonwebtoken');
-const { getServiceableBookingRooms, getBookingServices, addServiceToCheckedInBooking } = require('../services/bookingServiceManagement');
-const JWT_SECRET = process.env.JWT_SECRET || 'hotel-management-secret';
-const roleCodeById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
-const getRoleCode = (claims) => String(claims.role_code || '').toUpperCase() || roleCodeById[Number(claims.role_id)];
-
-function requireReceptionOrAdmin(req, res, next) {
-  const authorization = req.headers.authorization || '';
-  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
-  if (!token) return res.status(401).json({ message: 'Vui lòng đăng nhập để tiếp tục.' });
-  try {
-    const claims = jwt.verify(token, JWT_SECRET);
-    if (!['RECEPTIONIST', 'ADMIN'].includes(getRoleCode(claims))) {
-      return res.status(403).json({ message: 'Chỉ lễ tân hoặc quản trị viên được thao tác dịch vụ của booking.' });
-    }
-    req.staffClaims = claims;
-    return next();
-  } catch {
-    return res.status(401).json({ message: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.' });
-  }
-}
-
-function requireBookingServiceReadAccess(req, res, next) {
-  const authorization = req.headers.authorization || '';
-  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
-  if (!token) return res.status(401).json({ message: 'Vui lòng đăng nhập để tiếp tục.' });
-  try {
-    const claims = jwt.verify(token, JWT_SECRET);
-    const roleCode = getRoleCode(claims);
-    if (['RECEPTIONIST', 'ADMIN'].includes(roleCode)) {
-      req.bookingServiceCustomerId = null;
-      return next();
-    }
-    if (roleCode === 'CUSTOMER' && claims.user_id) {
-      req.bookingServiceCustomerId = claims.user_id;
-      return next();
-    }
-    return res.status(403).json({ message: 'Bạn không có quyền xem dịch vụ của booking.' });
-  } catch {
-    return res.status(401).json({ message: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.' });
-  }
-}
-
-function requireBookingServiceWriteAccess(req, res, next) {
-  const authorization = req.headers.authorization || '';
-  const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
-  if (!token) return res.status(401).json({ message: 'Vui lòng đăng nhập để tiếp tục.' });
-  try {
-    const claims = jwt.verify(token, JWT_SECRET);
-    const roleCode = getRoleCode(claims);
-    if (['RECEPTIONIST', 'ADMIN'].includes(roleCode)) {
-      req.bookingServiceCustomerId = null;
-      return next();
-    }
-    if (roleCode === 'CUSTOMER' && claims.user_id) {
-      req.bookingServiceCustomerId = claims.user_id;
-      return next();
-    }
-    return res.status(403).json({ message: 'Bạn không có quyền thêm dịch vụ vào booking.' });
-  } catch {
-    return res.status(401).json({ message: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn.' });
-  }
-}
-
-function validBookingId(value) {
-  return /^\d+$/.test(String(value)) && BigInt(value) > 0n;
-}
+const bookingServiceManagement = require('../services/bookingServiceManagement');
 
 async function getBookingServiceData(req, res) {
-  if (!validBookingId(req.params.bookingId)) return res.status(400).json({ message: 'Mã booking không hợp lệ.' });
   try {
     const [rooms, services] = await Promise.all([
-      getServiceableBookingRooms(req.params.bookingId, req.bookingServiceCustomerId),
-      getBookingServices(req.params.bookingId, req.bookingServiceCustomerId),
+      bookingServiceManagement.getServiceableBookingRooms(req.params.bookingId, req.bookingServiceCustomerId),
+      bookingServiceManagement.getBookingServices(req.params.bookingId, req.bookingServiceCustomerId),
     ]);
     return res.json({ rooms, services });
   } catch (error) {
+    if (error.code === 'INVALID_BOOKING_ID') return res.status(400).json({ message: 'M\u00e3 booking kh\u00f4ng h\u1ee3p l\u1ec7.' });
     console.error('Get booking services error:', error);
-    return res.status(500).json({ message: 'Không thể tải dịch vụ trong booking.' });
+    return res.status(500).json({ message: 'Kh\u00f4ng th\u1ec3 t\u1ea3i d\u1ecbch v\u1ee5 trong booking.' });
   }
 }
 
 async function addBookingService(req, res) {
-  if (!validBookingId(req.params.bookingId)) return res.status(400).json({ message: 'Mã booking không hợp lệ.' });
-  const bookingRoomId = Number(req.body?.booking_room_id);
-  const serviceId = Number(req.body?.service_id);
-  const quantity = Number(req.body?.quantity);
-  if (!Number.isSafeInteger(bookingRoomId) || bookingRoomId < 1 || !Number.isInteger(serviceId) || serviceId < 1 || !Number.isInteger(quantity) || quantity < 1 || quantity > 100) {
-    return res.status(400).json({ message: 'Vui lòng chọn phòng, dịch vụ và số lượng hợp lệ (1–100).' });
-  }
   try {
-    const service = await addServiceToCheckedInBooking({ bookingId: req.params.bookingId, bookingRoomId, serviceId, quantity, customerId: req.bookingServiceCustomerId });
+    const service = await bookingServiceManagement.addServiceToCheckedInBooking({
+      bookingId: req.params.bookingId,
+      bookingRoomId: req.body?.booking_room_id,
+      serviceId: req.body?.service_id,
+      quantity: req.body?.quantity,
+      customerId: req.bookingServiceCustomerId,
+    });
     return res.status(201).json({ success: true, service });
   } catch (error) {
-    if (/not configured for on-demand/i.test(error.message)) {
-      return res.status(400).json({ message: 'Chỉ có thể ghi nhận dịch vụ được cấu hình là “Ghi nhận khi khách yêu cầu”.' });
+    if (error.code === 'INVALID_BOOKING_ID') return res.status(400).json({ message: 'M\u00e3 booking kh\u00f4ng h\u1ee3p l\u1ec7.' });
+    if (error.code === 'INVALID_SELECTION') {
+      return res.status(400).json({ message: 'Vui l\u00f2ng ch\u1ecdn ph\u00f2ng, d\u1ecbch v\u1ee5 v\u00e0 s\u1ed1 l\u01b0\u1ee3ng h\u1ee3p l\u1ec7 (1\u2013100).' });
     }
-    if (/not found, or booking is not checked in/i.test(error.message)) {
-      return res.status(409).json({ message: 'Chỉ có thể thêm dịch vụ vào booking của bạn đang trong thời gian lưu trú và dịch vụ còn hoạt động.' });
+    if (error.code === 'SERVICE_POLICY') {
+      return res.status(400).json({ message: 'Ch\u1ec9 c\u00f3 th\u1ec3 ghi nh\u1eadn d\u1ecbch v\u1ee5 \u0111\u01b0\u1ee3c c\u1ea5u h\u00ecnh l\u00e0 \u201cGhi nh\u1eadn khi kh\u00e1ch y\u00eau c\u1ea7u\u201d.' });
+    }
+    if (error.code === 'BOOKING_NOT_SERVICEABLE') {
+      return res.status(409).json({ message: 'Ch\u1ec9 c\u00f3 th\u1ec3 th\u00eam d\u1ecbch v\u1ee5 v\u00e0o booking c\u1ee7a b\u1ea1n \u0111ang trong th\u1eddi gian l\u01b0u tr\u00fa v\u00e0 d\u1ecbch v\u1ee5 c\u00f2n ho\u1ea1t \u0111\u1ed9ng.' });
     }
     console.error('Add service to booking error:', error);
-    return res.status(500).json({ message: 'Không thể thêm dịch vụ vào booking.' });
+    return res.status(500).json({ message: 'Kh\u00f4ng th\u1ec3 th\u00eam d\u1ecbch v\u1ee5 v\u00e0o booking.' });
   }
 }
 
-module.exports = { requireReceptionOrAdmin, requireBookingServiceReadAccess, requireBookingServiceWriteAccess, getBookingServiceData, addBookingService };
+module.exports = { getBookingServiceData, addBookingService };

@@ -1,5 +1,4 @@
-const { checkRoomAvailability, createRoom: saveRoom, updateRoom: updateExistingRoom, deleteRoom: deleteExistingRoom, getAvailableRoomsForType, getRoomList: fetchRoomList, getRoomDetails: fetchRoomDetails } = require('../services/roomService');
-const RoomModel = require('../models/roomModel');
+const { checkRoomAvailability, createRoom: saveRoom, updateRoom: updateExistingRoom, deleteRoom: deleteExistingRoom, getAvailableRoomsForType, getRoomList: fetchRoomList, getRoomDetails: fetchRoomDetails, RoomInputError } = require('../services/roomService');
 
 /**
  * ============================================================================
@@ -45,93 +44,51 @@ async function getRoomDetails(req, res) {
 }
 
 async function createRoom(req, res) {
-  const body = req.body || {};
-  const { roomNumber, error: roomNumberError } = RoomModel.normalizeRoomNumber(body.room_number);
-  const roomTypeId = Number(body.room_type_id);
-  const { floor, error: floorError } = RoomModel.normalizeFloor(body.floor);
-
-  if (roomNumberError) {
-    return res.status(400).json({ success: false, message: roomNumberError });
-  }
-  if (!Number.isInteger(roomTypeId) || roomTypeId < 1) {
-    return res.status(400).json({ success: false, message: 'Vui lòng chọn loại phòng hợp lệ.' });
-  }
-  if (floorError) {
-    return res.status(400).json({ success: false, message: floorError });
-  }
-
   try {
-    const result = await saveRoom({ roomNumber, roomTypeId, floor });
+    const result = await saveRoom(req.body || {});
     if (result.reason === 'ROOM_TYPE_NOT_FOUND') {
-      return res.status(404).json({ message: 'Loại phòng đã chọn không còn khả dụng.' });
+      return res.status(404).json({ message: 'Lo\u1ea1i ph\u00f2ng \u0111\u00e3 ch\u1ecdn kh\u00f4ng c\u00f2n kh\u1ea3 d\u1ee5ng.' });
     }
     if (result.reason === 'ROOM_NUMBER_EXISTS') {
-      return res.status(409).json({ success: false, message: 'Số phòng đã tồn tại.' });
+      return res.status(409).json({ success: false, message: 'S\u1ed1 ph\u00f2ng \u0111\u00e3 t\u1ed3n t\u1ea1i.' });
     }
-    return res.status(201).json({
-      success: true,
-      message: 'Thêm phòng thành công.',
-      room: result.room,
-    });
+    return res.status(201).json({ success: true, message: 'Th\u00eam ph\u00f2ng th\u00e0nh c\u00f4ng.', room: result.room });
   } catch (error) {
+    if (error instanceof RoomInputError) return res.status(400).json({ success: false, message: error.message });
     if (error.number === 2601 || error.number === 2627) {
-      return res.status(409).json({ success: false, message: 'Số phòng đã tồn tại.' });
+      return res.status(409).json({ success: false, message: 'S\u1ed1 ph\u00f2ng \u0111\u00e3 t\u1ed3n t\u1ea1i.' });
     }
     if (error.number === 547) {
-      return res.status(404).json({ success: false, message: 'Loại phòng đã chọn không còn khả dụng.' });
+      return res.status(404).json({ success: false, message: 'Lo\u1ea1i ph\u00f2ng \u0111\u00e3 ch\u1ecdn kh\u00f4ng c\u00f2n kh\u1ea3 d\u1ee5ng.' });
     }
     console.error('Create room error:', error);
-    return res.status(500).json({ message: 'Không thể thêm phòng.' });
+    return res.status(500).json({ message: 'Kh\u00f4ng th\u1ec3 th\u00eam ph\u00f2ng.' });
   }
 }
 
 async function updateRoom(req, res) {
-  const roomId = Number(req.params.roomId);
-  const body = req.body || {};
-  const { roomNumber, error: roomNumberError } = RoomModel.normalizeRoomNumber(body.room_number);
-  const roomTypeId = Number(body.room_type_id);
-  const { floor, error: floorError } = RoomModel.normalizeFloor(body.floor);
-
-  if (!Number.isInteger(roomId) || roomId < 1) {
-    return res.status(400).json({ success: false, message: 'Mã phòng không hợp lệ.' });
-  }
-  if (roomNumberError) {
-    return res.status(400).json({ success: false, message: roomNumberError });
-  }
-  if (!Number.isInteger(roomTypeId) || roomTypeId < 1) {
-    return res.status(400).json({ success: false, message: 'Vui lòng chọn loại phòng hợp lệ.' });
-  }
-  if (floorError) {
-    return res.status(400).json({ success: false, message: floorError });
-  }
-
   try {
-    const result = await updateExistingRoom({ roomId, roomNumber, roomTypeId, floor });
-
+    const result = await updateExistingRoom(req.params.roomId, req.body || {});
     if (result.reason === 'ROOM_NOT_FOUND') {
-      return res.status(404).json({ success: false, message: 'Phòng không còn tồn tại hoặc không thể tìm thấy.' });
+      return res.status(404).json({ success: false, message: 'Ph\u00f2ng kh\u00f4ng c\u00f2n t\u1ed3n t\u1ea1i ho\u1eb7c kh\u00f4ng th\u1ec3 t\u00ecm th\u1ea5y.' });
     }
     if (result.reason === 'ROOM_TYPE_NOT_FOUND') {
-      return res.status(404).json({ success: false, message: 'Loại phòng đã chọn không còn khả dụng.' });
+      return res.status(404).json({ success: false, message: 'Lo\u1ea1i ph\u00f2ng \u0111\u00e3 ch\u1ecdn kh\u00f4ng c\u00f2n kh\u1ea3 d\u1ee5ng.' });
     }
     if (result.reason === 'ROOM_NUMBER_EXISTS') {
-      return res.status(409).json({ success: false, message: 'Số phòng đã tồn tại.' });
+      return res.status(409).json({ success: false, message: 'S\u1ed1 ph\u00f2ng \u0111\u00e3 t\u1ed3n t\u1ea1i.' });
     }
-
-    return res.json({
-      success: true,
-      message: 'Cập nhật phòng thành công.',
-      room: result.room,
-    });
+    return res.json({ success: true, message: 'C\u1eadp nh\u1eadt ph\u00f2ng th\u00e0nh c\u00f4ng.', room: result.room });
   } catch (error) {
+    if (error instanceof RoomInputError) return res.status(400).json({ success: false, message: error.message });
     if (error.number === 2601 || error.number === 2627) {
-      return res.status(409).json({ success: false, message: 'Số phòng đã tồn tại.' });
+      return res.status(409).json({ success: false, message: 'S\u1ed1 ph\u00f2ng \u0111\u00e3 t\u1ed3n t\u1ea1i.' });
     }
     if (error.number === 547) {
-      return res.status(404).json({ success: false, message: 'Loại phòng đã chọn không còn khả dụng.' });
+      return res.status(404).json({ success: false, message: 'Lo\u1ea1i ph\u00f2ng \u0111\u00e3 ch\u1ecdn kh\u00f4ng c\u00f2n kh\u1ea3 d\u1ee5ng.' });
     }
     console.error('Update room error:', error);
-    return res.status(500).json({ success: false, message: 'Không thể cập nhật phòng.' });
+    return res.status(500).json({ success: false, message: 'Kh\u00f4ng th\u1ec3 c\u1eadp nh\u1eadt ph\u00f2ng.' });
   }
 }
 

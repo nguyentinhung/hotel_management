@@ -10,7 +10,7 @@ class PaymentModel extends BaseModel {
     return String(method || '').toUpperCase();
   }
   static get schema() {
-    return {"name":"PaymentModel","table":"payments","primaryKey":"id","fields":["id","booking_id","payment_code","payment_type","amount","method","status","paid_at","created_at"]};
+    return {"name":"PaymentModel","table":"payments","primaryKey":"id","fields":["id","booking_id","payment_code","payment_type","amount","method","status","paid_at","created_at","invoice_id","vnpay_transaction_no","booking_code","invoice_number"]};
   }
 }
 

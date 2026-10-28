@@ -4,11 +4,11 @@ const PromotionModel = require('../models/promotionModel');
 
 
 async function getAllPromotions() {
-  return promotionDao.findAll();
+  return PromotionModel.fromResult(await promotionDao.findAll());
 }
 
 async function getActivePromotions() {
-  return promotionDao.findActive();
+  return PromotionModel.fromResult(await promotionDao.findActive());
 }
 
 async function validatePromotion(code, subtotal) {
@@ -17,7 +17,7 @@ async function validatePromotion(code, subtotal) {
   const promotion = await promotionDao.findActiveByCode(normalizedCode);
   if (!promotion) throw new Error('M� khuy?n m�i kh�ng h?p l?, chua ho?t d?ng ho?c d� h?t h?n.');
   const { discount, total } = PromotionModel.calculateDiscount(promotion, subtotal);
-  return {
+  return PromotionModel.fromResult({
     promotion_id: promotion.id,
     promotion_code: promotion.code,
     discount_type: promotion.discount_type,
@@ -26,7 +26,7 @@ async function validatePromotion(code, subtotal) {
     discount_amount: discount,
     original_total: Number(subtotal),
     total_amount: total,
-  };
+  });
 }
 
 async function getPromotionById(id, activeOnly = false) {
@@ -34,7 +34,7 @@ async function getPromotionById(id, activeOnly = false) {
   if (!promotion) {
     throw new Error('Promotion not found.');
   }
-  return promotion;
+  return PromotionModel.fromResult(promotion);
 }
 
 async function createPromotion(data) {
@@ -43,7 +43,7 @@ async function createPromotion(data) {
   if (existing) {
     throw new Error('Promotion code already exists.');
   }
-  return promotionDao.create(promotion);
+  return PromotionModel.fromResult(await promotionDao.create(promotion));
 }
 
 async function updatePromotion(id, data) {
@@ -58,7 +58,7 @@ async function updatePromotion(id, data) {
     throw new Error('Promotion code already exists.');
   }
 
-  return promotionDao.update(Number(id), promotion);
+  return PromotionModel.fromResult(await promotionDao.update(Number(id), promotion));
 }
 
 async function deletePromotion(id) {
@@ -66,7 +66,7 @@ async function deletePromotion(id) {
   if (!existing) {
     throw new Error('Promotion not found.');
   }
-  return promotionDao.remove(Number(id));
+  return PromotionModel.fromResult(await promotionDao.remove(Number(id)));
 }
 
 module.exports = {

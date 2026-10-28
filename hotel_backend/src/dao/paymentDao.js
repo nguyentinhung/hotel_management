@@ -115,12 +115,9 @@ async function createCustomerDepositPayment({ customerId, bookingCode, paymentCo
       .input('bookingCode', sql.VarChar(20), bookingCode)
       .query(`
         SELECT TOP (1) b.id, b.status, b.deposit_amount, b.check_in_date, b.check_out_date,
-          CASE WHEN b.promotion_id IS NOT NULL THEN CEILING(b.total_amount * 0.30)
-            ELSE CEILING(SUM(br.price_per_night) * DATEDIFF(day, b.check_in_date, b.check_out_date) * 0.30) END AS required_deposit
+          CEILING(b.total_amount * 0.30) AS required_deposit
         FROM dbo.bookings b WITH (UPDLOCK, HOLDLOCK)
-        JOIN dbo.booking_rooms br ON br.booking_id = b.id
-        WHERE b.customer_id = @customerId AND b.booking_code = @bookingCode
-        GROUP BY b.id, b.status, b.deposit_amount, b.check_in_date, b.check_out_date, b.promotion_id, b.total_amount;
+        WHERE b.customer_id = @customerId AND b.booking_code = @bookingCode;
       `);
     const booking = bookingResult.recordset[0];
     if (!booking) throw paymentError('BOOKING_NOT_FOUND', 404, 'Không tìm thấy booking của bạn.');
@@ -281,10 +278,29 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method, 
     const amount = Math.max(0, Number(booking.total_amount) - Number(booking.deposit_amount || 0) - Number(booking.final_paid_amount || 0));
     if (!Number.isFinite(amount)) throw paymentError('INVALID_AMOUNT', 409, 'Không tính được số tiền checkout.');
     const pendingPayment = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
-      SELECT TOP (1) id FROM dbo.payments WITH (UPDLOCK, HOLDLOCK)
-      WHERE booking_id = @bookingId AND payment_type IN ('DEPOSIT', 'FINAL') AND status = 'PENDING';
+      SELECT TOP (1) id, payment_code, amount, payment_type, method, invoice_id
+      FROM dbo.payments WITH (UPDLOCK, HOLDLOCK)
+      WHERE booking_id = @bookingId AND payment_type = 'FINAL' AND status = 'PENDING'
+      ORDER BY id DESC;
     `);
-    if (pendingPayment.recordset.length) throw paymentError('PAYMENT_ALREADY_PENDING', 409, 'Booking đang có giao dịch thanh toán chưa hoàn tất.');
+    if (pendingPayment.recordset.length) {
+      const pending = pendingPayment.recordset[0];
+      if (String(pending.payment_type).toUpperCase() !== 'FINAL' || String(pending.method).toUpperCase() !== 'VNPAY' || method !== 'VNPAY') {
+        throw paymentError('PAYMENT_ALREADY_PENDING', 409, 'Booking đang có giao dịch thanh toán chưa hoàn tất.');
+      }
+      const invoice = await transaction.request().input('invoiceId', sql.BigInt, pending.invoice_id).query(`
+        SELECT invoice_number FROM dbo.invoices WHERE id = @invoiceId;
+      `);
+      await transaction.commit();
+      return {
+        payment_code: pending.payment_code,
+        amount: Number(pending.amount),
+        status: 'PENDING',
+        invoice_id: pending.invoice_id,
+        invoice_number: invoice.recordset[0]?.invoice_number || null,
+        resumed: true,
+      };
+    }
     const rooms = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
       SELECT room_id FROM dbo.booking_rooms WHERE booking_id = @bookingId AND room_id IS NOT NULL;
     `);
@@ -621,7 +637,7 @@ async function createReceptionInvoice(bookingId, createdByUserId) {
   }
 }
 
-async function completeVnpayPayment({ paymentCode, amountMinor, transactionNo, payDate, succeeded }) {
+async function completeVnpayPayment({ paymentCode, amountMinor, transactionNo, succeeded }) {
   await expirePendingBookings();
   const pool = await getPool();
   const transaction = new sql.Transaction(pool);
@@ -663,13 +679,12 @@ async function completeVnpayPayment({ paymentCode, amountMinor, transactionNo, p
     await transaction.request()
       .input('paymentCode', sql.VarChar(30), paymentCode)
       .input('transactionNo', sql.VarChar(100), transactionNo || null)
-      .input('paidAt', sql.DateTime2, parseVnpayDate(payDate))
       .input('status', sql.VarChar(20), nextStatus)
       .query(`
         UPDATE dbo.payments
         SET status = @status,
             vnpay_transaction_no = @transactionNo,
-            paid_at = CASE WHEN @status = 'SUCCESS' THEN @paidAt ELSE NULL END
+            paid_at = CASE WHEN @status = 'SUCCESS' THEN SYSUTCDATETIME() ELSE NULL END
         WHERE payment_code = @paymentCode;
       `);
 
@@ -738,16 +753,6 @@ async function getVnpayPaymentContext({ paymentCode, amountMinor }) {
   if (!payment) throw paymentError('PAYMENT_NOT_FOUND', 404, 'Không tìm thấy giao dịch VNPay.');
   if (Math.round(Number(payment.amount) * 100) !== Number(amountMinor)) throw paymentError('PAYMENT_AMOUNT_MISMATCH', 400, 'Số tiền VNPay trả về không khớp giao dịch.');
   return { paymentType: payment.payment_type, bookingCode: payment.booking_code, status: payment.status };
-}
-
-function parseVnpayDate(value) {
-  if (!/^\d{14}$/.test(String(value || ''))) return new Date();
-  const text = String(value);
-  // VNPay sends GMT+7 time without a timezone suffix.
-  return new Date(Date.UTC(
-    Number(text.slice(0, 4)), Number(text.slice(4, 6)) - 1, Number(text.slice(6, 8)),
-    Number(text.slice(8, 10)) - 7, Number(text.slice(10, 12)), Number(text.slice(12, 14)),
-  ));
 }
 
 async function getPaymentList(customerId = null, successOnly = false) {
@@ -963,6 +968,34 @@ async function getPaymentStatus({ paymentCode, customerId = null }) {
   return PaymentModel.fromRow(result.recordset[0]);
 }
 
+async function getPaymentDetails({ paymentCode, customerId = null }) {
+  const pool = await getPool();
+  const request = pool.request().input('paymentCode', sql.VarChar(30), paymentCode);
+  const ownerFilter = customerId == null ? '' : 'AND b.customer_id = @customerId';
+  if (customerId != null) request.input('customerId', sql.BigInt, customerId);
+  const result = await request.query(`
+    SELECT TOP (1)
+      p.id,
+      p.payment_code,
+      p.booking_id,
+      p.invoice_id,
+      p.payment_type,
+      p.amount,
+      p.method,
+      p.status,
+      p.created_at,
+      p.paid_at,
+      p.vnpay_transaction_no,
+      b.booking_code,
+      i.invoice_number
+    FROM dbo.payments p
+    JOIN dbo.bookings b ON b.id = p.booking_id
+    LEFT JOIN dbo.invoices i ON i.id = p.invoice_id
+    WHERE p.payment_code = @paymentCode ${ownerFilter};
+  `);
+  return PaymentModel.fromRow(result.recordset[0]);
+}
+
 async function confirmPaymentByCode(paymentCode) {
   const pool = await getPool();
   const transaction = new sql.Transaction(pool);
@@ -1066,4 +1099,4 @@ async function confirmPaymentByCode(paymentCode) {
   }
 }
 
-module.exports = { createFinalPayment, createCustomerDepositPayment, completeSimulatedDepositPayment, createReceptionCheckoutPayment, createReceptionInvoice, completeVnpayPayment, getVnpayPaymentContext, getPaymentList, getCustomerPaymentList, getInvoiceList, getInvoiceDetails, getPaymentStatus, confirmPaymentByCode };
+module.exports = { createFinalPayment, createCustomerDepositPayment, completeSimulatedDepositPayment, createReceptionCheckoutPayment, createReceptionInvoice, completeVnpayPayment, getVnpayPaymentContext, getPaymentList, getCustomerPaymentList, getInvoiceList, getInvoiceDetails, getPaymentStatus, getPaymentDetails, confirmPaymentByCode };

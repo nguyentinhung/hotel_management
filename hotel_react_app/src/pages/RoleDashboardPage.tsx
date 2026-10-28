@@ -25,6 +25,8 @@ import dashboardBannerImage from '../assets/lumiere-hero.png';
 import lotusLogo from '../assets/lumiere-lotus.png';
 import ReportsStatisticsPage from './ReportsStatisticsPage';
 import ReviewListPage from './ReviewListPage';
+import StaffManagementPage from './StaffManagementPage';
+import UserManagementPage from './UserManagementPage';
 import EquipmentListPage from './EquipmentListPage';
 
 /**
@@ -57,7 +59,7 @@ const dashboardConfig: Record<
       { label: 'Promotion Management', description: 'Manage promotions.' },
       { label: 'Profile', description: 'View and update your profile.' },
       { label: 'Change Password', description: 'Update your password.' },
-      { label: 'Equipment Management', description: 'Manage the shared equipment checklist.' },
+      { label: 'Equipment Management', description: 'Manage the equipment catalog and assign equipment to rooms.' },
     ],
   },
   RECEPTIONIST: {
@@ -235,7 +237,7 @@ function RoomStatusPanel({ role }: { role: Role }) {
 }
 
 function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: { customerMode?: boolean; onBackToManagement?: () => void }) {
-  const { showToast } = useToast();
+  const { showToast, confirmAction } = useToast();
   const navigate = useNavigate();
   const [bookings, setBookings] = useState<RecentBooking[]>([]);
   const [selectedBooking, setSelectedBooking] = useState<RecentBooking | null>(null);
@@ -370,7 +372,7 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
     finally { setSaving(false); }
   };
   const cancelSelectedBooking = async () => {
-    if (!selectedBooking || !window.confirm(`Bạn có chắc muốn hủy booking ${selectedBooking.booking_code}?`)) return;
+    if (!selectedBooking || !await confirmAction({ title: 'Hủy booking?', message: `Bạn có chắc muốn hủy booking ${selectedBooking.booking_code}?`, confirmLabel: 'Hủy booking', destructive: true })) return;
     const accessToken = localStorage.getItem('accessToken');
     if (!accessToken) return showToast('Vui lòng đăng nhập lại.', 'error');
     try {
@@ -479,7 +481,7 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
   };
   const formatMoney = (amount: number) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(amount);
   const cancelCustomerBooking = async (booking: RecentBooking) => {
-    if (!window.confirm(`Bạn có chắc muốn hủy đặt phòng ${booking.booking_code}?`)) return;
+    if (!await confirmAction({ title: 'Hủy đặt phòng?', message: `Bạn có chắc muốn hủy đặt phòng ${booking.booking_code}?`, confirmLabel: 'Hủy đặt phòng', destructive: true })) return;
     const accessToken = localStorage.getItem('accessToken');
     if (!accessToken) return showToast('Vui lòng đăng nhập lại.', 'error');
     try {
@@ -691,7 +693,13 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
         ? { label: 'Invoice Management', description: 'View the invoice list and payment status.' }
         : activeModule === 'Review Management'
           ? { label: 'Review Management', description: 'Review customer ratings and booking feedback.' }
-          : config.nav[0]);
+          : activeModule === 'Promotion Management'
+            ? { label: 'Promotion Management', description: 'Xem danh sách và chi tiết các chương trình khuyến mãi.' }
+            : activeModule === 'Staff Management'
+              ? { label: 'Staff Management', description: 'Xem danh sách, chi tiết và quản lý thông tin nhân viên.' }
+              : activeModule === 'Account Management'
+                ? { label: 'Account Management', description: 'Tạo, tìm kiếm, cập nhật tài khoản, khóa/mở khóa và phân quyền người dùng.' }
+            : config.nav[0]);
 
   const pageTitle = currentRole === 'RECEPTIONIST' && activeItem.label === config.nav[3].label
     ? 'Payment Management'
@@ -732,7 +740,6 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
       { label: 'Review Management', icon: 'review' },
     ] },
     { title: 'NHÂN SỰ', items: [
-      { label: 'Staff Management', icon: 'staff' },
       { label: 'Profile', moduleIndex: 7, icon: 'profile' },
       { label: 'Change Password', moduleIndex: 8, icon: 'key' },
     ] },
@@ -801,15 +808,34 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
                 const invoiceModule = item.label === 'Invoice Management';
                 const reportsModule = item.label === 'Reports & Statistics';
                 const reviewModule = item.label === 'Review Management';
-                const isActive = Boolean((module && module === activeItem.label) || (invoiceModule && activeItem.label === 'Invoice Management') || (reportsModule && activeItem.label === 'Reports & Statistics') || (reviewModule && activeItem.label === 'Review Management'));
-                const isDisabled = !module && !invoiceModule && !reportsModule && !reviewModule;
+                const promotionModule = item.label === 'Promotion Management';
+                const staffModule = item.label === 'Staff Management';
+                const accountModule = item.label === 'Account Management';
+                const isActive = Boolean(
+                  (module && module === activeItem.label) ||
+                  (invoiceModule && activeItem.label === 'Invoice Management') ||
+                  (reportsModule && activeItem.label === 'Reports & Statistics') ||
+                  (reviewModule && activeItem.label === 'Review Management') ||
+                  (promotionModule && activeItem.label === 'Promotion Management') ||
+                  (staffModule && activeItem.label === 'Staff Management') ||
+                  (accountModule && activeItem.label === 'Account Management')
+                );
+                const isDisabled = !module && !invoiceModule && !reportsModule && !reviewModule && !promotionModule && !staffModule && !accountModule;
                 return <button
                   key={item.label}
                   type="button"
                   className={`nav-item${isActive ? ' active' : ''}${isDisabled ? ' nav-item-disabled' : ''}`}
                   aria-disabled={isDisabled}
                   title={isDisabled ? 'This section is not available yet' : undefined}
-                  onClick={() => { if (module) setActiveModule(module); else if (invoiceModule) setActiveModule('Invoice Management'); else if (reportsModule) setActiveModule('Reports & Statistics'); else if (reviewModule) setActiveModule('Review Management'); }}
+                  onClick={() => {
+                    if (module) setActiveModule(module);
+                    else if (invoiceModule) setActiveModule('Invoice Management');
+                    else if (reportsModule) setActiveModule('Reports & Statistics');
+                    else if (reviewModule) setActiveModule('Review Management');
+                    else if (promotionModule) setActiveModule('Promotion Management');
+                    else if (staffModule) setActiveModule('Staff Management');
+                    else if (accountModule) setActiveModule('Account Management');
+                  }}
                 >
                   <span className="dashboard-nav-icon"><DashboardNavIcon name={item.icon} /></span>
                   <span>{item.label}</span>
@@ -889,10 +915,14 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
             <ReceptionRoomBooking mode="checkin" />
           ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Check-out' ? (
             <ReceptionRoomBooking mode="checkout" />
-          ) : currentRole === 'ADMIN' && activeItem.label === 'Promotion Management' ? (
-            <div className="module-content"><PromotionListPage role="ADMIN" /></div>
+          ) : ['ADMIN', 'RECEPTIONIST'].includes(currentRole) && activeItem.label === 'Promotion Management' ? (
+            <div className="module-content"><PromotionListPage role={currentRole} /></div>
           ) : ['ADMIN', 'RECEPTIONIST', 'CUSTOMER'].includes(currentRole) && ['Review Management', 'Review'].includes(activeItem.label) ? (
             <ReviewListPage role={currentRole} />
+          ) : ['ADMIN', 'RECEPTIONIST'].includes(currentRole) && activeItem.label === 'Staff Management' ? (
+            <StaffManagementPage canEdit={currentRole === 'ADMIN'} />
+          ) : currentRole === 'ADMIN' && activeItem.label === 'Account Management' ? (
+            <UserManagementPage />
           ) : currentRole === 'CUSTOMER' && activeItem.label === 'My Bookings' ? (
 
             <ReceptionBookingHistory customerMode />

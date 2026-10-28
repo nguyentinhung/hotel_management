@@ -1,5 +1,6 @@
 const reviewDao = require('../dao/reviewDao');
 const ReviewModel = require('../models/reviewModel');
+const BookingModel = require('../models/bookingModel');
 
 function parseId(value, label) {
   const id = Number(value);
@@ -14,11 +15,11 @@ function parseId(value, label) {
 
 
 async function dashboardList(roleCode) {
-  return reviewDao.listDashboardReviews(roleCode === 'ADMIN');
+  return ReviewModel.fromResult(await reviewDao.listDashboardReviews(roleCode === 'ADMIN'));
 }
 
 async function customerBookings(customerId) {
-  return reviewDao.listCustomerBookings(parseId(customerId, 'Tài khoản'));
+  return BookingModel.fromResult(await reviewDao.listCustomerBookings(parseId(customerId, 'Tài khoản')));
 }
 
 async function getMine(reviewId, customerId) {
@@ -28,7 +29,7 @@ async function getMine(reviewId, customerId) {
     error.statusCode = 404;
     throw error;
   }
-  return review;
+  return ReviewModel.fromResult(review);
 }
 
 async function create(input, customerId) {

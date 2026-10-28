@@ -40,7 +40,7 @@ function toRequest(promotion: Promotion): PromotionRequest {
 }
 
 export default function PromotionListPage({ role = 'ADMIN' }: PromotionListPageProps) {
-    const { showToast } = useToast();
+    const { showToast, confirmAction } = useToast();
     const [promotions, setPromotions] = useState<Promotion[]>([]);
     const [selectedPromotion, setSelectedPromotion] = useState<Promotion | null>(null);
     const [view, setView] = useState<'list' | 'create' | 'details' | 'edit'>('list');
@@ -112,7 +112,7 @@ export default function PromotionListPage({ role = 'ADMIN' }: PromotionListPageP
     };
 
     const handleDelete = async (id: number) => {
-        if (!window.confirm('Ban co chac chan muon xoa khuyen mai nay?')) return;
+        if (!await confirmAction({ title: 'Xóa khuyến mãi?', message: 'Bạn có chắc muốn xóa khuyến mãi này?', confirmLabel: 'Xóa', destructive: true })) return;
 
         try {
             await deletePromotion(id);
@@ -154,19 +154,19 @@ export default function PromotionListPage({ role = 'ADMIN' }: PromotionListPageP
         return (
             <div className="promotion-page">
                 <div className="promotion-header">
-                    <h3>Promotion Details</h3>
-                    <button className="btn btn-outline btn-sm" type="button" onClick={() => setView('list')}>Back</button>
+                    <h3>Chi tiết khuyến mãi</h3>
+                    <button className="btn btn-outline btn-sm" type="button" onClick={() => setView('list')}>Quay lại danh sách</button>
                 </div>
                 <article className="promotion-detail-card">
                     <div className="promotion-detail-grid">
-                        <div><span>Code</span><strong>{selectedPromotion.code}</strong></div>
-                        <div><span>Name</span><strong>{selectedPromotion.name}</strong></div>
-                        <div><span>Discount</span><strong>{formatDiscount(selectedPromotion)}</strong></div>
-                        <div><span>Max Discount</span><strong>{formatCurrency(selectedPromotion.max_discount)}</strong></div>
-                        <div><span>Valid From</span><strong>{String(selectedPromotion.valid_from).slice(0, 10)}</strong></div>
-                        <div><span>Valid To</span><strong>{String(selectedPromotion.valid_to).slice(0, 10)}</strong></div>
-                        <div><span>Status</span><strong>{selectedPromotion.is_active ? 'Active' : 'Inactive'}</strong></div>
-                        <div><span>Description</span><strong>{selectedPromotion.description || '-'}</strong></div>
+                        <div><span>Mã khuyến mãi</span><strong>{selectedPromotion.code}</strong></div>
+                        <div><span>Tên chương trình</span><strong>{selectedPromotion.name}</strong></div>
+                        <div><span>Mức giảm</span><strong>{formatDiscount(selectedPromotion)}</strong></div>
+                        <div><span>Giảm tối đa</span><strong>{formatCurrency(selectedPromotion.max_discount)}</strong></div>
+                        <div><span>Hiệu lực từ</span><strong>{String(selectedPromotion.valid_from).slice(0, 10)}</strong></div>
+                        <div><span>Hiệu lực đến</span><strong>{String(selectedPromotion.valid_to).slice(0, 10)}</strong></div>
+                        <div><span>Trạng thái</span><strong>{selectedPromotion.is_active ? 'Đang áp dụng' : 'Tạm dừng'}</strong></div>
+                        <div><span>Mô tả chi tiết</span><strong>{selectedPromotion.description || 'Không có mô tả.'}</strong></div>
                     </div>
                 </article>
             </div>
@@ -176,10 +176,10 @@ export default function PromotionListPage({ role = 'ADMIN' }: PromotionListPageP
     return (
         <div className="promotion-page">
             <div className="promotion-header">
-                <h3>Quan ly khuyen mai</h3>
+                <h3>Danh sách khuyến mãi</h3>
                 {isAdmin && (
                     <button type="button" className="btn btn-primary" onClick={() => setView('create')}>
-                        + Add Promotion
+                        + Thêm khuyến mãi
                     </button>
                 )}
             </div>
@@ -187,23 +187,23 @@ export default function PromotionListPage({ role = 'ADMIN' }: PromotionListPageP
             {loadError ? (
                 <div className="error-text" role="alert">
                     <p>{loadError}</p>
-                    <button className="btn btn-outline btn-sm" type="button" onClick={() => void loadPromotions()}>Tai lai danh sach</button>
+                    <button className="btn btn-outline btn-sm" type="button" onClick={() => void loadPromotions()}>Tải lại danh sách</button>
                 </div>
             ) : promotions.length === 0 ? (
-                <p>Khong co khuyen mai nao.</p>
+                <p>Không có chương trình khuyến mãi nào.</p>
             ) : (
                 <div className="promotion-table-wrap">
                     <table className="promotion-table">
                         <thead>
                             <tr>
                                 <th>ID</th>
-                                <th>Code</th>
-                                <th>Name</th>
-                                <th>Discount</th>
-                                <th>Max</th>
-                                <th>Valid Time</th>
-                                <th>Status</th>
-                                <th>Actions</th>
+                                <th>Mã khuyến mãi</th>
+                                <th>Tên chương trình</th>
+                                <th>Mức giảm</th>
+                                <th>Giảm tối đa</th>
+                                <th>Thời gian áp dụng</th>
+                                <th>Trạng thái</th>
+                                <th>Thao tác</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -217,18 +217,18 @@ export default function PromotionListPage({ role = 'ADMIN' }: PromotionListPageP
                                     <td>{String(promotion.valid_from).slice(0, 10)} - {String(promotion.valid_to).slice(0, 10)}</td>
                                     <td>
                                         <span className={`status-badge ${promotion.is_active ? 'active' : 'inactive'}`}>
-                                            {promotion.is_active ? 'Active' : 'Inactive'}
+                                            {promotion.is_active ? 'Đang áp dụng' : 'Tạm dừng'}
                                         </span>
                                     </td>
                                     <td>
                                         <div className="promotion-actions">
                                             {isAdmin && (
                                                 <>
-                                                    <button className="room-type-delete-button" type="button" title="Delete" onClick={() => void handleDelete(promotion.id)}>x</button>
-                                                    <button className="room-type-edit-button" type="button" title="Edit" onClick={() => void openEdit(promotion.id)}>Edit</button>
+                                                    <button className="room-type-delete-button" type="button" title="Xóa" onClick={() => void handleDelete(promotion.id)}>×</button>
+                                                    <button className="room-type-edit-button" type="button" title="Sửa" onClick={() => void openEdit(promotion.id)}>Sửa</button>
                                                 </>
                                             )}
-                                            <button className="room-type-details-button" type="button" title="Details" onClick={() => void openDetails(promotion.id)}>i</button>
+                                            <button className="btn btn-outline btn-sm" type="button" title="Xem chi tiết" onClick={() => void openDetails(promotion.id)}>Chi tiết</button>
                                         </div>
                                     </td>
                                 </tr>

@@ -4,11 +4,11 @@ const ServiceModel = require('../models/serviceModel');
 
 
 async function getAllServices() {
-    return await serviceDao.findAll();
+    return ServiceModel.fromResult(await serviceDao.findAll());
 }
 
 async function getActiveServices() {
-    return await serviceDao.findActive();
+    return ServiceModel.fromResult(await serviceDao.findActive());
 }
 
 async function getServiceById(id) {
@@ -16,17 +16,17 @@ async function getServiceById(id) {
     if (!service) {
         throw new Error('Service not found.');
     }
-    return service;
+    return ServiceModel.fromResult(service);
 }
 
 async function createService(data) {
-    return serviceDao.create(ServiceModel.normalizeInput(data));
+    return ServiceModel.fromResult(await serviceDao.create(ServiceModel.normalizeInput(data)));
 }
 
 async function updateService(id, data) {
     const existing = await serviceDao.findById(id);
     if (!existing) throw new Error('Service not found.');
-    return serviceDao.update(id, ServiceModel.normalizeInput(data, existing.booking_policy || 'ON_DEMAND'));
+    return ServiceModel.fromResult(await serviceDao.update(id, ServiceModel.normalizeInput(data, existing.booking_policy || 'ON_DEMAND')));
 }
 
 async function deleteService(id) {
@@ -34,7 +34,7 @@ async function deleteService(id) {
     if (!existing) {
         throw new Error('Service not found.');
     }
-    return await serviceDao.softDelete(id);
+    return ServiceModel.fromResult(await serviceDao.softDelete(id));
 }
 
 module.exports = {

@@ -1,4 +1,4 @@
-const equipmentItemService = require('../services/equipmentItemService');
+﻿const equipmentItemService = require('../services/equipmentItemService');
 
 async function getEquipmentItems(_req, res) {
   try {
@@ -74,4 +74,28 @@ async function deleteEquipmentItem(req, res) {
   }
 }
 
-module.exports = { getEquipmentItems, getEquipmentItemById, createEquipmentItem, updateEquipmentItem, deleteEquipmentItem };
+async function getEquipmentRooms(req, res) {
+  try {
+    const rooms = await equipmentItemService.getEquipmentRooms(req.params.id);
+    if (!rooms) return res.status(404).json({ message: 'Equipment not found.' });
+    return res.json({ rooms });
+  } catch (error) {
+    if (error.statusCode === 400) return res.status(400).json({ message: error.message });
+    console.error('Get equipment room assignments failed:', error);
+    return res.status(500).json({ message: 'Unable to load room assignments.' });
+  }
+}
+
+async function assignEquipmentToRooms(req, res) {
+  try {
+    const rooms = await equipmentItemService.assignEquipmentToRooms(req.params.id, req.body);
+    if (!rooms) return res.status(404).json({ message: 'Equipment not found.' });
+    return res.json({ message: 'Equipment room assignments updated successfully.', rooms });
+  } catch (error) {
+    if (error.statusCode === 400) return res.status(400).json({ message: error.message });
+    console.error('Assign equipment to rooms failed:', error);
+    return res.status(500).json({ message: 'Unable to assign equipment to rooms.' });
+  }
+}
+
+module.exports = { getEquipmentItems, getEquipmentItemById, createEquipmentItem, updateEquipmentItem, deleteEquipmentItem, getEquipmentRooms, assignEquipmentToRooms };

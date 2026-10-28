@@ -1,29 +1,17 @@
+import { API_BASE_URL } from './api';
+
 export interface EquipmentItem {
   id: number;
   name: string;
-  description: string | null;
   is_active: boolean | 0 | 1;
 }
 
-export type EquipmentAssetStatus = 'AVAILABLE' | 'MAINTENANCE' | 'RETIRED';
-
-export interface EquipmentAsset {
-  id: number | string;
-  equipment_item_id: number;
-  asset_code: string;
-  serial_number: string | null;
-  status: EquipmentAssetStatus;
-  purchase_date: string | null;
-  notes: string | null;
-  current_room_name: string | null;
-}
-
-export interface EquipmentAssetInput {
-  asset_code: string;
-  serial_number: string;
-  status: EquipmentAssetStatus;
-  purchase_date: string;
-  notes: string;
+export interface EquipmentRoom {
+  id: number;
+  room_number: string;
+  floor: number | null;
+  status: string;
+  is_assigned: boolean | 0 | 1;
 }
 
 export class EquipmentApiError extends Error {
@@ -33,85 +21,42 @@ export class EquipmentApiError extends Error {
   }
 }
 
-const API_URL = 'http://localhost:5000/api/admin/equipment-items';
+const API_URL = `${API_BASE_URL}/api/admin/equipment-items`;
 
-function authHeaders(includeJson = false): HeadersInit {
+function requestHeaders(json = false): HeadersInit {
   const token = localStorage.getItem('accessToken');
   return {
-    ...(includeJson ? { 'Content-Type': 'application/json' } : {}),
+    ...(json ? { 'Content-Type': 'application/json' } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 }
 
-async function readResponse<T>(response: Response): Promise<T> {
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new EquipmentApiError(payload.message || `Request failed: ${response.status}`, response.status);
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, init);
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) throw new EquipmentApiError(payload?.message || `Request failed: ${response.status}`, response.status);
   return payload as T;
 }
 
-export async function getEquipmentItems(): Promise<EquipmentItem[]> {
-  return readResponse(await fetch(API_URL, { headers: authHeaders() }));
-}
+export const getEquipmentItems = () => request<EquipmentItem[]>(API_URL, { headers: requestHeaders() });
+export const getEquipmentItemById = (id: number) => request<EquipmentItem>(`${API_URL}/${id}`, { headers: requestHeaders() });
 
-export async function getEquipmentItemById(id: number): Promise<EquipmentItem> {
-  return readResponse(await fetch(`${API_URL}/${id}`, { headers: authHeaders() }));
-}
+export const createEquipmentItem = (input: { name: string; is_active: boolean }) => request<EquipmentItem>(API_URL, {
+  method: 'POST', headers: requestHeaders(true), body: JSON.stringify(input),
+});
 
-export async function createEquipmentItem(input: { name: string; description?: string | null; is_active: boolean }): Promise<EquipmentItem> {
-  return readResponse(await fetch(API_URL, {
-    method: 'POST',
-    headers: authHeaders(true),
-    body: JSON.stringify(input),
-  }));
-}
+export const updateEquipmentItem = (id: number, input: { name: string; is_active: boolean }) => request<{ message: string; equipmentItem: EquipmentItem }>(`${API_URL}/${id}`, {
+  method: 'PUT', headers: requestHeaders(true), body: JSON.stringify(input),
+});
 
-export async function updateEquipmentItem(id: number, input: { name: string; description?: string | null; is_active: boolean }): Promise<{ message: string; equipmentItem: EquipmentItem }> {
-  return readResponse(await fetch(`${API_URL}/${id}`, {
-    method: 'PUT',
-    headers: authHeaders(true),
-    body: JSON.stringify(input),
-  }));
-}
+export const deleteEquipmentItem = (id: number) => request<{ message: string; id: number }>(`${API_URL}/${id}`, {
+  method: 'DELETE', headers: requestHeaders(),
+});
 
-export async function deleteEquipmentItem(id: number): Promise<{ message: string; id: number }> {
-  return readResponse(await fetch(`${API_URL}/${id}`, {
-    method: 'DELETE',
-    headers: authHeaders(),
-  }));
-}
+export const getEquipmentRooms = (id: number) => request<{ rooms: EquipmentRoom[] }>(`${API_URL}/${id}/rooms`, {
+  headers: requestHeaders(),
+});
 
-function assetUrl(equipmentItemId: number, assetId?: number | string): string {
-  const base = `${API_URL}/${equipmentItemId}/assets`;
-  return assetId === undefined ? base : `${base}/${encodeURIComponent(String(assetId))}`;
-}
-
-export async function getEquipmentAssets(equipmentItemId: number): Promise<EquipmentAsset[]> {
-  return readResponse(await fetch(assetUrl(equipmentItemId), { headers: authHeaders() }));
-}
-
-export async function getEquipmentAsset(equipmentItemId: number, assetId: number | string): Promise<EquipmentAsset> {
-  return readResponse(await fetch(assetUrl(equipmentItemId, assetId), { headers: authHeaders() }));
-}
-
-export async function createEquipmentAsset(equipmentItemId: number, input: EquipmentAssetInput): Promise<EquipmentAsset> {
-  return readResponse(await fetch(assetUrl(equipmentItemId), {
-    method: 'POST',
-    headers: authHeaders(true),
-    body: JSON.stringify(input),
-  }));
-}
-
-export async function updateEquipmentAsset(equipmentItemId: number, assetId: number | string, input: EquipmentAssetInput): Promise<{ message: string; equipmentAsset: EquipmentAsset }> {
-  return readResponse(await fetch(assetUrl(equipmentItemId, assetId), {
-    method: 'PUT',
-    headers: authHeaders(true),
-    body: JSON.stringify(input),
-  }));
-}
-
-export async function deleteEquipmentAsset(equipmentItemId: number, assetId: number | string): Promise<{ message: string; id: number | string }> {
-  return readResponse(await fetch(assetUrl(equipmentItemId, assetId), {
-    method: 'DELETE',
-    headers: authHeaders(),
-  }));
-}
+export const assignEquipmentToRooms = (id: number, roomIds: number[]) => request<{ message: string; rooms: EquipmentRoom[] }>(`${API_URL}/${id}/rooms`, {
+  method: 'PUT', headers: requestHeaders(true), body: JSON.stringify({ room_ids: roomIds }),
+});

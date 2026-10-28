@@ -6,7 +6,7 @@ require('dotenv').config({ path: fs.existsSync(envPath) ? envPath : exampleEnvPa
 
 const express = require('express');
 const cors = require('cors');
-const { ensureAuthTables, ensureBookingStatusConstraint, ensureGuestIdCardOptional, ensureInvoiceCreatorColumn, ensureBookingPromotionColumns, ensureBookingCancellationReason, ensureReviewBookingColumn } = require('./config/db');
+const { ensureAuthTables, ensureBookingStatusConstraint, ensureGuestIdCardOptional, ensureGuestIdCardImageColumns, ensureInvoiceCreatorColumn, ensureBookingPromotionColumns, ensureBookingCancellationReason, ensureReviewBookingColumn, ensurePaymentMethodConstraint } = require('./config/db');
 const bookingService = require('./services/bookingService');
 const { prepareRuntimeDatabase } = require('./services/startupService');
 
@@ -23,10 +23,12 @@ async function bootstrap() {
   await ensureAuthTables();
   await ensureBookingStatusConstraint();
   await ensureGuestIdCardOptional();
+  await ensureGuestIdCardImageColumns();
   await ensureInvoiceCreatorColumn();
   await ensureBookingPromotionColumns();
   await ensureBookingCancellationReason();
   await ensureReviewBookingColumn();
+  await ensurePaymentMethodConstraint();
   await bookingService.expireStaleBookings();
   await prepareRuntimeDatabase(uploadsDir, PORT);
 
