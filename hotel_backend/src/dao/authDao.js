@@ -3,6 +3,7 @@ const UserModel = require('../models/userModel');
 const RoleModel = require('../models/roleModel');
 const EmailVerificationModel = require('../models/emailVerificationModel');
 const PasswordResetModel = require('../models/passwordResetModel');
+const RefreshTokenModel = require('../models/refreshTokenModel');
 
 async function findUserIdByEmail(email) {
   const pool = await getPool();
@@ -88,18 +89,30 @@ async function getUserByEmail(email) {
   return UserModel.fromRow(result.recordset[0]);
 }
 
-async function createRefreshToken(userId, token, expiresAt) {
+async function createRefreshToken(refreshToken) {
   const pool = await getPool();
-  await pool.request().input('user_id', sql.BigInt, userId)
-    .input('token', sql.VarChar(255), token)
-    .input('expires_at', sql.DateTimeOffset, expiresAt)
-    .query('INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES (@user_id, @token, @expires_at);');
+  const result = await pool.request()
+    .input('user_id', sql.BigInt, refreshToken.user_id)
+    .input('token', sql.VarChar(255), refreshToken.token)
+    .input('expires_at', sql.DateTimeOffset, refreshToken.expires_at)
+    .query(`
+      INSERT INTO refresh_tokens (user_id, token, expires_at)
+      OUTPUT INSERTED.*
+      VALUES (@user_id, @token, @expires_at);
+    `);
+  return RefreshTokenModel.fromRow(result.recordset[0]);
 }
 
-async function revokeRefreshToken(token) {
+async function revokeRefreshToken(refreshToken) {
   const pool = await getPool();
-  await pool.request().input('token', sql.VarChar(255), token)
-    .query('UPDATE refresh_tokens SET revoked_at = SYSUTCDATETIME() WHERE token = @token AND revoked_at IS NULL;');
+  const result = await pool.request().input('token', sql.VarChar(255), refreshToken.token)
+    .query(`
+      UPDATE refresh_tokens
+      SET revoked_at = SYSUTCDATETIME()
+      OUTPUT INSERTED.*
+      WHERE token = @token AND revoked_at IS NULL;
+    `);
+  return RefreshTokenModel.fromRow(result.recordset[0]);
 }
 
 async function getActiveUserByEmail(email) {

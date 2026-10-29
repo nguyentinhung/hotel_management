@@ -1,6 +1,7 @@
 const sql = require('mssql');
 const { getPool } = require('../config/db');
 const RoomTypeModel = require('../models/roomTypeModel');
+const RoomTypeImageModel = require('../models/roomTypeImageModel');
 
 async function findRoomTypeByName(name, exceptId = null) {
   const pool = await getPool();
@@ -115,10 +116,10 @@ async function deleteRoomType(roomTypeId) {
 async function getPrimaryImage(roomTypeId) {
   const pool = await getPool();
   const result = await pool.request().input('roomTypeId', sql.Int, roomTypeId).query(`
-    SELECT TOP (1) image_url, image_data, mime_type FROM room_type_images
+    SELECT TOP (1) id, room_type_id, image_url, image_data, mime_type, is_primary FROM room_type_images
     WHERE room_type_id = @roomTypeId AND is_primary = 1 ORDER BY id DESC;
   `);
-  return result.recordset[0] || null;
+  return RoomTypeImageModel.fromRow(result.recordset[0]);
 }
 
 async function savePrimaryImage(roomTypeId, imageUrl, imageFile) {
@@ -132,7 +133,7 @@ async function savePrimaryImage(roomTypeId, imageUrl, imageFile) {
       await transaction.rollback();
       return false;
     }
-    await new sql.Request(transaction)
+    const imageResult = await new sql.Request(transaction)
       .input('roomTypeId', sql.Int, roomTypeId)
       .input('imageUrl', sql.VarChar(500), imageUrl)
       .input('imageData', sql.VarBinary(sql.MAX), imageFile.buffer)
@@ -140,10 +141,12 @@ async function savePrimaryImage(roomTypeId, imageUrl, imageFile) {
       .query(`
         UPDATE room_type_images SET is_primary = 0 WHERE room_type_id = @roomTypeId;
         INSERT INTO room_type_images (room_type_id, image_url, image_data, mime_type, is_primary)
+        OUTPUT INSERTED.id, INSERTED.room_type_id, INSERTED.image_url,
+          INSERTED.mime_type, INSERTED.is_primary
         VALUES (@roomTypeId, @imageUrl, @imageData, @mimeType, 1);
       `);
     await transaction.commit();
-    return true;
+    return RoomTypeImageModel.fromRow(imageResult.recordset[0]);
   } catch (error) {
     try { await transaction.rollback(); } catch (rollbackError) { console.error('Room image rollback error:', rollbackError); }
     throw error;

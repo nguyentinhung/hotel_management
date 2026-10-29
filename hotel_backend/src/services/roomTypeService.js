@@ -1,5 +1,6 @@
 const roomTypeDao = require('../dao/roomTypeDao');
 const RoomTypeModel = require('../models/roomTypeModel');
+const RoomTypeImageModel = require('../models/roomTypeImageModel');
 
 function fail(message, statusCode = 400) {
   const error = new Error(message);
@@ -41,6 +42,6 @@ async function deleteRoomType(roomTypeId) {
 
 module.exports = {
   createRoomType, updateRoomType, deleteRoomType,
-  getPrimaryImage: async (id) => RoomTypeModel.fromResult(await roomTypeDao.getPrimaryImage(id)),
-  savePrimaryImage: async (id, url, file) => RoomTypeModel.fromResult(await roomTypeDao.savePrimaryImage(id, url, file)),
+  getPrimaryImage: async (id) => RoomTypeImageModel.fromResult(await roomTypeDao.getPrimaryImage(id)),
+  savePrimaryImage: async (id, url, file) => RoomTypeImageModel.fromResult(await roomTypeDao.savePrimaryImage(id, url, file)),
 };

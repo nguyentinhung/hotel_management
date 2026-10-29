@@ -1,4 +1,5 @@
 const BaseModel = require('./baseModel');
+const InvoiceItemModel = require('./invoiceItemModel');
 
 class InvoiceModel extends BaseModel {
   static parseJsonList(value) {
@@ -16,12 +17,7 @@ class InvoiceModel extends BaseModel {
       total_amount: Number(invoice.total_amount),
       deposit_paid: Number(invoice.deposit_paid),
       amount_due: Number(invoice.amount_due),
-      items: this.parseJsonList(invoice.items).map((item) => ({
-        ...item,
-        quantity: Number(item.quantity),
-        unit_price: Number(item.unit_price),
-        amount: Number(item.amount),
-      })),
+      items: this.parseJsonList(invoice.items).map((item) => InvoiceItemModel.normalize(item)),
     };
   }
 

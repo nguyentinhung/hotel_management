@@ -1,5 +1,6 @@
 const authDao = require('../dao/authDao');
 const UserModel = require('../models/userModel');
+const RefreshTokenModel = require('../models/refreshTokenModel');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
@@ -55,8 +56,12 @@ module.exports = {
   getValidEmailVerification: (...args) => authDao.getValidEmailVerification(...args),
   activateVerifiedUser: (...args) => authDao.activateVerifiedUser(...args),
   getUserByEmail: (...args) => authDao.getUserByEmail(...args),
-  createRefreshToken: (...args) => authDao.createRefreshToken(...args),
-  revokeRefreshToken: (...args) => authDao.revokeRefreshToken(...args),
+  createRefreshToken: (userId, token, expiresAt) => authDao.createRefreshToken(
+    new RefreshTokenModel({ user_id: userId, token, expires_at: expiresAt }),
+  ),
+  revokeRefreshToken: (token) => authDao.revokeRefreshToken(
+    new RefreshTokenModel({ token }),
+  ),
   getActiveUserByEmail: (...args) => authDao.getActiveUserByEmail(...args),
   invalidateUnusedPasswordResets: (...args) => authDao.invalidateUnusedPasswordResets(...args),
   createPasswordResetOtp: (...args) => authDao.createPasswordResetOtp(...args),

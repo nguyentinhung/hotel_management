@@ -1,6 +1,7 @@
 const roomDao = require('../dao/roomDao');
 const RoomModel = require('../models/roomModel');
 const RoomAvailabilityModel = require('../models/roomAvailabilityModel');
+const RoomStatusModel = require('../models/roomStatusModel');
 
 class RoomInputError extends Error {
   constructor(message) {
