@@ -15,19 +15,6 @@ async function ensureRuntimeSchema() {
     IF COL_LENGTH('dbo.room_type_images', 'mime_type') IS NULL
       ALTER TABLE dbo.room_type_images ADD mime_type VARCHAR(100) NULL;
 
-    IF OBJECT_ID(N'dbo.room_equipment_assignments', N'U') IS NULL
-    BEGIN
-      CREATE TABLE dbo.room_equipment_assignments (
-        room_id INT NOT NULL,
-        equipment_item_id INT NOT NULL,
-        assigned_at DATETIME2 NOT NULL CONSTRAINT DF_room_equipment_assignments_assigned_at DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT PK_room_equipment_assignments PRIMARY KEY (room_id, equipment_item_id),
-        CONSTRAINT FK_room_equipment_assignments_room FOREIGN KEY (room_id)
-          REFERENCES dbo.rooms(id) ON DELETE CASCADE,
-        CONSTRAINT FK_room_equipment_assignments_equipment FOREIGN KEY (equipment_item_id)
-          REFERENCES dbo.equipment_items(id) ON DELETE CASCADE
-      );
-    END;
   `);
   const result = await pool.request().query(`
     SELECT DB_NAME() AS database_name,

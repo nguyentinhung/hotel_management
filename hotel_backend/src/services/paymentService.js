@@ -4,6 +4,7 @@ const {
   completeSimulatedDepositPayment,
   createReceptionCheckoutPayment,
   createReceptionInvoice: createReceptionInvoiceDao,
+  syncReceptionBookingCompensations: syncReceptionBookingCompensationsDao,
   getPaymentList,
   getCustomerPaymentList,
   getInvoiceList: getInvoiceListDao,
@@ -93,6 +94,15 @@ async function createReceptionInvoice(bookingId, createdByUserId) {
   return InvoiceModel.fromResult(await createReceptionInvoiceDao(bookingId, createdByUserId));
 }
 
+async function syncReceptionBookingCompensations(bookingId) {
+  const result = await syncReceptionBookingCompensationsDao(bookingId);
+  const invoice = await getInvoiceDetailsDao(result.invoice.invoice_id || result.invoice.id);
+  return {
+    invoice: invoice ? InvoiceModel.fromResult(InvoiceModel.normalizeDetails(invoice)) : result.invoice,
+    compensation_items: result.compensation_items,
+  };
+}
+
 async function getPayments() {
   return PaymentModel.fromResult(await getPaymentList(null, true));
 }
@@ -166,4 +176,4 @@ async function inspectVnpayReturn(params) {
   return PaymentModel.fromResult({ ...payment, paymentCode, succeeded });
 }
 
-module.exports = { makePayment, simulateDepositPayment, makeReceptionCheckoutPayment, createReceptionInvoice, getPayments, getCustomerPayments, getInvoices, getInvoiceDetails, getPaymentStatus, getPaymentDetails, confirmPayment, handleVnpayCallback, inspectVnpayReturn };
+module.exports = { makePayment, simulateDepositPayment, makeReceptionCheckoutPayment, createReceptionInvoice, syncReceptionBookingCompensations, getPayments, getCustomerPayments, getInvoices, getInvoiceDetails, getPaymentStatus, getPaymentDetails, confirmPayment, handleVnpayCallback, inspectVnpayReturn };

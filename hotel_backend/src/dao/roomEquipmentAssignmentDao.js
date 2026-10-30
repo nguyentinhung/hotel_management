@@ -5,11 +5,11 @@ async function listActiveByRoomId(roomId) {
   const result = await pool.request()
     .input('roomId', sql.Int, roomId)
     .query(`
-      SELECT assignment.id AS assignment_id, assignment.room_id,
-        assignment.equipment_asset_id, assignment.assigned_at,
+      SELECT CONVERT(varchar(20), assignment.id) AS assignment_id, assignment.room_id,
+        CONVERT(varchar(20), assignment.equipment_asset_id) AS equipment_asset_id, assignment.assigned_at,
         asset.equipment_item_id, asset.asset_code, asset.serial_number, asset.status,
         item.name AS equipment_item_name
-      FROM dbo.room_equipment_assignments AS assignment
+      FROM dbo.room_asset_assignments AS assignment
       INNER JOIN dbo.equipment_assets AS asset ON asset.id = assignment.equipment_asset_id
       INNER JOIN dbo.equipment_items AS item ON item.id = asset.equipment_item_id
       WHERE assignment.room_id = @roomId AND assignment.unassigned_at IS NULL
@@ -23,7 +23,7 @@ async function listAssignableAssets(equipmentItemId) {
   const result = await pool.request()
     .input('equipmentItemId', sql.Int, equipmentItemId)
     .query(`
-    SELECT asset.id AS equipment_asset_id, asset.equipment_item_id,
+    SELECT CONVERT(varchar(20), asset.id) AS equipment_asset_id, asset.equipment_item_id,
       asset.asset_code, asset.serial_number, asset.status,
       item.name AS equipment_item_name
     FROM dbo.equipment_assets AS asset
@@ -32,7 +32,7 @@ async function listAssignableAssets(equipmentItemId) {
       AND item.id = @equipmentItemId
       AND asset.status = 'AVAILABLE'
       AND NOT EXISTS (
-        SELECT 1 FROM dbo.room_equipment_assignments AS assignment
+        SELECT 1 FROM dbo.room_asset_assignments AS assignment
         WHERE assignment.equipment_asset_id = asset.id
           AND assignment.unassigned_at IS NULL
       )
@@ -97,8 +97,8 @@ async function assignToRoom(roomId, equipmentAssetId, expectedEquipmentItemId) {
     const currentAssignment = await new sql.Request(transaction)
       .input('equipmentAssetId', sql.BigInt, equipmentAssetId)
       .query(`
-        SELECT TOP (1) id, room_id
-        FROM dbo.room_equipment_assignments WITH (UPDLOCK, HOLDLOCK)
+        SELECT TOP (1) CONVERT(varchar(20), id) AS id, room_id
+        FROM dbo.room_asset_assignments WITH (UPDLOCK, HOLDLOCK)
         WHERE equipment_asset_id = @equipmentAssetId AND unassigned_at IS NULL;
       `);
     if (currentAssignment.recordset.length) {
@@ -111,9 +111,9 @@ async function assignToRoom(roomId, equipmentAssetId, expectedEquipmentItemId) {
       .input('roomId', sql.Int, roomId)
       .input('equipmentAssetId', sql.BigInt, equipmentAssetId)
       .query(`
-        INSERT INTO dbo.room_equipment_assignments (room_id, equipment_asset_id, assigned_at)
-        OUTPUT INSERTED.id AS assignment_id, INSERTED.room_id,
-          INSERTED.equipment_asset_id, INSERTED.assigned_at
+        INSERT INTO dbo.room_asset_assignments (room_id, equipment_asset_id, assigned_at)
+        OUTPUT CONVERT(varchar(20), INSERTED.id) AS assignment_id, INSERTED.room_id,
+          CONVERT(varchar(20), INSERTED.equipment_asset_id) AS equipment_asset_id, INSERTED.assigned_at
         VALUES (@roomId, @equipmentAssetId, SYSUTCDATETIME());
       `);
     await transaction.commit();
@@ -143,7 +143,7 @@ async function unassignFromRoom(roomId, equipmentAssetId) {
     const asset = await new sql.Request(transaction)
       .input('equipmentAssetId', sql.BigInt, equipmentAssetId)
       .query(`
-        SELECT id, status
+        SELECT id
         FROM dbo.equipment_assets WITH (UPDLOCK, HOLDLOCK)
         WHERE id = @equipmentAssetId;
       `);
@@ -152,12 +152,11 @@ async function unassignFromRoom(roomId, equipmentAssetId) {
       return { reason: 'asset_not_found' };
     }
 
-    const currentStatus = String(asset.recordset[0].status || '').toUpperCase();
     const assignment = await new sql.Request(transaction)
       .input('equipmentAssetId', sql.BigInt, equipmentAssetId)
       .query(`
-        SELECT TOP (1) id, room_id
-        FROM dbo.room_equipment_assignments WITH (UPDLOCK, HOLDLOCK)
+        SELECT TOP (1) CONVERT(varchar(20), id) AS id, room_id
+        FROM dbo.room_asset_assignments WITH (UPDLOCK, HOLDLOCK)
         WHERE equipment_asset_id = @equipmentAssetId AND unassigned_at IS NULL;
       `);
     if (!assignment.recordset.length) {
@@ -168,20 +167,15 @@ async function unassignFromRoom(roomId, equipmentAssetId) {
       await transaction.rollback();
       return { reason: 'assigned_to_another_room' };
     }
-    if (currentStatus !== 'AVAILABLE') {
-      await transaction.rollback();
-      return { reason: 'asset_status_conflict', status: currentStatus };
-    }
-
     const endedAssignment = await new sql.Request(transaction)
       .input('assignmentId', sql.BigInt, assignment.recordset[0].id)
       .input('roomId', sql.Int, roomId)
       .input('equipmentAssetId', sql.BigInt, equipmentAssetId)
       .query(`
-        UPDATE dbo.room_equipment_assignments
+        UPDATE dbo.room_asset_assignments
         SET unassigned_at = SYSUTCDATETIME()
-        OUTPUT INSERTED.id AS assignment_id, INSERTED.room_id,
-          INSERTED.equipment_asset_id, INSERTED.unassigned_at
+        OUTPUT CONVERT(varchar(20), INSERTED.id) AS assignment_id, INSERTED.room_id,
+          CONVERT(varchar(20), INSERTED.equipment_asset_id) AS equipment_asset_id, INSERTED.unassigned_at
         WHERE id = @assignmentId AND room_id = @roomId
           AND equipment_asset_id = @equipmentAssetId AND unassigned_at IS NULL;
       `);
@@ -190,21 +184,8 @@ async function unassignFromRoom(roomId, equipmentAssetId) {
       return { reason: 'assignment_conflict' };
     }
 
-    const updatedAsset = await new sql.Request(transaction)
-      .input('equipmentAssetId', sql.BigInt, equipmentAssetId)
-      .query(`
-        UPDATE dbo.equipment_assets
-        SET status = 'AVAILABLE', updated_at = SYSDATETIME()
-        OUTPUT INSERTED.id
-        WHERE id = @equipmentAssetId AND status = 'AVAILABLE';
-      `);
-    if (!updatedAsset.recordset.length) {
-      await transaction.rollback();
-      return { reason: 'asset_status_conflict', status: currentStatus };
-    }
-
     await transaction.commit();
-    return { assignment: endedAssignment.recordset[0], equipment_asset_id: updatedAsset.recordset[0].id };
+    return { assignment: endedAssignment.recordset[0], equipment_asset_id: String(equipmentAssetId) };
   } catch (error) {
     try { await transaction.rollback(); } catch { /* Preserve the original SQL error. */ }
     if (isForeignKeyConflict(error)) return { reason: 'assignment_reference_conflict' };

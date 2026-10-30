@@ -28,7 +28,7 @@ export interface CheckoutPaymentSuccess {
   payment: InvoiceDetail['payments'][number];
 }
 
-export default function CheckoutPaymentSuccessModal({ result, onClose }: { result: CheckoutPaymentSuccess; onClose: () => void }) {
+export default function CheckoutPaymentSuccessModal({ result, onClose, children }: { result: CheckoutPaymentSuccess; onClose: () => void; children?: ReactNode }) {
   const { detail, payment } = result;
   const rooms = detail.rooms || [];
   const items = detail.items || [];
@@ -85,6 +85,7 @@ export default function CheckoutPaymentSuccessModal({ result, onClose }: { resul
             <div><span>Đã thanh toán (lần này)</span><strong>{money(payment.amount)}</strong></div><div className="checkout-result-balance"><span>Số tiền còn lại</span><strong>{money(detail.amount_due)}</strong></div>
           </section>
         </div>
+        {children}
       </div>
       <footer className="checkout-created-invoice-actions checkout-payment-result-actions"><button className="btn btn-primary" type="button" onClick={onClose}>Đóng</button></footer>
     </section>

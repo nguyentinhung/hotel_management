@@ -2,10 +2,10 @@ const { getPool, sql } = require('../config/db');
 const EquipmentAssetModel = require('../models/equipmentAssetModel');
 
 const ASSET_SELECT = `
-  SELECT asset.id, asset.equipment_item_id, asset.asset_code, asset.serial_number,
+  SELECT CONVERT(varchar(20), asset.id) AS id, asset.equipment_item_id, asset.asset_code, asset.serial_number,
          asset.status, asset.purchase_date, asset.notes, room.room_number AS current_room_name
   FROM dbo.equipment_assets AS asset
-  LEFT JOIN dbo.room_equipment_assignments AS assignment
+  LEFT JOIN dbo.room_asset_assignments AS assignment
     ON assignment.equipment_asset_id = asset.id AND assignment.unassigned_at IS NULL
   LEFT JOIN dbo.rooms AS room ON room.id = assignment.room_id
 `;
@@ -38,7 +38,7 @@ async function create(equipmentItemId, asset) {
     .input('notes', sql.NVarChar(500), asset.notes)
     .query(`
       INSERT INTO dbo.equipment_assets (equipment_item_id, asset_code, serial_number, status, purchase_date, notes)
-      OUTPUT INSERTED.id, INSERTED.equipment_item_id, INSERTED.asset_code, INSERTED.serial_number,
+      OUTPUT CONVERT(varchar(20), INSERTED.id) AS id, INSERTED.equipment_item_id, INSERTED.asset_code, INSERTED.serial_number,
              INSERTED.status, INSERTED.purchase_date, INSERTED.notes, CAST(NULL AS varchar(10)) AS current_room_name
       SELECT item.id, @assetCode, @serialNumber, @status, @purchaseDate, @notes
       FROM dbo.equipment_items AS item WHERE item.id = @equipmentItemId;
@@ -60,7 +60,7 @@ async function update(equipmentItemId, assetId, asset) {
       UPDATE dbo.equipment_assets
       SET asset_code = @assetCode, serial_number = @serialNumber, status = @status,
           purchase_date = @purchaseDate, notes = @notes, updated_at = SYSDATETIME()
-      OUTPUT INSERTED.id, INSERTED.equipment_item_id, INSERTED.asset_code, INSERTED.serial_number,
+      OUTPUT CONVERT(varchar(20), INSERTED.id) AS id, INSERTED.equipment_item_id, INSERTED.asset_code, INSERTED.serial_number,
              INSERTED.status, INSERTED.purchase_date, INSERTED.notes, CAST(NULL AS varchar(10)) AS current_room_name
       WHERE equipment_item_id = @equipmentItemId AND id = @assetId;
     `);
@@ -69,19 +69,36 @@ async function update(equipmentItemId, assetId, asset) {
 
 async function getDeleteReferenceState(equipmentItemId, assetId) {
   const pool = await getPool();
+  const schemaResult = await pool.request().query(`
+    SELECT CASE
+      WHEN OBJECT_ID(N'dbo.room_inspection_items', N'U') IS NOT NULL
+       AND COL_LENGTH(N'dbo.room_inspection_items', N'equipment_asset_id') IS NOT NULL
+      THEN 1 ELSE 0 END AS has_asset_inspection_reference,
+      CASE WHEN COL_LENGTH(N'dbo.room_problem_reports', N'equipment_asset_id') IS NULL
+        THEN 0 ELSE 1 END AS has_asset_problem_report_reference;
+  `);
+  if (!schemaResult.recordset[0]?.has_asset_inspection_reference) {
+    throw Object.assign(
+      new Error('Asset deletion requires the verified room inspection asset-reference schema.'),
+      { statusCode: 503, referenceType: 'inspection_schema_unavailable' },
+    );
+  }
+  const problemReportCount = schemaResult.recordset[0].has_asset_problem_report_reference
+    ? `(SELECT COUNT_BIG(*) FROM dbo.room_problem_reports AS report
+         WHERE report.equipment_asset_id = asset.id)`
+    : 'CONVERT(bigint, 0)';
   const result = await pool.request()
     .input('equipmentItemId', sql.Int, equipmentItemId)
     .input('assetId', sql.BigInt, assetId)
     .query(`
-      SELECT asset.id,
-        (SELECT COUNT_BIG(*) FROM dbo.room_equipment_assignments AS assignment
+      SELECT CONVERT(varchar(20), asset.id) AS id,
+        (SELECT COUNT_BIG(*) FROM dbo.room_asset_assignments AS assignment
          WHERE assignment.equipment_asset_id = asset.id AND assignment.unassigned_at IS NULL) AS current_assignment_count,
-        (SELECT COUNT_BIG(*) FROM dbo.room_equipment_assignments AS assignment
+        (SELECT COUNT_BIG(*) FROM dbo.room_asset_assignments AS assignment
          WHERE assignment.equipment_asset_id = asset.id AND assignment.unassigned_at IS NOT NULL) AS historical_assignment_count,
         (SELECT COUNT_BIG(*) FROM dbo.room_inspection_items AS inspection
          WHERE inspection.equipment_asset_id = asset.id) AS inspection_item_count,
-        (SELECT COUNT_BIG(*) FROM dbo.room_problem_reports AS report
-         WHERE report.equipment_asset_id = asset.id) AS problem_report_count
+        ${problemReportCount} AS problem_report_count
       FROM dbo.equipment_assets AS asset
       WHERE asset.equipment_item_id = @equipmentItemId AND asset.id = @assetId;
     `);
@@ -114,7 +131,7 @@ async function deleteById(equipmentItemId, assetId) {
     .input('assetId', sql.BigInt, assetId)
     .query(`
       DELETE FROM dbo.equipment_assets
-      OUTPUT DELETED.id
+      OUTPUT CONVERT(varchar(20), DELETED.id) AS id
       WHERE equipment_item_id = @equipmentItemId AND id = @assetId;
     `);
   return result.recordset[0]?.id ?? null;

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   checkRoomAvailability,
   checkInBooking,
@@ -19,9 +19,10 @@ import type {
 } from '../types';
 import BookingServicePanel from './BookingServicePanel';
 import BookingRoomSelectionEditor, { type BookingRoomSelection } from './BookingRoomSelectionEditor';
-import { createReceptionCheckout, createReceptionInvoice, getInvoiceDetails } from '../services/paymentService';
+import { createReceptionCheckout, createReceptionInvoice, getInvoiceDetails, syncReceptionBookingCompensations, type SyncReceptionCompensationsResponse } from '../services/paymentService';
 import type { InvoiceDetail } from '../services/paymentService';
 import CheckoutPaymentSuccessModal, { type CheckoutPaymentSuccess } from './CheckoutPaymentSuccessModal';
+import { assignCheckoutCleaningRoom, getCleaningTask, listCheckoutCleaningRooms, listCleaningHousekeepers, saveInspectionItemCompensation, type CheckoutCleaningRoom, type CleaningTaskInspectionReport } from '../services/cleaningTaskService';
 import { getActivePromotions, getServices } from '../services/homeService';
 import { validatePromotion } from '../services/promotionValidationService';
 import type { Promotion } from '../types/Promotion';
@@ -119,6 +120,36 @@ function getBookingRoomSelections(booking: RecentBooking): BookingRoomSelection[
 }
 
 type ReceptionBookingMode = 'management' | 'checkin' | 'checkout';
+type CompensationDecision = 'COMPENSATION' | 'NO_COMPENSATION' | '';
+type CompensationDraft = { decision: CompensationDecision; amount: string };
+
+function updateCompensationDraftForItem(
+  current: Record<string, CompensationDraft>,
+  itemId: string,
+  fallback: CompensationDraft,
+  update: Partial<CompensationDraft>,
+) {
+  return {
+    ...current,
+    [itemId]: { ...(current[itemId] || fallback), ...update },
+  };
+}
+
+function validateCompensationAmount(value: string): string | null {
+  const normalized = value.trim();
+  if (!normalized) return 'Enter an amount greater than zero.';
+  if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized)) return 'Enter a valid numeric amount.';
+
+  const [wholePart, fractionalPart = ''] = normalized.split('.');
+  if (fractionalPart.length > 2) return 'Use no more than 2 decimal places.';
+
+  const whole = (wholePart || '0').replace(/^0+(?=\d)/, '');
+  if (whole.length > 12) return 'The maximum amount is 999999999999.99.';
+  const cents = BigInt(whole) * 100n + BigInt((fractionalPart + '00').slice(0, 2));
+  if (cents <= 0n) return 'Enter an amount greater than zero.';
+  if (cents > 99999999999999n) return 'The maximum amount is 999999999999.99.';
+  return null;
+}
 
 export default function ReceptionRoomBooking({
   mode = 'management',
@@ -240,6 +271,27 @@ export default function ReceptionRoomBooking({
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [isCheckingOut, setIsCheckingOut] = useState<string | number | null>(null);
   const [selectedCheckOutBooking, setSelectedCheckOutBooking] = useState<RecentBooking | null>(null);
+  const [checkoutCleaningRooms, setCheckoutCleaningRooms] = useState<CheckoutCleaningRoom[]>([]);
+  const [checkoutHousekeepers, setCheckoutHousekeepers] = useState<{ id: string; full_name: string }[]>([]);
+  const [checkoutAssigneeDraft, setCheckoutAssigneeDraft] = useState<Record<string, string>>({});
+  const [loadingCheckoutAssignments, setLoadingCheckoutAssignments] = useState(false);
+  const [assigningCheckoutRoomId, setAssigningCheckoutRoomId] = useState<string | null>(null);
+  const [checkoutAssignmentLoadError, setCheckoutAssignmentLoadError] = useState('');
+  const [checkoutInspectionReport, setCheckoutInspectionReport] = useState<CleaningTaskInspectionReport | null>(null);
+  const [checkoutInspectionTaskId, setCheckoutInspectionTaskId] = useState<string | null>(null);
+  const [compensationDrafts, setCompensationDrafts] = useState<Record<string, CompensationDraft>>({});
+  const [compensationAmountErrors, setCompensationAmountErrors] = useState<Record<string, string>>({});
+  const [savingCompensationItemId, setSavingCompensationItemId] = useState<string | null>(null);
+  const [syncingCompensations, setSyncingCompensations] = useState(false);
+  const [compensationMessage, setCompensationMessage] = useState('');
+  const [compensationError, setCompensationError] = useState('');
+  const [isCompensationConfirmOpen, setIsCompensationConfirmOpen] = useState(false);
+  const compensationSyncInFlight = useRef(false);
+  const [checkoutCompensationReconciliation, setCheckoutCompensationReconciliation] = useState<Record<string, {
+    invoice: InvoiceDetail;
+    compensationItems: SyncReceptionCompensationsResponse['compensation_items'];
+  }>>({});
+  const [loadingCheckoutReport, setLoadingCheckoutReport] = useState(false);
   const [isCreatingInvoice, setIsCreatingInvoice] = useState(false);
   const [createdInvoice, setCreatedInvoice] = useState<{ detail: InvoiceDetail; created: boolean } | null>(null);
   const [checkOutPaymentMethod, setCheckOutPaymentMethod] = useState<'CASH' | 'VNPAY'>('CASH');
@@ -248,6 +300,15 @@ export default function ReceptionRoomBooking({
   const [cashTenderError, setCashTenderError] = useState('');
   const vnpayEnabled = import.meta.env.VITE_VNPAY_ENABLED === 'true';
   const [checkoutSuccess, setCheckoutSuccess] = useState<CheckoutPaymentSuccess | null>(null);
+
+  useEffect(() => {
+    if (!isCompensationConfirmOpen || syncingCompensations) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsCompensationConfirmOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [isCompensationConfirmOpen, syncingCompensations]);
 
   const vietnamToday = getVietnamToday(attentionNow);
   const overdueCheckInCutoffUtc = getVietnamCheckInCutoffUtc(attentionNow);
@@ -593,7 +654,20 @@ export default function ReceptionRoomBooking({
     }
   };
 
-  const handleCheckOut = (booking: RecentBooking) => {
+  const loadCheckoutRoomsWithReports = async (bookingId: string | number, accessToken: string) => {
+    const rooms = await listCheckoutCleaningRooms(bookingId, accessToken);
+    return Promise.all(rooms.map(async (room) => {
+      if (!room.task_id || !room.inspection_submitted) return { ...room, inspection_report: null };
+      try {
+        const task = await getCleaningTask(room.task_id, accessToken);
+        return { ...room, inspection_report: task.inspection_report ?? null };
+      } catch {
+        return { ...room, inspection_report: null };
+      }
+    }));
+  };
+
+  const handleCheckOut = async (booking: RecentBooking) => {
     const accessToken = localStorage.getItem('accessToken');
     if (!accessToken) {
       showToast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.', 'error');
@@ -605,6 +679,175 @@ export default function ReceptionRoomBooking({
     setCheckOutPaymentNote('');
     setCashTendered('');
     setSelectedCheckOutBooking(booking);
+    setCheckoutCleaningRooms([]);
+    setCheckoutHousekeepers([]);
+    setCheckoutAssigneeDraft({});
+    setCheckoutAssignmentLoadError('');
+    setLoadingCheckoutAssignments(true);
+    try {
+      const [rooms, housekeepers] = await Promise.all([
+        loadCheckoutRoomsWithReports(booking.id, accessToken),
+        listCleaningHousekeepers(accessToken),
+      ]);
+      setCheckoutCleaningRooms(rooms);
+      setCheckoutHousekeepers(housekeepers);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Không tải được phòng hoặc Housekeeper để phân công.';
+      setCheckoutAssignmentLoadError(message);
+      showToast(message, 'error');
+    } finally {
+      setLoadingCheckoutAssignments(false);
+    }
+  };
+
+  const assignCheckoutHousekeeper = async (room: CheckoutCleaningRoom) => {
+    if (!selectedCheckOutBooking || !room.room_id || !checkoutAssigneeDraft[room.booking_room_id] || assigningCheckoutRoomId) return;
+    const accessToken = localStorage.getItem('accessToken');
+    if (!accessToken) {
+      showToast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.', 'error');
+      return;
+    }
+    setAssigningCheckoutRoomId(room.booking_room_id);
+    try {
+      const result = await assignCheckoutCleaningRoom(
+        selectedCheckOutBooking.id,
+        room,
+        checkoutAssigneeDraft[room.booking_room_id],
+        accessToken,
+      );
+      setCheckoutCleaningRooms((current) => current.map((item) => item.booking_room_id === room.booking_room_id
+        ? { ...item, task_id: result.task.id, task_status: result.task.status, assigned_to: result.task.assigned_to, assigned_to_name: result.task.assigned_to_name, inspection_submitted: result.task.inspection_submitted ?? false }
+        : item));
+      showToast(result.already_assigned ? 'Task Checkout Cleaning đã được phân công cho Housekeeper này.' : result.created ? 'Đã tạo và phân công Checkout Cleaning task.' : 'Đã phân công task Checkout Cleaning đang chờ cho Housekeeper.', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Không thể phân công Checkout Cleaning task.', 'error');
+    } finally {
+      setAssigningCheckoutRoomId(null);
+    }
+  };
+
+  const refreshCheckoutTasks = async () => {
+    if (!selectedCheckOutBooking) return;
+    const accessToken = localStorage.getItem('accessToken');
+    if (!accessToken) return;
+    setLoadingCheckoutAssignments(true);
+    try {
+      const [rooms, housekeepers] = await Promise.all([
+        loadCheckoutRoomsWithReports(selectedCheckOutBooking.id, accessToken),
+        listCleaningHousekeepers(accessToken),
+      ]);
+      setCheckoutCleaningRooms(rooms);
+      setCheckoutHousekeepers(housekeepers);
+      setCheckoutAssignmentLoadError('');
+    } catch (error) {
+      setCheckoutAssignmentLoadError(error instanceof Error ? error.message : 'Could not refresh checkout tasks.');
+    } finally {
+      setLoadingCheckoutAssignments(false);
+    }
+  };
+
+  const openCheckoutInspectionReport = async (taskId: string) => {
+    const accessToken = localStorage.getItem('accessToken');
+    if (!accessToken) return;
+    setLoadingCheckoutReport(true);
+    try {
+      const task = await getCleaningTask(taskId, accessToken);
+      if (!task.inspection_report) throw new Error('Inspection report has not been submitted yet.');
+      setCheckoutInspectionReport(task.inspection_report);
+      setCheckoutInspectionTaskId(taskId);
+      setCompensationDrafts(Object.fromEntries(task.inspection_report.items.map((item) => [item.inspection_item_id, {
+        decision: item.compensation_decision || '',
+        amount: item.compensation_amount == null ? '' : String(item.compensation_amount),
+      }])));
+      setCompensationAmountErrors({});
+      setCompensationMessage('');
+      setCompensationError('');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not load the inspection report.', 'error');
+    } finally {
+      setLoadingCheckoutReport(false);
+    }
+  };
+
+  const saveCheckoutCompensation = async (itemId: string) => {
+    if (!checkoutInspectionReport || !checkoutInspectionTaskId || savingCompensationItemId || syncingCompensations) return;
+    const item = checkoutInspectionReport.items.find((entry) => entry.inspection_item_id === itemId);
+    const draft = compensationDrafts[itemId];
+    if (!item || !draft?.decision) return;
+    const amountError = draft.decision === 'COMPENSATION' ? validateCompensationAmount(draft.amount) : null;
+    if (amountError) {
+      setCompensationAmountErrors((current) => ({ ...current, [itemId]: amountError }));
+      setCompensationMessage('');
+      return;
+    }
+    const parsedAmount = draft.decision === 'COMPENSATION' ? Number(draft.amount) : undefined;
+    setCompensationAmountErrors((current) => {
+      const next = { ...current };
+      delete next[itemId];
+      return next;
+    });
+    const token = localStorage.getItem('accessToken');
+    if (!token) { setCompensationError('Your session has expired. Sign in again.'); return; }
+    setSavingCompensationItemId(itemId);
+    setCompensationError('');
+    setCompensationMessage('');
+    try {
+      const response = await saveInspectionItemCompensation(
+        checkoutInspectionTaskId, itemId, draft.decision, parsedAmount, token,
+      );
+      const saved = response.compensation;
+      setCheckoutInspectionReport((current) => current ? {
+        ...current,
+        items: current.items.map((entry) => entry.inspection_item_id === itemId
+          ? { ...entry, compensation_decision: saved.decision, compensation_amount: saved.amount }
+          : entry),
+      } : current);
+      setCompensationMessage(`Saved decision for ${item.equipment_name}.`);
+    } catch (error) {
+      setCompensationError(error instanceof Error ? error.message : 'Could not save this compensation decision.');
+    } finally {
+      setSavingCompensationItemId(null);
+    }
+  };
+
+  const openCompensationConfirmation = () => {
+    if (!checkoutInspectionReport || !selectedCheckOutBooking || syncingCompensations || savingCompensationItemId) return;
+    setCompensationError('');
+    setCompensationMessage('');
+    setIsCompensationConfirmOpen(true);
+  };
+
+  const confirmApplyCheckoutCompensations = async () => {
+    if (!checkoutInspectionReport || !selectedCheckOutBooking || compensationSyncInFlight.current || syncingCompensations || savingCompensationItemId) return;
+    const token = localStorage.getItem('accessToken');
+    if (!token) { setCompensationError('Your session has expired. Sign in again.'); return; }
+    compensationSyncInFlight.current = true;
+    setSyncingCompensations(true);
+    setCompensationError('');
+    setCompensationMessage('');
+    try {
+      const response = await syncReceptionBookingCompensations(selectedCheckOutBooking.id, token);
+      const compensationItems = response.compensation_items.filter((item) => item.decision === 'COMPENSATION');
+      const bookingId = String(selectedCheckOutBooking.id);
+      setCheckoutCompensationReconciliation((current) => ({
+        ...current,
+        [bookingId]: { invoice: response.invoice, compensationItems },
+      }));
+      setSelectedCheckOutBooking((current) => current && String(current.id) === bookingId
+        ? { ...current, balance_due: response.invoice.amount_due }
+        : current);
+      setCreatedInvoice((current) => current && String(current.detail.id) === String(response.invoice.id)
+        ? { ...current, detail: response.invoice }
+        : current);
+      setIsCompensationConfirmOpen(false);
+      setCheckoutInspectionReport(null);
+      showToast(`Equipment compensation synchronized to invoice ${response.invoice.invoice_number}. Total: ${formatCurrency(response.invoice.total_amount)}; remaining: ${formatCurrency(response.invoice.amount_due)}.`, 'success');
+    } catch (error) {
+      setCompensationError(error instanceof Error ? error.message : 'Could not apply compensation to the invoice.');
+    } finally {
+      compensationSyncInFlight.current = false;
+      setSyncingCompensations(false);
+    }
   };
 
   const resumeCheckoutPayment = async (booking: RecentBooking) => {
@@ -654,8 +897,13 @@ export default function ReceptionRoomBooking({
         || detail.booking_status.toUpperCase() !== 'CHECKED_OUT') {
         throw new Error('Giao dịch chưa được xác nhận đầy đủ. Hãy kiểm tra trạng thái thanh toán trước khi tiếp tục.');
       }
+      try {
+        setCheckoutCleaningRooms(await listCheckoutCleaningRooms(booking.id, accessToken));
+        setCheckoutAssignmentLoadError('');
+      } catch (error) {
+        setCheckoutAssignmentLoadError(error instanceof Error ? error.message : 'Could not load checkout cleaning tasks.');
+      }
       setCreatedInvoice(null);
-      setSelectedCheckOutBooking(null);
       setCheckoutSuccess({
         detail,
         payment: method === 'CASH' ? { ...payment, paid_at: confirmedAt } : payment,
@@ -995,10 +1243,94 @@ export default function ReceptionRoomBooking({
   const cashTenderedIsEmpty = cashTendered.trim() === '';
   const cashTenderedAmount = cashTenderedIsEmpty ? 0 : Math.max(0, Number(cashTendered) || 0);
   const cashChangeDue = Math.max(0, cashTenderedAmount - invoiceBalanceDue);
+  const savedCompensationTotal = checkoutInspectionReport?.items.reduce((total, item) => (
+    item.compensation_decision === 'COMPENSATION' ? total + Number(item.compensation_amount || 0) : total
+  ), 0) || 0;
+  const hasUnsavedCompensationChanges = checkoutInspectionReport?.items.some((item) => {
+    const draft = compensationDrafts[item.inspection_item_id];
+    if (!draft) return false;
+    if (draft.decision !== (item.compensation_decision || '')) return true;
+    return draft.decision === 'COMPENSATION'
+      && Number(draft.amount) !== Number(item.compensation_amount || 0);
+  }) || false;
+  const activeCheckoutReconciliation = selectedCheckOutBooking
+    ? checkoutCompensationReconciliation[String(selectedCheckOutBooking.id)]
+    : undefined;
+  const reconciledFinalPaid = activeCheckoutReconciliation?.invoice.payments
+    .filter((payment) => payment.payment_type.toUpperCase() === 'FINAL' && payment.status.toUpperCase() === 'SUCCESS')
+    .reduce((total, payment) => total + Number(payment.amount || 0), 0);
 
   return (
     <div className={`reception-booking-module${mode === 'management' ? ' booking-management-main-container' : ''}`}>
-      {checkoutSuccess && <CheckoutPaymentSuccessModal result={checkoutSuccess} onClose={() => setCheckoutSuccess(null)} />}
+      {checkoutSuccess && <CheckoutPaymentSuccessModal result={checkoutSuccess} onClose={() => { setCheckoutSuccess(null); setSelectedCheckOutBooking(null); }} />}
+      {checkoutInspectionReport && <div className="cleaning-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !savingCompensationItemId && !syncingCompensations) setCheckoutInspectionReport(null); }}>
+        <section className="cleaning-task-modal cleaning-detail-modal" role="dialog" aria-modal="true" aria-labelledby="checkout-inspection-report-title">
+          <div className="cleaning-modal-title"><div><span>Checkout Cleaning · Room {checkoutInspectionReport.room_number}</span><h3 id="checkout-inspection-report-title">Equipment Inspection Report</h3></div><button type="button" aria-label="Close report" disabled={Boolean(savingCompensationItemId) || syncingCompensations} onClick={() => setCheckoutInspectionReport(null)}>×</button></div>
+          <dl className="cleaning-inspection-report-summary checkout-inspection-report-summary"><div><dt>Booking</dt><dd>{checkoutInspectionReport.booking_code || '—'}{checkoutInspectionReport.guest_full_name ? ` · ${checkoutInspectionReport.guest_full_name}` : ''}</dd></div><div><dt>Housekeeper</dt><dd>{checkoutInspectionReport.housekeeper_name}</dd></div><div><dt>Submitted at</dt><dd>{formatVietnamDateTime(checkoutInspectionReport.submitted_at)}</dd></div></dl>
+          <div className="cleaning-inspection-report-items checkout-inspection-report-items">{checkoutInspectionReport.items.map((item) => {
+            const draft = compensationDrafts[item.inspection_item_id] || { decision: '', amount: '' };
+            const canDecide = item.status === 'DAMAGED' || item.status === 'MISSING';
+            return <article key={item.inspection_item_id}>
+              <div className="checkout-inspection-equipment-identity"><strong>{item.equipment_name}</strong><small>{item.asset_code}</small></div>
+              <span className={`cleaning-inspection-status is-${item.status.toLowerCase()}`}>{item.status}</span>
+              <p>{item.notes || '—'}</p>
+              {canDecide && <div className="checkout-compensation-controls">
+                <strong>Compensation decision</strong>
+                <div className="checkout-compensation-options">
+                  <label><input type="radio" name={`compensation-${item.inspection_item_id}`} checked={draft.decision === 'COMPENSATION'} disabled={Boolean(savingCompensationItemId) || syncingCompensations} onChange={() => setCompensationDrafts((current) => updateCompensationDraftForItem(current, item.inspection_item_id, draft, { decision: 'COMPENSATION' }))} /> Compensation</label>
+                  <label><input type="radio" name={`compensation-${item.inspection_item_id}`} checked={draft.decision === 'NO_COMPENSATION'} disabled={Boolean(savingCompensationItemId) || syncingCompensations} onChange={() => {
+                    setCompensationDrafts((current) => updateCompensationDraftForItem(current, item.inspection_item_id, draft, { decision: 'NO_COMPENSATION' }));
+                    setCompensationAmountErrors((current) => {
+                      const next = { ...current };
+                      delete next[item.inspection_item_id];
+                      return next;
+                    });
+                  }} /> No compensation</label>
+                </div>
+                {draft.decision === 'COMPENSATION' && <label className="checkout-compensation-amount">Amount<input type="number" min="0.01" step="0.01" value={draft.amount} aria-invalid={Boolean(compensationAmountErrors[item.inspection_item_id])} aria-describedby={compensationAmountErrors[item.inspection_item_id] ? `compensation-amount-error-${item.inspection_item_id}` : undefined} disabled={Boolean(savingCompensationItemId) || syncingCompensations} onChange={(event) => {
+                  const value = event.target.value;
+                  setCompensationDrafts((current) => updateCompensationDraftForItem(current, item.inspection_item_id, draft, { amount: value }));
+                  const error = validateCompensationAmount(value);
+                  setCompensationAmountErrors((current) => {
+                    const next = { ...current };
+                    if (error) next[item.inspection_item_id] = error;
+                    else delete next[item.inspection_item_id];
+                    return next;
+                  });
+                }} />{compensationAmountErrors[item.inspection_item_id] && <span id={`compensation-amount-error-${item.inspection_item_id}`} className="checkout-compensation-amount-error" role="alert">{compensationAmountErrors[item.inspection_item_id]}</span>}</label>}
+                {item.compensation_decision && <p className="checkout-compensation-saved">Saved: {item.compensation_decision === 'COMPENSATION' ? 'Compensation' : 'No compensation'}{item.compensation_decision === 'COMPENSATION' ? ` · ${formatCurrency(Number(item.compensation_amount || 0))}` : ''}</p>}
+                <button type="button" className="btn btn-outline checkout-compensation-save" disabled={!draft.decision || Boolean(savingCompensationItemId) || syncingCompensations} onClick={() => void saveCheckoutCompensation(item.inspection_item_id)}>
+                  {savingCompensationItemId === item.inspection_item_id ? 'Saving…' : 'Save decision'}
+                </button>
+              </div>}
+            </article>;
+          })}</div>
+          {checkoutInspectionReport.items.some((item) => item.status === 'DAMAGED' || item.status === 'MISSING') && <section className="checkout-compensation-apply">
+            <div><span>Saved compensation total</span><strong>{formatCurrency(savedCompensationTotal)}</strong><small>Saving decisions does not add charges. This action applies the saved decisions to the invoice.</small></div>
+            <button type="button" className="btn btn-primary" disabled={syncingCompensations || Boolean(savingCompensationItemId) || hasUnsavedCompensationChanges} onClick={openCompensationConfirmation}>Cộng tiền vào hóa đơn</button>
+            {hasUnsavedCompensationChanges && <small className="checkout-compensation-unsaved">Save your changed decisions before applying them to the invoice.</small>}
+          </section>}
+          {compensationMessage && <p className="checkout-compensation-feedback is-success" role="status">{compensationMessage}</p>}
+          {compensationError && <p className="checkout-compensation-feedback is-error" role="alert">{compensationError}</p>}
+        </section>
+      </div>}
+      {isCompensationConfirmOpen && checkoutInspectionReport && <div className="app-confirm-backdrop checkout-compensation-confirm-backdrop" role="presentation" onMouseDown={(event) => {
+        if (event.target === event.currentTarget && !syncingCompensations) setIsCompensationConfirmOpen(false);
+      }}>
+        <section className="app-confirm-dialog checkout-compensation-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="checkout-compensation-confirm-title" aria-describedby="checkout-compensation-confirm-description">
+          <header className="checkout-compensation-confirm-header">
+            <h2 id="checkout-compensation-confirm-title">Confirm Compensation</h2>
+            <button type="button" aria-label="Close confirmation" disabled={syncingCompensations} onClick={() => setIsCompensationConfirmOpen(false)}>×</button>
+          </header>
+          <p id="checkout-compensation-confirm-description">Are you sure you want to add the saved equipment compensation charges to this booking's invoice?</p>
+          <div className="checkout-compensation-confirm-total"><span>Saved compensation total</span><strong>{formatCurrency(savedCompensationTotal)}</strong></div>
+          {compensationError && <p className="checkout-compensation-confirm-error" role="alert">{compensationError}</p>}
+          <footer>
+            <button type="button" className="btn btn-outline" disabled={syncingCompensations} onClick={() => setIsCompensationConfirmOpen(false)}>Cancel</button>
+            <button type="button" className="btn btn-primary" disabled={syncingCompensations} onClick={() => void confirmApplyCheckoutCompensations()}>{syncingCompensations ? 'Applying…' : 'Confirm'}</button>
+          </footer>
+        </section>
+      </div>}
       {mode === 'management' && <>
       <section className="booking-management-toolbar">
         <div>
@@ -2055,7 +2387,7 @@ export default function ReceptionRoomBooking({
             </section>
           </div>
         )}
-        {selectedCheckOutBooking && !createdInvoice && (
+        {selectedCheckOutBooking && !createdInvoice && !checkoutSuccess && (
           <div className="checkout-page-backdrop">
             <section className="checkout-page" role="dialog" aria-modal="true" aria-labelledby="checkout-modal-title">
               <header className="checkout-page-header">
@@ -2087,12 +2419,61 @@ export default function ReceptionRoomBooking({
                     <div><small>Số khách</small><strong>{selectedCheckOutBooking.adults} người lớn · {selectedCheckOutBooking.children} trẻ em</strong></div>
                   </div>
                 </section>
+                <section className="checkout-page-section checkout-cleaning-assignments">
+                  <h4>Assign Housekeeper · Checkout Cleaning</h4>
+                  <p>Phân công công việc riêng cho từng phòng thuộc booking này.</p>
+                  {checkoutAssignmentLoadError && <p role="alert">{checkoutAssignmentLoadError}</p>}
+                  {loadingCheckoutAssignments ? <p role="status">Loading booking rooms…</p> : checkoutCleaningRooms.length === 0
+                    ? <p>No booking rooms are available for this checkout.</p>
+                    : <div className="checkout-cleaning-room-list">{checkoutCleaningRooms.map((room) => <div className="checkout-cleaning-room-row" key={room.booking_room_id}>
+                      <div className="checkout-cleaning-room-info">
+                        <strong>{room.room_number ? `Room ${room.room_number}` : 'Unassigned room'}</strong>
+                        <small>Booking room #{room.booking_room_id}{room.room_id ? ` · Room ID ${room.room_id}` : ''}</small>
+                        <span>Task status: {room.task_status || 'No task'} · Housekeeper: {room.assigned_to_name || 'Unassigned'}</span>
+                      </div>
+                      {(!room.task_id || (room.task_status === 'PENDING_ASSIGNMENT' && !room.assigned_to)) && <div className="checkout-cleaning-room-controls">
+                        <select aria-label={`Housekeeper for room ${room.room_number || room.booking_room_id}`} value={checkoutAssigneeDraft[room.booking_room_id] || ''} disabled={Boolean(assigningCheckoutRoomId) || !room.room_id} onChange={(event) => setCheckoutAssigneeDraft((current) => ({ ...current, [room.booking_room_id]: event.target.value }))}>
+                          <option value="">Select Housekeeper</option>{checkoutHousekeepers.map((housekeeper) => <option key={housekeeper.id} value={housekeeper.id}>{housekeeper.full_name}</option>)}
+                        </select>
+                        <button type="button" className="btn btn-primary" disabled={!room.room_id || !checkoutAssigneeDraft[room.booking_room_id] || Boolean(assigningCheckoutRoomId)} onClick={() => void assignCheckoutHousekeeper(room)}>{assigningCheckoutRoomId === room.booking_room_id ? 'Assigning…' : 'Assign Housekeeper'}</button>
+                      </div>}
+                    </div>)}</div>}
+                </section>
+                <section className="checkout-page-section checkout-cleaning-assignments">
+                  <div className="checkout-inspection-section-heading">
+                    <h4>Equipment Inspection Report</h4>
+                    <button type="button" className="btn btn-outline" disabled={loadingCheckoutAssignments} onClick={() => void refreshCheckoutTasks()}>{loadingCheckoutAssignments ? 'Loading…' : 'Refresh'}</button>
+                  </div>
+                  <p>Task status and inspection report status are shown separately for each room.</p>
+                  {checkoutAssignmentLoadError && <p role="alert">{checkoutAssignmentLoadError}</p>}
+                  {loadingCheckoutAssignments ? <p role="status">Loading latest task and report status…</p> : checkoutCleaningRooms.length === 0
+                    ? <p>No Checkout Cleaning tasks are available for this booking.</p>
+                    : <div className="checkout-cleaning-room-list">{checkoutCleaningRooms.map((room) => <div className="checkout-cleaning-room-row" key={`report-${room.booking_room_id}`}>
+                      <div className="checkout-cleaning-room-info">
+                        <strong>{room.room_number ? `Room ${room.room_number}` : 'Unassigned room'}</strong>
+                        <small>Booking room #{room.booking_room_id}{room.room_id ? ` · Room ID ${room.room_id}` : ''}</small>
+                        <span>Cleaning Task status: {room.task_status || 'No task'}</span>
+                        <span>Assigned Housekeeper: {room.assigned_to_name || 'Unassigned'}</span>
+                        <span>Inspection report: {room.inspection_submitted ? 'Đã gửi báo cáo' : 'Chưa gửi báo cáo'}</span>
+                        {room.inspection_submitted && room.inspection_report?.submitted_at && <span>Submitted at: {formatVietnamDateTime(room.inspection_report.submitted_at)}</span>}
+                      </div>
+                      {room.task_id && room.inspection_submitted && <button type="button" className="btn btn-outline" disabled={loadingCheckoutReport} onClick={() => void openCheckoutInspectionReport(room.task_id!)}>{loadingCheckoutReport ? 'Loading report…' : 'View Inspection Report'}</button>}
+                    </div>)}</div>}
+                </section>
                 <section className="checkout-page-section">
                   <h4>Đối soát chi phí booking</h4>
                   <div className="checkout-charge-row"><span>Tiền phòng và dịch vụ đã tính trong booking</span><strong>{formatCurrency(Number(selectedCheckOutBooking.total_amount || 0))}</strong></div>
-                  <div className="checkout-charge-row"><span>Đã thanh toán trước / đặt cọc</span><strong>− {formatCurrency(Number(selectedCheckOutBooking.deposit_amount || 0))}</strong></div>
-                  <div className="checkout-charge-row"><span>Đã thanh toán checkout</span><strong>− {formatCurrency(Number(selectedCheckOutBooking.final_paid_amount || 0))}</strong></div>
-                  <div className="checkout-total-row"><span>Còn phải thu</span><strong>{formatCurrency(Math.max(0, Number(selectedCheckOutBooking.balance_due ?? (selectedCheckOutBooking.total_amount - selectedCheckOutBooking.deposit_amount - Number(selectedCheckOutBooking.final_paid_amount || 0))) || 0))}</strong></div>
+                  {activeCheckoutReconciliation && <>
+                    <div className="checkout-charge-row checkout-compensation-reconciliation-total"><span>Bồi thường thiết bị</span><strong>{formatCurrency(activeCheckoutReconciliation.compensationItems.reduce((total, item) => total + Number(item.amount || 0), 0))}</strong></div>
+                    {activeCheckoutReconciliation.compensationItems.map((item) => <div className="checkout-charge-row checkout-compensation-reconciliation-item" key={item.compensation_id}>
+                      <span>{item.equipment_name || 'Thiết bị'}{item.asset_code ? ` · ${item.asset_code}` : ''}{item.room_number ? ` · Phòng ${item.room_number}` : ''}</span>
+                      <strong>{formatCurrency(Number(item.amount || 0))}</strong>
+                    </div>)}
+                    <div className="checkout-charge-row"><span>Tổng hóa đơn sau đồng bộ (đã gồm bồi thường)</span><strong>{formatCurrency(activeCheckoutReconciliation.invoice.total_amount)}</strong></div>
+                  </>}
+                  <div className="checkout-charge-row"><span>Đã thanh toán trước / đặt cọc</span><strong>− {formatCurrency(Number(activeCheckoutReconciliation?.invoice.deposit_paid ?? selectedCheckOutBooking.deposit_amount ?? 0))}</strong></div>
+                  <div className="checkout-charge-row"><span>Đã thanh toán checkout</span><strong>− {formatCurrency(Number(reconciledFinalPaid ?? selectedCheckOutBooking.final_paid_amount ?? 0))}</strong></div>
+                  <div className="checkout-total-row"><span>Còn phải thu</span><strong>{formatCurrency(Math.max(0, Number(activeCheckoutReconciliation?.invoice.amount_due ?? selectedCheckOutBooking.balance_due ?? (selectedCheckOutBooking.total_amount - selectedCheckOutBooking.deposit_amount - Number(selectedCheckOutBooking.final_paid_amount || 0))) || 0))}</strong></div>
                   <p className="checkout-page-note">Các khoản phát sinh ngoài booking cần được ghi nhận vào booking trước khi thu tiền.</p>
                 </section>
                 <section className="checkout-page-section">

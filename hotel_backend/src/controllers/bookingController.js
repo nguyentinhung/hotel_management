@@ -16,7 +16,7 @@ function isValidIdCardImage(file) {
   }
   return false;
 }
-const { makeReceptionCheckoutPayment, createReceptionInvoice } = require('../services/paymentService');
+const { makeReceptionCheckoutPayment, createReceptionInvoice, syncReceptionBookingCompensations } = require('../services/paymentService');
 const { jwtSecret: JWT_SECRET } = require('../config/auth');
 const roleCodeById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
 const hasRole = (claims, ...roles) => {
@@ -497,6 +497,19 @@ async function createReceptionInvoiceHandler(req, res) {
   }
 }
 
+async function syncReceptionBookingCompensationsHandler(req, res) {
+  const bookingId = Number(req.params.bookingId);
+  if (!Number.isSafeInteger(bookingId) || bookingId < 1) return res.status(400).json({ success: false, message: 'MĂ£ booking khĂ´ng há»£p lá»‡.' });
+  try {
+    const result = await syncReceptionBookingCompensations(bookingId);
+    return res.json({ success: true, ...result });
+  } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message, code: error.code });
+    console.error('Reception compensation invoice sync error:', error);
+    return res.status(500).json({ success: false, message: 'KhĂ´ng thá»ƒ Ä‘á»“ng bá»™ bồi thường vĂ o hĂ³a Ä‘Æ¡n.' });
+  }
+}
+
 async function finishRoomCleaningHandler(req, res) {
   const token = (req.headers.authorization || '').replace(/^Bearer\s+/, '');
   let claims;
@@ -641,6 +654,7 @@ module.exports = {
   getActiveBookingsHandler,
   checkOutBookingHandler,
   createReceptionInvoiceHandler,
+  syncReceptionBookingCompensationsHandler,
   finishRoomCleaningHandler,
   updateRoomStatusHandler: finishRoomCleaningHandler,
   reportRoomMaintenanceHandler,

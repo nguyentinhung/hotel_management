@@ -13,6 +13,7 @@ router.post('/bookings/:bookingId/cancel', bookingController.cancelBookingHandle
 router.post('/bookings/:bookingId/check-in', requireReceptionist, uploadIdCardImage, bookingController.checkInBookingHandler);
 router.post('/bookings/:bookingId/check-out', bookingController.checkOutBookingHandler);
 router.post('/bookings/:bookingId/invoice', bookingController.createReceptionInvoiceHandler);
+router.post('/bookings/:bookingId/invoice/compensations/sync', requireReceptionist, bookingController.syncReceptionBookingCompensationsHandler);
 router.get('/bookings/:bookingId/assignable-rooms', bookingController.getAssignableRoomsHandler);
 router.post('/bookings/:bookingId/assign-room', bookingController.assignRoomHandler);
 router.get('/bookings/recent', bookingController.getRecentBookingsHandler);

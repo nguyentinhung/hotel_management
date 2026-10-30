@@ -11,6 +11,19 @@ function parsePositiveId(value, label, maximum = Number.MAX_SAFE_INTEGER) {
   return parsed;
 }
 
+function parseBigIntId(value, label) {
+  const raw = String(value ?? '');
+  if (!/^\d+$/.test(raw)) throw Object.assign(new Error(`${label} must be a positive integer.`), { statusCode: 400 });
+  let id;
+  try { id = BigInt(raw); } catch {
+    throw Object.assign(new Error(`${label} must be a positive integer.`), { statusCode: 400 });
+  }
+  if (id < 1n || id > 9223372036854775807n) {
+    throw Object.assign(new Error(`${label} must be a positive SQL BIGINT.`), { statusCode: 400 });
+  }
+  return id.toString();
+}
+
 function assignmentError(reason, status) {
   const errors = {
     room_not_found: [404, 'Room not found.'],
@@ -45,7 +58,7 @@ async function getAssignableAssets(roomId, equipmentItemId) {
 
 async function assignEquipmentToRoom(roomId, equipmentAssetId, equipmentItemId) {
   const parsedRoomId = parsePositiveId(roomId, 'Room ID', 2147483647);
-  const parsedAssetId = parsePositiveId(equipmentAssetId, 'Equipment asset ID');
+  const parsedAssetId = parseBigIntId(equipmentAssetId, 'Equipment asset ID');
   const parsedEquipmentItemId = parsePositiveId(equipmentItemId, 'Equipment type ID', 2147483647);
   const result = await roomEquipmentAssignmentDao.assignToRoom(parsedRoomId, parsedAssetId, parsedEquipmentItemId);
   if (result.reason) throw assignmentError(result.reason, result.status);
@@ -54,7 +67,7 @@ async function assignEquipmentToRoom(roomId, equipmentAssetId, equipmentItemId) 
 
 async function unassignEquipmentFromRoom(roomId, equipmentAssetId) {
   const parsedRoomId = parsePositiveId(roomId, 'Room ID', 2147483647);
-  const parsedAssetId = parsePositiveId(equipmentAssetId, 'Equipment asset ID');
+  const parsedAssetId = parseBigIntId(equipmentAssetId, 'Equipment asset ID');
   const result = await roomEquipmentAssignmentDao.unassignFromRoom(parsedRoomId, parsedAssetId);
   if (result.reason) throw assignmentError(result.reason, result.status);
   return result.assignment;

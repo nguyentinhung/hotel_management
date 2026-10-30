@@ -79,4 +79,31 @@ const requireChangePassword = requireRoles(
   'Bạn không có quyền đổi mật khẩu.',
 );
 
-module.exports = { requireCustomer, requireReceptionist, requirePaymentStaff, requirePaymentActor, requireBookingReadAccess, requireReviewStaff, requireProfileAccess, requireChangePassword };
+const requireCleaningTaskRead = requireRoles(
+  ['ADMIN', 'RECEPTIONIST', 'HOUSEKEEPER'],
+  'Cleaning task access denied.',
+);
+
+const requireCleaningTaskManagement = requireRoles(
+  ['ADMIN', 'RECEPTIONIST'],
+  'Only receptionists or administrators can manage cleaning task assignments.',
+);
+
+const requireHousekeeper = requireRoles(
+  ['HOUSEKEEPER'],
+  'Only housekeepers can perform this cleaning task action.',
+);
+
+module.exports = {
+  requireCustomer,
+  requireReceptionist,
+  requirePaymentStaff,
+  requirePaymentActor,
+  requireBookingReadAccess,
+  requireReviewStaff,
+  requireProfileAccess,
+  requireChangePassword,
+  requireCleaningTaskRead,
+  requireCleaningTaskManagement,
+  requireHousekeeper,
+};

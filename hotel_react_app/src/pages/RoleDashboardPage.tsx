@@ -28,6 +28,7 @@ import ReviewListPage from './ReviewListPage';
 import StaffManagementPage from './StaffManagementPage';
 import UserManagementPage from './UserManagementPage';
 import EquipmentListPage from './EquipmentListPage';
+import CleaningTaskManagement from '../components/CleaningTaskManagement';
 
 /**
  * ============================================================================
@@ -76,6 +77,7 @@ const dashboardConfig: Record<
       { label: 'Room Management', description: 'Quản lý thông tin, trạng thái và tình trạng phòng.' },
       { label: 'Profile', description: 'Xem và cập nhật hồ sơ cá nhân.' },
       { label: 'Change Password', description: 'Cập nhật mật khẩu tài khoản.' },
+      { label: 'Cleaning Task', description: 'Theo dõi và phân công công việc dọn phòng.' },
     ],
   },
   HOUSEKEEPER: {
@@ -83,7 +85,7 @@ const dashboardConfig: Record<
     subtitle: 'Theo dõi và cập nhật công việc dọn phòng',
     accent: 'Housekeeper',
     nav: [
-      { label: 'Phòng cần dọn', description: 'Danh sách phòng vừa checkout hoặc cần làm sạch.' },
+      { label: 'Cleaning Task', description: 'Xem và cập nhật công việc được giao cho bạn.' },
       { label: 'Profile', description: 'Xem và cập nhật hồ sơ cá nhân.' },
       { label: 'Change Password', description: 'Cập nhật mật khẩu tài khoản.' },
     ],
@@ -728,7 +730,7 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
     ] },
     { title: 'DỊCH VỤ & VẬN HÀNH', items: [
       { label: 'Service Management', moduleIndex: 5, icon: 'service' },
-      { label: 'Cleaning Task', icon: 'cleaning' },
+      { label: 'Cleaning Task', moduleIndex: 9, icon: 'cleaning' },
       { label: 'Equipment Inspection', icon: 'maintenance' },
     ] },
     { title: 'THANH TOÁN', items: [
@@ -932,8 +934,8 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
             <div className="module-content"><InvoiceList /></div>
           ) : (activeItem.label === 'Thanh toán' && currentRole !== 'HOUSEKEEPER') || (currentRole === 'ADMIN' && activeItem.label === 'Payment Management') ? (
             <div className="module-content"><PaymentList /></div>
-          ) : currentRole === 'HOUSEKEEPER' && activeItem.label === 'Phòng cần dọn' ? (
-            <RoomStatusPanel role={currentRole} />
+          ) : (currentRole === 'HOUSEKEEPER' || currentRole === 'RECEPTIONIST') && activeItem.label === 'Cleaning Task' ? (
+            <CleaningTaskManagement role={currentRole} />
           ) : currentRole === 'ADMIN' && activeItem.label === 'Quản lý phòng' ? (
             <RoomStatusPanel role={currentRole} />
           ) : currentRole === 'ADMIN' && activeItem.label === 'Service Management' ? (

@@ -36,7 +36,7 @@ function foreignKeyReferenceType(error) {
   return 'protected_reference';
 }
 
-function parseId(value, label, maximum = Number.MAX_SAFE_INTEGER) {
+function parseIntId(value, label, maximum = 2147483647) {
   const raw = String(value ?? '');
   if (!/^\d+$/.test(raw)) throw Object.assign(new Error(`${label} must be a positive integer.`), { statusCode: 400 });
   const id = Number(raw);
@@ -46,6 +46,19 @@ function parseId(value, label, maximum = Number.MAX_SAFE_INTEGER) {
   return id;
 }
 
+function parseBigIntId(value, label) {
+  const raw = String(value ?? '');
+  if (!/^\d+$/.test(raw)) throw Object.assign(new Error(`${label} must be a positive integer.`), { statusCode: 400 });
+  let id;
+  try { id = BigInt(raw); } catch {
+    throw Object.assign(new Error(`${label} must be a positive integer.`), { statusCode: 400 });
+  }
+  if (id < 1n || id > 9223372036854775807n) {
+    throw Object.assign(new Error(`${label} must be a positive SQL BIGINT.`), { statusCode: 400 });
+  }
+  return id.toString();
+}
+
 async function requireEquipmentItem(equipmentItemId) {
   const item = await equipmentItemDao.findById(equipmentItemId);
   if (!item) return null;
@@ -53,34 +66,34 @@ async function requireEquipmentItem(equipmentItemId) {
 }
 
 async function getEquipmentAssets(equipmentItemId) {
-  const parsedItemId = parseId(equipmentItemId, 'Equipment type ID', 2147483647);
+  const parsedItemId = parseIntId(equipmentItemId, 'Equipment type ID');
   if (!await requireEquipmentItem(parsedItemId)) return null;
   return equipmentAssetDao.findAllByEquipmentItemId(parsedItemId);
 }
 
 async function getEquipmentAsset(equipmentItemId, assetId) {
-  const parsedItemId = parseId(equipmentItemId, 'Equipment type ID', 2147483647);
-  const parsedAssetId = parseId(assetId, 'Equipment asset ID');
+  const parsedItemId = parseIntId(equipmentItemId, 'Equipment type ID');
+  const parsedAssetId = parseBigIntId(assetId, 'Equipment asset ID');
   if (!await requireEquipmentItem(parsedItemId)) return null;
   return equipmentAssetDao.findById(parsedItemId, parsedAssetId);
 }
 
 async function createEquipmentAsset(equipmentItemId, input) {
-  const parsedItemId = parseId(equipmentItemId, 'Equipment type ID', 2147483647);
+  const parsedItemId = parseIntId(equipmentItemId, 'Equipment type ID');
   if (!await requireEquipmentItem(parsedItemId)) return null;
   return equipmentAssetDao.create(parsedItemId, EquipmentAssetModel.normalizeInput(input));
 }
 
 async function updateEquipmentAsset(equipmentItemId, assetId, input) {
-  const parsedItemId = parseId(equipmentItemId, 'Equipment type ID', 2147483647);
-  const parsedAssetId = parseId(assetId, 'Equipment asset ID');
+  const parsedItemId = parseIntId(equipmentItemId, 'Equipment type ID');
+  const parsedAssetId = parseBigIntId(assetId, 'Equipment asset ID');
   if (!await requireEquipmentItem(parsedItemId)) return null;
   return equipmentAssetDao.update(parsedItemId, parsedAssetId, EquipmentAssetModel.normalizeInput(input));
 }
 
 async function deleteEquipmentAsset(equipmentItemId, assetId) {
-  const parsedItemId = parseId(equipmentItemId, 'Equipment type ID', 2147483647);
-  const parsedAssetId = parseId(assetId, 'Equipment asset ID');
+  const parsedItemId = parseIntId(equipmentItemId, 'Equipment type ID');
+  const parsedAssetId = parseBigIntId(assetId, 'Equipment asset ID');
   if (!await requireEquipmentItem(parsedItemId)) return null;
   try {
     return await equipmentAssetDao.deleteById(parsedItemId, parsedAssetId);

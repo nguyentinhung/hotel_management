@@ -32,6 +32,7 @@ function statusLabel(status: EquipmentAssetStatus): string {
 function deleteErrorMessage(error: unknown): string {
   if (!(error instanceof EquipmentApiError)) return 'Không thể xóa thiết bị lúc này. Vui lòng thử lại.';
   if (error.status === 404) return 'Không tìm thấy thiết bị cần xóa.';
+  if (error.status === 503) return 'Chưa thể xác minh cấu trúc dữ liệu kiểm tra phòng. Không thể xóa thiết bị an toàn; hãy yêu cầu quản trị viên kiểm tra schema trước khi thử lại.';
   if (error.status !== 409) return 'Không thể xóa thiết bị lúc này. Vui lòng thử lại.';
 
   const message = error.message.toLocaleLowerCase('vi-VN');
@@ -68,12 +69,12 @@ export default function EquipmentAssetManager({ equipmentItem }: Props) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const assetListRequest = useRef(0);
-  const [assetDetailsId, setAssetDetailsId] = useState<number | string | null>(null);
+  const [assetDetailsId, setAssetDetailsId] = useState<string | null>(null);
   const [assetDetails, setAssetDetails] = useState<EquipmentAsset | null>(null);
   const [assetDetailsLoading, setAssetDetailsLoading] = useState(false);
   const [assetDetailsError, setAssetDetailsError] = useState('');
   const assetDetailsRequest = useRef(0);
-  const [formAssetId, setFormAssetId] = useState<number | string | null>(null);
+  const [formAssetId, setFormAssetId] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [form, setForm] = useState<EquipmentAssetInput>(EMPTY_FORM);
   const [formLoading, setFormLoading] = useState(false);
@@ -123,7 +124,7 @@ export default function EquipmentAssetManager({ equipmentItem }: Props) {
     formRequest.current += 1;
   };
 
-  const openEdit = async (assetId: number | string) => {
+  const openEdit = async (assetId: string) => {
     if (saving || deleting) return;
     setFormOpen(true);
     setFormAssetId(assetId);
@@ -180,7 +181,7 @@ export default function EquipmentAssetManager({ equipmentItem }: Props) {
     }
   };
 
-  const showAssetDetails = async (assetId: number | string) => {
+  const showAssetDetails = async (assetId: string) => {
     const requestId = ++assetDetailsRequest.current;
     setAssetDetailsId(assetId);
     setAssetDetails(null);

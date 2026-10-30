@@ -14,7 +14,19 @@ class EquipmentItemModel extends BaseModel {
       throw Object.assign(new Error('Active status is required.'), { statusCode: 400 });
     }
 
-    return { name, is_active: input.is_active };
+    const equipmentItem = { name, is_active: input.is_active };
+    if (Object.hasOwn(input, 'description')) {
+      const description = input.description;
+      if (description != null && typeof description !== 'string') {
+        throw Object.assign(new Error('Equipment description must be text and must not exceed 500 characters.'), { statusCode: 400 });
+      }
+      if (typeof description === 'string' && description.length > 500) {
+        throw Object.assign(new Error('Equipment description must be text and must not exceed 500 characters.'), { statusCode: 400 });
+      }
+      equipmentItem.description = typeof description === 'string' ? description.trim() || null : null;
+    }
+
+    return equipmentItem;
   }
 
   static normalizeRoomIds(input) {
@@ -31,7 +43,7 @@ class EquipmentItemModel extends BaseModel {
   static get schema() {
     return {
       name: 'EquipmentItemModel', table: 'equipment_items', primaryKey: 'id',
-      fields: ['id', 'name', 'is_active'],
+      fields: ['id', 'name', 'description', 'is_active'],
     };
   }
 }
