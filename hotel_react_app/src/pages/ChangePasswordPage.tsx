@@ -1,112 +1,47 @@
-﻿import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { changePassword } from '../services/authService';
 
 export default function ChangePasswordPage() {
-    const [currentPassword, setCurrentPassword] = useState('');
-    const [newPassword, setNewPassword] = useState('');
-    const [confirmPassword, setConfirmPassword] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-    const [message, setMessage] = useState('');
-    const [error, setError] = useState('');
-    const [loading, setLoading] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setMessage('');
+    setError('');
+    if (newPassword.length < 8) return setError('Mật khẩu mới phải có ít nhất 8 ký tự.');
+    if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*[!@#$%^&*(),.?":{}|<>_\-+=/\\[\]~`;'])/.test(newPassword)) {
+      return setError('Mật khẩu mới phải có ít nhất một chữ hoa, một chữ thường và một ký tự đặc biệt.');
+    }
+    if (newPassword !== confirmPassword) return setError('Xác nhận mật khẩu mới không khớp.');
+    const token = localStorage.getItem('accessToken');
+    if (!token) return setError('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
+    setLoading(true);
+    try {
+      const result = await changePassword(currentPassword, newPassword, token);
+      setMessage(result.message);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : 'Không thể đổi mật khẩu.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
-    const handleSubmit = async (event: FormEvent) => {
-        event.preventDefault();
-
-        setMessage('');
-        setError('');
-
-        if (newPassword.length < 6) {
-            setError('Mật khẩu mới phải có ít nhất 6 ký tự.');
-            return;
-        }
-
-        if (newPassword !== confirmPassword) {
-            setError('Xác nhận mật khẩu mới không khớp.');
-            return;
-        }
-
-        const token = localStorage.getItem('accessToken');
-
-        if (!token) {
-            setError('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.');
-            return;
-        }
-
-        try {
-            setLoading(true);
-
-            const result = await changePassword(
-                currentPassword,
-                newPassword,
-                token
-            );
-
-            setMessage(result.message);
-
-            setCurrentPassword('');
-            setNewPassword('');
-            setConfirmPassword('');
-        } catch (error) {
-            setError(
-                error instanceof Error
-                    ? error.message
-                    : 'Không thể đổi mật khẩu.'
-            );
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    return (
-        <div className="change-password-page">
-            <h3>Đổi mật khẩu</h3>
-
-            <form onSubmit={handleSubmit}>
-                <label>
-                    Mật khẩu hiện tại
-                    <input
-                        type="password"
-                        value={currentPassword}
-                        onChange={(e) => setCurrentPassword(e.target.value)}
-                        required
-                    />
-                </label>
-
-                <label>
-                    Mật khẩu mới
-                    <input
-                        type="password"
-                        value={newPassword}
-                        onChange={(e) => setNewPassword(e.target.value)}
-                        minLength={6}
-                        required
-                    />
-                </label>
-
-                <label>
-                    Xác nhận mật khẩu mới
-                    <input
-                        type="password"
-                        value={confirmPassword}
-                        onChange={(e) => setConfirmPassword(e.target.value)}
-                        minLength={6}
-                        required
-                    />
-                </label>
-
-                {error && <p className="inline-error">{error}</p>}
-
-                {message && <p className="success-message">{message}</p>}
-
-                <button
-                    type="submit"
-                    className="btn btn-primary"
-                    disabled={loading}
-                >
-                    {loading ? 'Đang xử lý...' : 'Đổi mật khẩu'}
-                </button>
-            </form>
-        </div>
-    );
+  return <div className="account-profile">
+    <div className="account-profile-heading"><div><h3>Đổi mật khẩu</h3><p>Nhập mật khẩu hiện tại để thiết lập mật khẩu mới.</p></div></div>
+    <form className="account-password-form" onSubmit={(event) => void submit(event)}>
+      <label>Mật khẩu hiện tại<input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required /></label>
+      <label>Mật khẩu mới<input type="password" autoComplete="new-password" minLength={6} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required /></label>
+      <label>Xác nhận mật khẩu mới<input type="password" autoComplete="new-password" minLength={6} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required /></label>
+      {error && <p className="inline-error">{error}</p>}{message && <p className="account-profile-success" role="status">{message}</p>}
+      <button className="btn btn-primary btn-sm" type="submit" disabled={loading}>{loading ? 'Đang xử lý...' : 'Cập nhật mật khẩu'}</button>
+    </form>
+  </div>;
 }
