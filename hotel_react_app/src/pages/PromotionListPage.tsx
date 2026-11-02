@@ -1,5 +1,6 @@
 ﻿import { useEffect, useState } from 'react';
 import PromotionForm from '../components/PromotionForm';
+import { retryOrGoToLogin } from '../utils/sessionRetry';
 import { useToast } from '../components/ToastProvider';
 import {
     createPromotion,
@@ -187,7 +188,7 @@ export default function PromotionListPage({ role = 'ADMIN' }: PromotionListPageP
             {loadError ? (
                 <div className="error-text" role="alert">
                     <p>{loadError}</p>
-                    <button className="btn btn-outline btn-sm" type="button" onClick={() => void loadPromotions()}>Tải lại danh sách</button>
+                    <button className="btn btn-outline btn-sm" type="button" onClick={() => retryOrGoToLogin(loadError, loadPromotions)}>Tải lại danh sách</button>
                 </div>
             ) : promotions.length === 0 ? (
                 <p>Không có chương trình khuyến mãi nào.</p>

@@ -1,6 +1,4 @@
 const { sql, getPool } = require('../config/db');
-const PaymentModel = require('../models/paymentModel');
-const InvoiceModel = require('../models/invoiceModel');
 const { expirePendingBookings } = require('./bookingDao');
 
 function paymentError(code, statusCode, message) {
@@ -8,6 +6,216 @@ function paymentError(code, statusCode, message) {
   error.code = code;
   error.statusCode = statusCode;
   return error;
+}
+
+function assertNoPendingPayments(payments) {
+  if (payments.some((payment) => String(payment.status).toUpperCase() === 'PENDING')) {
+    throw paymentError('PAYMENT_ALREADY_PENDING', 409, 'Booking đang có giao dịch thanh toán chờ xử lý.');
+  }
+}
+
+async function lockBookingPayments(transaction, bookingId) {
+  const result = await transaction.request()
+    .input('bookingId', sql.BigInt, bookingId)
+    .query(`
+      SELECT id, payment_code, booking_id, invoice_id, payment_type, method, amount, status
+      FROM dbo.payments WITH (UPDLOCK, HOLDLOCK)
+      WHERE booking_id = @bookingId
+      ORDER BY id;
+    `);
+  return result.recordset;
+}
+
+function compensationInvoiceDescription(row) {
+  const room = String(row.room_number || `ID ${row.room_id}`);
+  const name = String(row.equipment_name || 'Thiết bị');
+  const code = String(row.asset_code || '').trim();
+  const prefix = `Bồi thường · Phòng ${room} · `;
+  const suffix = code ? ` · ${code}` : '';
+  const nameLimit = Math.max(1, 255 - prefix.length - suffix.length);
+  return `${prefix}${name.slice(0, nameLimit)}${suffix}`;
+}
+
+async function syncBookingEquipmentCompensations(transaction, bookingId, invoiceId) {
+  const result = await transaction.request()
+    .input('bookingId', sql.BigInt, bookingId)
+    .query(`
+      SELECT compensation.id AS compensation_id, compensation.inspection_item_id,
+        compensation.decision, compensation.amount, compensation.invoice_item_id,
+        item.status AS inspection_status, item.equipment_name, item.asset_code,
+        task.task_type, task.room_id, room.room_number, booking_room.room_id AS booking_room_room_id,
+        inspection.room_id AS inspection_room_id
+      FROM dbo.cleaning_task_equipment_compensations AS compensation WITH (UPDLOCK, HOLDLOCK)
+      JOIN dbo.cleaning_task_inspection_items AS item WITH (UPDLOCK, HOLDLOCK)
+        ON item.id = compensation.inspection_item_id
+      JOIN dbo.cleaning_task_inspections AS inspection WITH (UPDLOCK, HOLDLOCK)
+        ON inspection.id = item.inspection_id
+      JOIN dbo.cleaning_tasks AS task WITH (UPDLOCK, HOLDLOCK)
+        ON task.id = inspection.cleaning_task_id
+      JOIN dbo.booking_rooms AS booking_room WITH (UPDLOCK, HOLDLOCK)
+        ON booking_room.id = task.booking_room_id
+      LEFT JOIN dbo.rooms AS room ON room.id = task.room_id
+      WHERE booking_room.booking_id = @bookingId
+      ORDER BY compensation.id;
+    `);
+
+  const synced = [];
+  for (const row of result.recordset) {
+    if (String(row.task_type).toUpperCase() !== 'CHECKOUT_CLEANING') {
+      throw paymentError('COMPENSATION_TASK_TYPE_INVALID', 409, 'Compensation records must belong to checkout cleaning tasks.');
+    }
+    if (row.room_id == null || row.booking_room_room_id == null
+      || Number(row.room_id) !== Number(row.booking_room_room_id)
+      || Number(row.inspection_room_id) !== Number(row.room_id)) {
+      throw paymentError('COMPENSATION_REFERENCE_CONFLICT', 409, 'Compensation is linked to inconsistent task, room, or booking-room references.');
+    }
+    const decision = String(row.decision).toUpperCase();
+    if (!['COMPENSATION', 'NO_COMPENSATION'].includes(decision)
+      || (decision === 'COMPENSATION' && Number(row.amount) <= 0)
+      || (decision === 'NO_COMPENSATION' && Number(row.amount) !== 0)
+      || !['DAMAGED', 'MISSING'].includes(String(row.inspection_status).toUpperCase())) {
+      throw paymentError('COMPENSATION_DATA_INVALID', 409, 'A saved compensation decision is inconsistent with its inspection item.');
+    }
+
+    let linkedInvoiceItemId = row.invoice_item_id;
+    if (decision === 'COMPENSATION') {
+      const description = compensationInvoiceDescription(row);
+      if (linkedInvoiceItemId == null) {
+        const inserted = await transaction.request()
+          .input('invoiceId', sql.BigInt, invoiceId)
+          .input('description', sql.NVarChar(255), description)
+          .input('amount', sql.Decimal(14, 2), row.amount)
+          .query(`
+            INSERT INTO dbo.invoice_items (invoice_id, item_type, description, quantity, unit_price, amount)
+            OUTPUT CONVERT(varchar(20), INSERTED.id) AS id
+            VALUES (@invoiceId, 'OTHER', @description, 1, @amount, @amount);
+          `);
+        linkedInvoiceItemId = inserted.recordset[0]?.id;
+        if (linkedInvoiceItemId == null) throw new Error('Compensation invoice item insert did not return an ID.');
+        const linkedUpdate = await transaction.request()
+          .input('compensationId', sql.BigInt, row.compensation_id)
+          .input('invoiceItemId', sql.BigInt, linkedInvoiceItemId)
+          .query(`
+            UPDATE dbo.cleaning_task_equipment_compensations
+            SET invoice_item_id = @invoiceItemId
+            WHERE id = @compensationId AND invoice_item_id IS NULL;
+          `);
+        if (linkedUpdate.rowsAffected?.[0] !== 1) {
+          throw paymentError('COMPENSATION_LINK_CONFLICT', 409, 'Compensation invoice item was linked by another request.');
+        }
+      } else {
+        const linked = await transaction.request()
+          .input('invoiceItemId', sql.BigInt, linkedInvoiceItemId)
+          .query(`
+            SELECT id, invoice_id, item_type
+            FROM dbo.invoice_items WITH (UPDLOCK, HOLDLOCK)
+            WHERE id = @invoiceItemId;
+          `);
+        const linkedRow = linked.recordset[0];
+        if (!linkedRow || String(linkedRow.invoice_id) !== String(invoiceId)
+          || String(linkedRow.item_type).toUpperCase() !== 'OTHER') {
+          throw paymentError('COMPENSATION_INVOICE_ITEM_CONFLICT', 409, 'A compensation record points to an invoice item that does not belong to this invoice.');
+        }
+        await transaction.request()
+          .input('invoiceItemId', sql.BigInt, linkedInvoiceItemId)
+          .input('invoiceId', sql.BigInt, invoiceId)
+          .input('description', sql.NVarChar(255), description)
+          .input('amount', sql.Decimal(14, 2), row.amount)
+          .query(`
+            UPDATE dbo.invoice_items
+            SET description = @description, quantity = 1,
+                unit_price = @amount, amount = @amount
+            WHERE id = @invoiceItemId AND invoice_id = @invoiceId AND item_type = 'OTHER';
+          `);
+      }
+    } else if (linkedInvoiceItemId != null) {
+      const linked = await transaction.request()
+        .input('invoiceItemId', sql.BigInt, linkedInvoiceItemId)
+        .query(`
+          SELECT id, invoice_id, item_type
+          FROM dbo.invoice_items WITH (UPDLOCK, HOLDLOCK)
+          WHERE id = @invoiceItemId;
+        `);
+      const linkedRow = linked.recordset[0];
+      if (!linkedRow || String(linkedRow.invoice_id) !== String(invoiceId)
+        || String(linkedRow.item_type).toUpperCase() !== 'OTHER') {
+        throw paymentError('COMPENSATION_INVOICE_ITEM_CONFLICT', 409, 'A compensation record points to an invoice item that does not belong to this invoice.');
+      }
+      const deleted = await transaction.request()
+        .input('invoiceItemId', sql.BigInt, linkedInvoiceItemId)
+        .input('invoiceId', sql.BigInt, invoiceId)
+        .query(`
+          DELETE FROM dbo.invoice_items
+          OUTPUT DELETED.id
+          WHERE id = @invoiceItemId AND invoice_id = @invoiceId AND item_type = 'OTHER';
+        `);
+      if (!deleted.recordset.length) {
+        throw paymentError('COMPENSATION_INVOICE_ITEM_CONFLICT', 409, 'The linked compensation invoice item changed before it could be removed.');
+      }
+      linkedInvoiceItemId = null;
+      await transaction.request()
+        .input('compensationId', sql.BigInt, row.compensation_id)
+        .query(`
+          UPDATE dbo.cleaning_task_equipment_compensations
+          SET invoice_item_id = NULL
+          WHERE id = @compensationId;
+        `);
+    }
+
+    synced.push({
+      compensation_id: String(row.compensation_id),
+      inspection_item_id: String(row.inspection_item_id),
+      decision,
+      amount: Number(row.amount),
+      room_number: row.room_number,
+      equipment_name: row.equipment_name,
+      asset_code: row.asset_code,
+      invoice_item_id: linkedInvoiceItemId == null ? null : String(linkedInvoiceItemId),
+    });
+  }
+  return synced;
+}
+
+async function recalculateCompensationInvoice(transaction, bookingId, invoiceId) {
+  const result = await transaction.request()
+    .input('bookingId', sql.BigInt, bookingId)
+    .input('invoiceId', sql.BigInt, invoiceId)
+    .query(`
+      UPDATE invoice
+      SET total_amount = totals.new_total,
+          amount_due = totals.new_amount_due,
+          status = CASE WHEN totals.new_amount_due <= 0 THEN 'PAID' ELSE 'ISSUED' END
+      OUTPUT INSERTED.id, INSERTED.invoice_number, INSERTED.status,
+        INSERTED.total_amount, INSERTED.deposit_paid, INSERTED.amount_due
+      FROM dbo.invoices AS invoice
+      JOIN dbo.bookings AS booking ON booking.id = invoice.booking_id
+      OUTER APPLY (
+        SELECT COALESCE(SUM(compensation.amount), 0) AS compensation_total
+        FROM dbo.cleaning_task_equipment_compensations AS compensation
+        JOIN dbo.cleaning_task_inspection_items AS item ON item.id = compensation.inspection_item_id
+        JOIN dbo.cleaning_task_inspections AS inspection ON inspection.id = item.inspection_id
+        JOIN dbo.cleaning_tasks AS task ON task.id = inspection.cleaning_task_id
+        JOIN dbo.booking_rooms AS booking_room ON booking_room.id = task.booking_room_id
+        WHERE booking_room.booking_id = booking.id AND compensation.decision = 'COMPENSATION'
+      ) AS compensation
+      OUTER APPLY (
+        SELECT COALESCE(SUM(payment.amount), 0) AS final_paid
+        FROM dbo.payments AS payment
+        WHERE payment.booking_id = booking.id
+          AND payment.payment_type = 'FINAL' AND payment.status = 'SUCCESS'
+      ) AS final_payments
+      CROSS APPLY (
+        SELECT booking.total_amount + compensation.compensation_total AS new_total,
+          CASE WHEN booking.total_amount + compensation.compensation_total - COALESCE(invoice.deposit_paid, 0) - final_payments.final_paid > 0
+            THEN booking.total_amount + compensation.compensation_total - COALESCE(invoice.deposit_paid, 0) - final_payments.final_paid
+            ELSE 0 END AS new_amount_due
+      ) AS totals
+      WHERE invoice.id = @invoiceId AND invoice.booking_id = @bookingId AND invoice.status = 'ISSUED';
+    `);
+  if (!result.recordset.length) {
+    throw paymentError('INVOICE_NOT_EDITABLE', 409, 'The invoice could not be recalculated because it is missing or no longer editable.');
+  }
+  return result.recordset[0];
 }
 
 async function createFinalPayment({ customerId, bookingCode, paymentCode, method = 'CASH' }) {
@@ -144,16 +352,32 @@ async function createCustomerDepositPayment({ customerId, bookingCode, paymentCo
              WHERE br.room_type_id = @roomTypeId AND b.id <> @bookingId
                AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn
                AND (b.status = 'CHECKED_IN'
-                 OR (b.status = 'PENDING_PAYMENT' AND b.created_at > DATEADD(minute, -15, SYSUTCDATETIME()))
-                 OR b.status = 'CONFIRMED')
-             ) AS reserved_count;
+                 OR (b.status = 'PENDING_PAYMENT' AND (
+                   b.created_at > DATEADD(minute, -15, DATEADD(hour, 7, SYSUTCDATETIME()))
+                   OR EXISTS (SELECT 1 FROM dbo.payments pending_payment
+                     WHERE pending_payment.booking_id = b.id
+                       AND pending_payment.payment_type = 'DEPOSIT'
+                       AND pending_payment.status = 'PENDING')
+                 ))
+                 OR (b.status = 'CONFIRMED' AND (CASE
+                   WHEN b.hold_extended = 1 AND b.expected_arrival_at IS NOT NULL AND b.hold_until IS NOT NULL THEN b.hold_until
+                   ELSE DATEADD(hour, 4, CASE WHEN b.created_at > DATEADD(hour, 14, CONVERT(datetime2, b.check_in_date))
+                     THEN b.created_at ELSE DATEADD(hour, 14, CONVERT(datetime2, b.check_in_date)) END)
+                 END > DATEADD(hour, 7, SYSUTCDATETIME())
+                   OR EXISTS (SELECT 1 FROM dbo.booking_rooms hold_br JOIN dbo.rooms hold_room ON hold_room.id = hold_br.room_id
+                      WHERE hold_br.booking_id = b.id AND hold_room.status = 'OCCUPIED')))
+             )) AS reserved_count;
         `);
       const row = inventory.recordset[0];
       if (!row || Number(row.inventory_count) - Number(row.reserved_count) < Number(selection.required_count)) { unavailable = true; break; }
     }
     if (unavailable) {
       await transaction.request().input('bookingId', sql.BigInt, booking.id).query(`
-        UPDATE dbo.bookings SET status = 'CANCELLED', cancellation_reason = 'ROOMS_UNAVAILABLE' WHERE id = @bookingId;
+        UPDATE dbo.bookings
+        SET status = 'CANCELLED', cancellation_reason = 'ROOMS_UNAVAILABLE',
+            cancellation_reason_code = N'ROOMS_UNAVAILABLE', cancellation_reason_note = NULL,
+            cancelled_at = SYSUTCDATETIME(), cancelled_by = NULL
+        WHERE id = @bookingId;
         UPDATE dbo.payments SET status = 'FAILED' WHERE booking_id = @bookingId AND payment_type = 'DEPOSIT' AND status = 'PENDING';
       `);
       await transaction.commit();
@@ -225,10 +449,9 @@ async function completeSimulatedDepositPayment({ paymentCode, customerId, succee
     await transaction.request()
       .input('paymentCode', sql.VarChar(30), paymentCode)
       .input('status', sql.VarChar(20), succeeded ? 'SUCCESS' : 'FAILED')
-      .input('paidAt', sql.DateTime2, succeeded ? new Date() : null)
       .query(`
         UPDATE dbo.payments
-        SET status = @status, paid_at = @paidAt
+        SET status = @status, paid_at = CASE WHEN @status = 'SUCCESS' THEN SYSUTCDATETIME() ELSE NULL END
         WHERE payment_code = @paymentCode;
       `);
 
@@ -239,6 +462,10 @@ async function completeSimulatedDepositPayment({ paymentCode, customerId, succee
         .query(`
           UPDATE dbo.bookings
           SET deposit_amount = COALESCE(deposit_amount, 0) + @amount,
+              hold_until = CASE WHEN status = 'PENDING_PAYMENT' AND hold_until IS NULL THEN
+                DATEADD(hour, 4, CASE WHEN created_at > DATEADD(hour, 14, CONVERT(datetime2, check_in_date))
+                  THEN created_at ELSE DATEADD(hour, 14, CONVERT(datetime2, check_in_date)) END)
+                ELSE hold_until END,
               status = CASE WHEN status = 'PENDING_PAYMENT' THEN 'CONFIRMED' ELSE status END
           WHERE id = @bookingId;
         `);
@@ -275,8 +502,12 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method, 
     if (!booking) throw paymentError('BOOKING_NOT_FOUND', 404, 'Không tìm thấy booking.');
     const bookingStatus = String(booking.status).toUpperCase();
     if (!['CHECKED_IN', 'CHECKED_OUT'].includes(bookingStatus)) throw paymentError('BOOKING_NOT_CHECKED_IN', 409, 'Booking phải đang lưu trú hoặc đã checkout còn dư nợ.');
-    const amount = Math.max(0, Number(booking.total_amount) - Number(booking.deposit_amount || 0) - Number(booking.final_paid_amount || 0));
-    if (!Number.isFinite(amount)) throw paymentError('INVALID_AMOUNT', 409, 'Không tính được số tiền checkout.');
+    const checkoutStaffResult = await transaction.request()
+      .input('createdByUserId', sql.BigInt, createdByUserId || null)
+      .query('SELECT TOP (1) id FROM dbo.staff WITH (UPDLOCK, HOLDLOCK) WHERE user_id = @createdByUserId;');
+    const checkoutStaffId = checkoutStaffResult.recordset[0]?.id ?? null;
+    if (!checkoutStaffId) throw paymentError('CHECKOUT_STAFF_NOT_FOUND', 409, 'Tài khoản lễ tân chưa có hồ sơ nhân viên.');
+    let amount = null;
     const pendingPayment = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
       SELECT TOP (1) id, payment_code, amount, payment_type, method, invoice_id
       FROM dbo.payments WITH (UPDLOCK, HOLDLOCK)
@@ -291,6 +522,10 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method, 
       const invoice = await transaction.request().input('invoiceId', sql.BigInt, pending.invoice_id).query(`
         SELECT invoice_number FROM dbo.invoices WHERE id = @invoiceId;
       `);
+      await transaction.request()
+        .input('paymentId', sql.BigInt, pending.id)
+        .input('checkoutStaffId', sql.BigInt, checkoutStaffId)
+        .query('UPDATE dbo.payments SET created_by_staff_id = COALESCE(created_by_staff_id, @checkoutStaffId) WHERE id = @paymentId;');
       await transaction.commit();
       return {
         payment_code: pending.payment_code,
@@ -306,10 +541,29 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method, 
     `);
     let invoiceId = null;
     const existingInvoice = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
-      SELECT TOP (1) id, invoice_number FROM dbo.invoices WITH (UPDLOCK, HOLDLOCK) WHERE booking_id = @bookingId;
+      SELECT TOP (1) id, invoice_number, status FROM dbo.invoices WITH (UPDLOCK, HOLDLOCK) WHERE booking_id = @bookingId;
     `);
+    const allPayments = await lockBookingPayments(transaction, bookingId);
+    assertNoPendingPayments(allPayments);
     let invoiceNumber = existingInvoice.recordset[0]?.invoice_number || null;
     if (existingInvoice.recordset.length) invoiceId = existingInvoice.recordset[0].id;
+    if (invoiceId && createdByUserId) {
+      await transaction.request()
+        .input('invoiceId', sql.BigInt, invoiceId)
+        .input('createdByUserId', sql.BigInt, createdByUserId)
+        .query(`
+          UPDATE dbo.invoices
+          SET created_by_user_id = COALESCE(created_by_user_id, @createdByUserId),
+              created_by_full_name = COALESCE(created_by_full_name,
+                (SELECT COALESCE(NULLIF(users.full_name, N''), roles.name)
+                 FROM dbo.users AS users LEFT JOIN dbo.roles AS roles ON roles.id = users.role_id
+                 WHERE users.id = @createdByUserId)),
+              created_by_staff_id = COALESCE(created_by_staff_id,
+                (SELECT id FROM dbo.staff WHERE user_id = @createdByUserId))
+          WHERE id = @invoiceId
+            AND (created_by_user_id IS NULL OR created_by_full_name IS NULL OR created_by_staff_id IS NULL);
+        `);
+    }
     if (bookingStatus === 'CHECKED_IN') {
       if (!invoiceId) {
         const totals = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
@@ -334,16 +588,21 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method, 
           .input('discountAmount', sql.Decimal(14, 2), Number(booking.discount_amount || 0))
           .input('totalAmount', sql.Decimal(14, 2), Number(booking.total_amount))
           .input('depositPaid', sql.Decimal(14, 2), depositPaid)
-          .input('amountDue', sql.Decimal(14, 2), method === 'CASH' ? 0 : amount)
-          .input('invoiceStatus', sql.VarChar(20), method === 'CASH' || amount <= 0 ? 'PAID' : 'ISSUED')
+          .input('amountDue', sql.Decimal(14, 2), 0)
+          .input('invoiceStatus', sql.VarChar(20), 'ISSUED')
           .input('createdByUserId', sql.BigInt, createdByUserId || null)
           .query(`
             INSERT INTO dbo.invoices
               (booking_id, invoice_number, room_amount, service_amount, discount_amount, tax_amount,
-               total_amount, deposit_paid, amount_due, status, issued_at, created_by_user_id)
+               total_amount, deposit_paid, amount_due, status, issued_at,
+               created_by_user_id, created_by_full_name, created_by_staff_id)
             OUTPUT INSERTED.id
             VALUES (@bookingId, @invoiceNumber, @roomAmount, @serviceAmount, @discountAmount, 0,
-                    @totalAmount, @depositPaid, @amountDue, @invoiceStatus, SYSUTCDATETIME(), @createdByUserId);
+                    @totalAmount, @depositPaid, @amountDue, @invoiceStatus, SYSUTCDATETIME(), @createdByUserId,
+                    (SELECT COALESCE(NULLIF(users.full_name, N''), roles.name)
+                     FROM dbo.users AS users LEFT JOIN dbo.roles AS roles ON roles.id = users.role_id
+                     WHERE users.id = @createdByUserId),
+                    (SELECT id FROM dbo.staff WHERE user_id = @createdByUserId));
           `);
         invoiceId = created.recordset[0].id;
 
@@ -385,6 +644,16 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method, 
         }
       }
     }
+    if (invoiceId && (existingInvoice.recordset.length === 0
+      || String(existingInvoice.recordset[0].status).toUpperCase() === 'ISSUED')) {
+      await syncBookingEquipmentCompensations(transaction, bookingId, invoiceId);
+      const updatedInvoice = await recalculateCompensationInvoice(transaction, bookingId, invoiceId);
+      amount = Number(updatedInvoice.amount_due);
+    }
+    if (amount == null) {
+      amount = Math.max(0, Number(booking.total_amount) - Number(booking.deposit_amount || 0) - Number(booking.final_paid_amount || 0));
+    }
+    if (!Number.isFinite(amount)) throw paymentError('INVALID_AMOUNT', 409, 'Không tính được số tiền checkout.');
     if (amount > 0) {
       await transaction.request()
         .input('paymentCode', sql.VarChar(30), paymentCode)
@@ -393,10 +662,12 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method, 
         .input('amount', sql.Decimal(14, 2), amount)
         .input('method', sql.VarChar(20), method)
         .input('status', sql.VarChar(20), method === 'CASH' ? 'SUCCESS' : 'PENDING')
+        .input('checkoutStaffId', sql.BigInt, checkoutStaffId)
         .query(`
-          INSERT INTO dbo.payments (payment_code, booking_id, invoice_id, amount, payment_type, method, status, paid_at)
+          INSERT INTO dbo.payments (payment_code, booking_id, invoice_id, amount, payment_type, method, status, paid_at, created_by_staff_id)
           VALUES (@paymentCode, @bookingId, @invoiceId, @amount, 'FINAL', @method, @status,
-            CASE WHEN @status = 'SUCCESS' THEN SYSUTCDATETIME() ELSE NULL END);
+            CASE WHEN @status = 'SUCCESS' THEN SYSUTCDATETIME() ELSE NULL END,
+            @checkoutStaffId);
         `);
     }
     if (invoiceId && (method === 'CASH' || amount <= 0)) {
@@ -407,7 +678,15 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method, 
     // For VNPay, keep the guest checked in and the room occupied until IPN
     // confirms payment. That leaves the booking retryable if the payment fails.
     if (bookingStatus === 'CHECKED_IN' && (method === 'CASH' || amount <= 0)) {
-      await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`UPDATE dbo.bookings SET status = 'CHECKED_OUT' WHERE id = @bookingId;`);
+      await transaction.request()
+        .input('bookingId', sql.BigInt, bookingId)
+        .input('checkoutStaffId', sql.BigInt, checkoutStaffId)
+        .query(`
+          UPDATE dbo.bookings SET status = 'CHECKED_OUT' WHERE id = @bookingId;
+          UPDATE dbo.booking_rooms
+          SET checked_out_by_staff_id = @checkoutStaffId, actual_check_out = SYSUTCDATETIME()
+          WHERE booking_id = @bookingId;
+        `);
       for (const room of rooms.recordset) {
         if (room.room_id != null) await transaction.request().input('roomId', sql.Int, room.room_id).query(`UPDATE dbo.rooms SET status = 'CLEANING' WHERE id = @roomId AND status = 'OCCUPIED';`);
       }
@@ -443,6 +722,7 @@ async function createReceptionInvoice(bookingId, createdByUserId) {
       FROM dbo.invoices WITH (UPDLOCK, HOLDLOCK)
       WHERE booking_id = @bookingId ORDER BY id DESC;
     `);
+    const bookingPayments = await lockBookingPayments(transaction, bookingId);
     if (existing.recordset.length) {
       if (createdByUserId) {
         await transaction.request()
@@ -450,8 +730,15 @@ async function createReceptionInvoice(bookingId, createdByUserId) {
           .input('createdByUserId', sql.BigInt, createdByUserId)
           .query(`
             UPDATE dbo.invoices
-            SET created_by_user_id = @createdByUserId
-            WHERE id = @invoiceId AND created_by_user_id IS NULL;
+            SET created_by_user_id = COALESCE(created_by_user_id, @createdByUserId),
+                created_by_full_name = COALESCE(created_by_full_name,
+                  (SELECT COALESCE(NULLIF(users.full_name, N''), roles.name)
+                   FROM dbo.users AS users LEFT JOIN dbo.roles AS roles ON roles.id = users.role_id
+                   WHERE users.id = @createdByUserId)),
+                created_by_staff_id = COALESCE(created_by_staff_id,
+                  (SELECT id FROM dbo.staff WHERE user_id = @createdByUserId))
+            WHERE id = @invoiceId
+              AND (created_by_user_id IS NULL OR created_by_full_name IS NULL OR created_by_staff_id IS NULL);
           `);
       }
       // Repair older invoices or invoices missing newly added booking items.
@@ -563,9 +850,17 @@ async function createReceptionInvoice(bookingId, createdByUserId) {
             AND existing.amount = expected.amount
           WHERE expected.occurrence > COALESCE(existing.row_count, 0);
         `);
+      let invoiceStatus = existing.recordset[0].status;
+      if (String(invoiceStatus).toUpperCase() === 'ISSUED') {
+        assertNoPendingPayments(bookingPayments);
+        await syncBookingEquipmentCompensations(transaction, bookingId, existing.recordset[0].id);
+        const updatedInvoice = await recalculateCompensationInvoice(transaction, bookingId, existing.recordset[0].id);
+        invoiceStatus = updatedInvoice.status;
+      }
       await transaction.commit();
-      return { invoice_id: Number(existing.recordset[0].id), invoice_number: existing.recordset[0].invoice_number, status: existing.recordset[0].status, created: false };
+      return { invoice_id: Number(existing.recordset[0].id), invoice_number: existing.recordset[0].invoice_number, status: invoiceStatus, created: false };
     }
+    assertNoPendingPayments(bookingPayments);
     if (String(booking.status).toUpperCase() !== 'CHECKED_IN') {
       throw paymentError('BOOKING_NOT_CHECKED_IN', 409, 'Chỉ tạo hóa đơn cho booking đang lưu trú.');
     }
@@ -586,7 +881,7 @@ async function createReceptionInvoice(bookingId, createdByUserId) {
     const depositPaid = Number(booking.deposit_amount || 0);
     const discountAmount = Number(booking.discount_amount || 0);
     const amountDue = Math.max(0, totalAmount - depositPaid - Number(booking.final_paid_amount || 0));
-    const invoiceStatus = amountDue <= 0 ? 'PAID' : 'ISSUED';
+    const invoiceStatus = 'ISSUED';
     const invoiceNumber = `INV-${String(booking.booking_code).replace(/[^A-Z0-9-]/gi, '')}`;
     const invoiceResult = await transaction.request()
       .input('bookingId', sql.BigInt, bookingId)
@@ -602,10 +897,15 @@ async function createReceptionInvoice(bookingId, createdByUserId) {
       .query(`
         INSERT INTO dbo.invoices
           (booking_id, invoice_number, room_amount, service_amount, discount_amount, tax_amount,
-           total_amount, deposit_paid, amount_due, status, issued_at, created_by_user_id)
+           total_amount, deposit_paid, amount_due, status, issued_at,
+           created_by_user_id, created_by_full_name, created_by_staff_id)
         OUTPUT INSERTED.id
         VALUES (@bookingId, @invoiceNumber, @roomAmount, @serviceAmount, @discountAmount, 0,
-                @totalAmount, @depositPaid, @amountDue, @invoiceStatus, SYSUTCDATETIME(), @createdByUserId);
+                @totalAmount, @depositPaid, @amountDue, @invoiceStatus, SYSUTCDATETIME(), @createdByUserId,
+                (SELECT COALESCE(NULLIF(users.full_name, N''), roles.name)
+                 FROM dbo.users AS users LEFT JOIN dbo.roles AS roles ON roles.id = users.role_id
+                 WHERE users.id = @createdByUserId),
+                (SELECT id FROM dbo.staff WHERE user_id = @createdByUserId));
       `);
     const invoiceId = invoiceResult.recordset[0].id;
 
@@ -629,16 +929,47 @@ async function createReceptionInvoice(bookingId, createdByUserId) {
       WHERE br.booking_id = @bookingId;
     `);
 
+    await syncBookingEquipmentCompensations(transaction, bookingId, invoiceId);
+    const updatedInvoice = await recalculateCompensationInvoice(transaction, bookingId, invoiceId);
+
     await transaction.commit();
-    return { invoice_id: Number(invoiceId), invoice_number: invoiceNumber, status: invoiceStatus, created: true };
+    return { invoice_id: Number(invoiceId), invoice_number: invoiceNumber, status: updatedInvoice.status, created: true };
   } catch (error) {
     try { await transaction.rollback(); } catch (rollbackError) { console.error('Invoice creation rollback error:', rollbackError); }
     throw error;
   }
 }
 
+async function syncReceptionBookingCompensations(bookingId) {
+  const pool = await getPool();
+  const transaction = new sql.Transaction(pool);
+  await transaction.begin(sql.ISOLATION_LEVEL.SERIALIZABLE);
+  try {
+    const bookingResult = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
+      SELECT id FROM dbo.bookings WITH (UPDLOCK, HOLDLOCK) WHERE id = @bookingId;
+    `);
+    if (!bookingResult.recordset.length) throw paymentError('BOOKING_NOT_FOUND', 404, 'Không tìm thấy booking.');
+    const invoiceResult = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
+      SELECT TOP (1) id, invoice_number, status FROM dbo.invoices WITH (UPDLOCK, HOLDLOCK)
+      WHERE booking_id = @bookingId ORDER BY id DESC;
+    `);
+    const invoice = invoiceResult.recordset[0];
+    if (!invoice) throw paymentError('INVOICE_NOT_AVAILABLE', 409, 'Booking chưa có hóa đơn được phát hành.');
+    if (String(invoice.status).toUpperCase() !== 'ISSUED') {
+      throw paymentError('INVOICE_NOT_EDITABLE', 409, 'Chỉ có thể đồng bộ bồi thường khi hóa đơn chưa thanh toán hoặc hủy.');
+    }
+    assertNoPendingPayments(await lockBookingPayments(transaction, bookingId));
+    const compensations = await syncBookingEquipmentCompensations(transaction, bookingId, invoice.id);
+    const updatedInvoice = await recalculateCompensationInvoice(transaction, bookingId, invoice.id);
+    await transaction.commit();
+    return { invoice: updatedInvoice, compensation_items: compensations };
+  } catch (error) {
+    try { await transaction.rollback(); } catch (rollbackError) { console.error('Compensation sync rollback error:', rollbackError); }
+    throw error;
+  }
+}
+
 async function completeVnpayPayment({ paymentCode, amountMinor, transactionNo, succeeded }) {
-  await expirePendingBookings();
   const pool = await getPool();
   const transaction = new sql.Transaction(pool);
   let transactionStarted = false;
@@ -650,9 +981,9 @@ async function completeVnpayPayment({ paymentCode, amountMinor, transactionNo, s
     const paymentResult = await transaction.request()
       .input('paymentCode', sql.VarChar(30), paymentCode)
       .query(`
-        SELECT TOP (1) p.id, p.booking_id, b.booking_code, b.status AS booking_status, p.invoice_id, p.amount, p.payment_type, p.method, p.status, p.vnpay_transaction_no
+        SELECT TOP (1) p.id, p.booking_id, b.booking_code, b.status AS booking_status, p.invoice_id, p.amount, p.payment_type, p.method, p.status, p.vnpay_transaction_no, p.created_by_staff_id
         FROM dbo.payments p WITH (UPDLOCK, HOLDLOCK)
-        JOIN dbo.bookings b ON b.id = p.booking_id
+        JOIN dbo.bookings b WITH (UPDLOCK, HOLDLOCK) ON b.id = p.booking_id
         WHERE p.payment_code = @paymentCode;
       `);
     const payment = paymentResult.recordset[0];
@@ -705,6 +1036,10 @@ async function completeVnpayPayment({ paymentCode, amountMinor, transactionNo, s
         .query(`
           UPDATE dbo.bookings
           SET deposit_amount = COALESCE(deposit_amount, 0) + @amount,
+              hold_until = CASE WHEN status = 'PENDING_PAYMENT' AND hold_until IS NULL THEN
+                DATEADD(hour, 4, CASE WHEN created_at > DATEADD(hour, 14, CONVERT(datetime2, check_in_date))
+                  THEN created_at ELSE DATEADD(hour, 14, CONVERT(datetime2, check_in_date)) END)
+                ELSE hold_until END,
               status = CASE WHEN status = 'PENDING_PAYMENT' THEN 'CONFIRMED' ELSE status END
           WHERE id = @bookingId;
         `);
@@ -716,7 +1051,13 @@ async function completeVnpayPayment({ paymentCode, amountMinor, transactionNo, s
       && String(payment.booking_status).toUpperCase() === 'CHECKED_IN') {
       await transaction.request()
         .input('bookingId', sql.BigInt, payment.booking_id)
-        .query(`UPDATE dbo.bookings SET status = 'CHECKED_OUT' WHERE id = @bookingId;`);
+        .input('checkoutStaffId', sql.BigInt, payment.created_by_staff_id)
+        .query(`
+          UPDATE dbo.bookings SET status = 'CHECKED_OUT' WHERE id = @bookingId;
+          UPDATE dbo.booking_rooms
+          SET checked_out_by_staff_id = @checkoutStaffId, actual_check_out = SYSUTCDATETIME()
+          WHERE booking_id = @bookingId;
+        `);
       await transaction.request()
         .input('bookingId', sql.BigInt, payment.booking_id)
         .query(`
@@ -853,99 +1194,11 @@ async function getPaymentList(customerId = null, successOnly = false) {
     ORDER BY p.id DESC;
   `);
 
-  return PaymentModel.fromRows(result.recordset);
+  return result.recordset;
 }
 
 async function getCustomerPaymentList(customerId) {
   return getPaymentList(customerId);
-}
-
-async function getInvoiceList(customerId = null) {
-  const pool = await getPool();
-  const request = pool.request();
-  const customerFilter = customerId == null ? '' : 'AND b.customer_id = @customerId';
-  if (customerId != null) request.input('customerId', sql.BigInt, customerId);
-  const result = await request.query(`
-    SELECT i.id, i.invoice_number, i.room_amount, i.service_amount, i.discount_amount,
-      i.tax_amount, i.total_amount, i.deposit_paid, i.amount_due, i.status, i.issued_at,
-      b.booking_code, b.check_in_date, b.check_out_date, b.guest_full_name, b.guest_phone,
-      b.guest_email, u.full_name AS customer_full_name, u.email AS customer_email,
-      u.phone AS customer_phone,
-      JSON_QUERY((SELECT ii.item_type, ii.description, ii.quantity, ii.unit_price, ii.amount
-        FROM dbo.invoice_items ii WHERE ii.invoice_id = i.id ORDER BY ii.id FOR JSON PATH)) AS items
-    FROM dbo.invoices i
-    JOIN dbo.bookings b ON b.id = i.booking_id
-    LEFT JOIN dbo.users u ON u.id = b.customer_id
-    WHERE 1 = 1 ${customerFilter}
-    ORDER BY i.issued_at DESC, i.id DESC;
-  `);
-  return InvoiceModel.fromRows(result.recordset);
-}
-
-async function getInvoiceDetails(invoiceId, customerId = null) {
-  const pool = await getPool();
-  const request = pool.request().input('invoiceId', sql.BigInt, invoiceId);
-  const customerFilter = customerId == null ? '' : 'AND b.customer_id = @customerId';
-  if (customerId != null) request.input('customerId', sql.BigInt, customerId);
-  const result = await request.query(`
-    SELECT i.id, i.invoice_number, i.room_amount, i.service_amount, i.discount_amount,
-      i.tax_amount, i.total_amount, i.deposit_paid, i.amount_due, i.status, i.issued_at,
-      b.booking_code, b.status AS booking_status, b.check_in_date, b.check_out_date,
-      b.guest_full_name, b.guest_phone, b.guest_email, b.adults, b.children,
-      b.special_request,
-      creator.full_name AS created_by_full_name,
-      (SELECT TOP (1) bg.id_card_number FROM dbo.booking_guests bg
-        WHERE bg.booking_id = b.id ORDER BY bg.id) AS guest_id_card_number,
-      u.full_name AS customer_full_name, u.email AS customer_email, u.phone AS customer_phone,
-      JSON_QUERY((SELECT ii.item_type,
-        ii.description,
-        CASE WHEN ii.item_type = 'SERVICE' THEN (
-          SELECT matched.room_number
-          FROM (
-            SELECT s.name AS description, bs.quantity, bs.unit_price, r.room_number,
-              ROW_NUMBER() OVER (
-                PARTITION BY s.name, bs.quantity, bs.unit_price
-                ORDER BY bs.id
-              ) AS occurrence
-            FROM dbo.booking_services bs
-            JOIN dbo.booking_rooms br ON br.id = bs.booking_room_id
-            JOIN dbo.services s ON s.id = bs.service_id
-            LEFT JOIN dbo.rooms r ON r.id = br.room_id
-            WHERE br.booking_id = b.id
-          ) matched
-          WHERE matched.description = ii.description
-            AND matched.quantity = ii.quantity
-            AND matched.unit_price = ii.unit_price
-            AND matched.occurrence = (
-              SELECT COUNT(*) FROM dbo.invoice_items previous
-              WHERE previous.invoice_id = ii.invoice_id
-                AND previous.item_type = 'SERVICE'
-                AND previous.description = ii.description
-                AND previous.quantity = ii.quantity
-                AND previous.unit_price = ii.unit_price
-                AND previous.id <= ii.id
-            )
-        ) END AS room_number,
-        ii.quantity, ii.unit_price, ii.amount
-        FROM dbo.invoice_items ii WHERE ii.invoice_id = i.id ORDER BY ii.id FOR JSON PATH)) AS items,
-      JSON_QUERY((SELECT p.payment_code, p.payment_type, p.method, p.amount, p.status,
-        p.paid_at, p.vnpay_transaction_no
-        FROM dbo.payments p
-        WHERE p.invoice_id = i.id
-          OR (p.invoice_id IS NULL AND p.booking_id = b.id)
-        ORDER BY p.paid_at DESC, p.id DESC FOR JSON PATH)) AS payments,
-      JSON_QUERY((SELECT r.room_number, r.floor, r.status AS room_status, rt.name AS room_type_name
-        FROM dbo.booking_rooms br
-        JOIN dbo.room_types rt ON rt.id = br.room_type_id
-        LEFT JOIN dbo.rooms r ON r.id = br.room_id
-        WHERE br.booking_id = b.id ORDER BY br.id FOR JSON PATH)) AS rooms
-    FROM dbo.invoices i
-    JOIN dbo.bookings b ON b.id = i.booking_id
-    LEFT JOIN dbo.users u ON u.id = b.customer_id
-    LEFT JOIN dbo.users creator ON creator.id = i.created_by_user_id
-    WHERE i.id = @invoiceId ${customerFilter};
-  `);
-  return result.recordset[0] || null;
 }
 
 async function getPaymentStatus({ paymentCode, customerId = null }) {
@@ -965,7 +1218,7 @@ async function getPaymentStatus({ paymentCode, customerId = null }) {
     JOIN dbo.bookings b ON b.id = p.booking_id
     WHERE p.payment_code = @paymentCode ${ownerFilter};
   `);
-  return PaymentModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function getPaymentDetails({ paymentCode, customerId = null }) {
@@ -993,7 +1246,7 @@ async function getPaymentDetails({ paymentCode, customerId = null }) {
     LEFT JOIN dbo.invoices i ON i.id = p.invoice_id
     WHERE p.payment_code = @paymentCode ${ownerFilter};
   `);
-  return PaymentModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function confirmPaymentByCode(paymentCode) {
@@ -1045,10 +1298,9 @@ async function confirmPaymentByCode(paymentCode) {
 
     await transaction.request()
       .input('paymentCode', sql.VarChar(30), paymentCode)
-      .input('paidAt', sql.DateTime2, new Date())
       .query(`
         UPDATE dbo.payments
-        SET status = 'SUCCESS', paid_at = @paidAt
+        SET status = 'SUCCESS', paid_at = SYSUTCDATETIME()
         WHERE payment_code = @paymentCode;
       `);
 
@@ -1083,6 +1335,10 @@ async function confirmPaymentByCode(paymentCode) {
         .query(`
           UPDATE dbo.bookings
           SET deposit_amount = COALESCE(deposit_amount, 0) + @amount,
+              hold_until = CASE WHEN status = 'PENDING_PAYMENT' AND hold_until IS NULL THEN
+                DATEADD(hour, 4, CASE WHEN created_at > DATEADD(hour, 14, CONVERT(datetime2, check_in_date))
+                  THEN created_at ELSE DATEADD(hour, 14, CONVERT(datetime2, check_in_date)) END)
+                ELSE hold_until END,
               status = CASE WHEN status = 'PENDING_PAYMENT' THEN 'CONFIRMED' ELSE status END
           WHERE id = @bookingId;
         `);
@@ -1099,4 +1355,4 @@ async function confirmPaymentByCode(paymentCode) {
   }
 }
 
-module.exports = { createFinalPayment, createCustomerDepositPayment, completeSimulatedDepositPayment, createReceptionCheckoutPayment, createReceptionInvoice, completeVnpayPayment, getVnpayPaymentContext, getPaymentList, getCustomerPaymentList, getInvoiceList, getInvoiceDetails, getPaymentStatus, getPaymentDetails, confirmPaymentByCode };
+module.exports = { createFinalPayment, createCustomerDepositPayment, completeSimulatedDepositPayment, createReceptionCheckoutPayment, createReceptionInvoice, syncReceptionBookingCompensations, completeVnpayPayment, getVnpayPaymentContext, getPaymentList, getCustomerPaymentList, getPaymentStatus, getPaymentDetails, confirmPaymentByCode };

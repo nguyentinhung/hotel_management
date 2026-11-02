@@ -5,6 +5,8 @@ import {
 } from '../services/roomTypeService';
 import { useToast } from '../components/ToastProvider';
 import DataTable from '../components/DataTable';
+import { checkRoomAvailability } from '../services/roomService';
+import { getHotelDate } from '../utils/checkInCountdown';
 
 type RoomType = {
   id: number;
@@ -34,6 +36,13 @@ type RoomTypeForm = {
 type Amenity = { id: number; name: string };
 const ROOM_TYPES_PAGE_SIZE = 10;
 
+function defaultAvailabilityDates() {
+  const checkIn = getHotelDate(new Date());
+  const checkOut = new Date(`${checkIn}T00:00:00.000Z`);
+  checkOut.setUTCDate(checkOut.getUTCDate() + 1);
+  return { checkIn, checkOut: checkOut.toISOString().slice(0, 10) };
+}
+
 const emptyForm: RoomTypeForm = {
   name: '',
   description: '',
@@ -52,6 +61,8 @@ const formatPrice = (price: number) => new Intl.NumberFormat('vi-VN', {
 export default function RoomTypesPage({ readOnly = false, roomCounts }: { readOnly?: boolean; roomCounts?: Record<number, number> }) {
   const { showToast } = useToast();
   const [roomTypes, setRoomTypes] = useState<RoomType[]>([]);
+  const [readyRoomCounts, setReadyRoomCounts] = useState<Record<number, number>>({});
+  const [availabilityDates, setAvailabilityDates] = useState(defaultAvailabilityDates);
   const [searchText, setSearchText] = useState('');
   const [appliedSearch, setAppliedSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
@@ -80,6 +91,25 @@ export default function RoomTypesPage({ readOnly = false, roomCounts }: { readOn
   const pageCount = Math.max(1, Math.ceil(visibleRoomTypes.length / ROOM_TYPES_PAGE_SIZE));
   const safePage = Math.min(currentPage, pageCount);
   const pagedRoomTypes = visibleRoomTypes.slice((safePage - 1) * ROOM_TYPES_PAGE_SIZE, safePage * ROOM_TYPES_PAGE_SIZE);
+
+  const loadAvailability = useCallback(async (checkInDate: string, checkOutDate: string) => {
+    if (checkOutDate <= checkInDate) {
+      showToast('Ngày trả phòng phải sau ngày nhận phòng.', 'error');
+      return;
+    }
+    try {
+      const availability = await checkRoomAvailability({
+        check_in_date: checkInDate,
+        check_out_date: checkOutDate,
+        adults: 1,
+        children: 0,
+      });
+      setReadyRoomCounts(Object.fromEntries(availability.data.map((item) => [item.id, item.available_rooms])));
+    } catch (availabilityError) {
+      setReadyRoomCounts({});
+      showToast(availabilityError instanceof Error ? availabilityError.message : 'Không thể cập nhật số phòng sẵn sàng.', 'error');
+    }
+  }, [showToast]);
 
   const loadAmenities = useCallback(async () => {
     if (readOnly) return;
@@ -139,7 +169,11 @@ export default function RoomTypesPage({ readOnly = false, roomCounts }: { readOn
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [showToast]);
+
+  useEffect(() => {
+    void loadAvailability(availabilityDates.checkIn, availabilityDates.checkOut);
+  }, [availabilityDates, loadAvailability]);
 
   const openCreateForm = () => {
     setEditingRoomTypeId(null);
@@ -274,9 +308,15 @@ export default function RoomTypesPage({ readOnly = false, roomCounts }: { readOn
           <input type="search" value={searchText} onChange={(event) => setSearchText(event.target.value)} placeholder="Tìm theo tên loại phòng..." />
         </label>
         <button className="room-type-search-submit" type="submit" disabled={isLoading}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.5"/><path d="m16 16 4.5 4.5"/></svg>Search</button>
-        <button className="room-type-search-refresh dashboard-refresh-button" type="button" onClick={() => { setSearchText(''); setAppliedSearch(''); setCurrentPage(1); void loadRoomTypes(); }} disabled={isLoading}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.5 9a7 7 0 0 1 11.6-2L20 12M4 12l2.9 5a7 7 0 0 0 11.6-2"/></svg>Làm mới</button>
+        <button className="room-type-search-refresh dashboard-refresh-button" type="button" onClick={() => { setSearchText(''); setAppliedSearch(''); setCurrentPage(1); void loadRoomTypes(); void loadAvailability(availabilityDates.checkIn, availabilityDates.checkOut); }} disabled={isLoading}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.5 9a7 7 0 0 1 11.6-2L20 12M4 12l2.9 5a7 7 0 0 0 11.6-2"/></svg>Làm mới</button>
         {!readOnly && <button className="room-type-search-add btn btn-primary" type="button" onClick={openCreateForm}>+ Thêm loại phòng</button>}
       </form>
+
+      <div className="room-type-availability-filter">
+        <label><span>Ngày nhận phòng</span><input type="date" value={availabilityDates.checkIn} onChange={(event) => setAvailabilityDates((current) => ({ ...current, checkIn: event.target.value }))} /></label>
+        <label><span>Ngày trả phòng</span><input type="date" min={availabilityDates.checkIn} value={availabilityDates.checkOut} onChange={(event) => setAvailabilityDates((current) => ({ ...current, checkOut: event.target.value }))} /></label>
+        <small>Số phòng sẵn sàng được tính theo booking trong khoảng ngày đã chọn.</small>
+      </div>
 
       {isLoading ? (
         <p role="status">Đang tải danh sách loại phòng...</p>
@@ -311,7 +351,7 @@ export default function RoomTypesPage({ readOnly = false, roomCounts }: { readOn
         <DataTable className="room-types-table-wrap">
           <table className={`room-types-table${readOnly ? '' : ' room-types-table-admin'}`}>
             <thead>
-              <tr><th>Tên loại phòng</th><th>Mô tả</th><th>Giá cơ bản / đêm</th><th>Sức chứa</th>{!readOnly && <th>Thao tác</th>}</tr>
+              <tr><th>Tên loại phòng</th><th>Mô tả</th><th>Giá cơ bản / đêm</th><th>Sức chứa</th><th>Phòng sẵn sàng</th>{!readOnly && <th>Thao tác</th>}</tr>
             </thead>
             <tbody>
               {pagedRoomTypes.map((roomType) => (
@@ -338,6 +378,7 @@ export default function RoomTypesPage({ readOnly = false, roomCounts }: { readOn
                   <td title={roomType.description || '—'}>{roomType.description || '—'}</td>
                   <td>{formatPrice(roomType.base_price)}</td>
                   <td>{roomType.max_adults} người lớn · {roomType.max_children} trẻ em</td>
+                  <td>{String(readyRoomCounts[roomType.id] ?? 0).padStart(2, '0')} phòng</td>
                   {!readOnly && <td><div className="room-type-row-actions">
                     <button className="room-type-delete-button" type="button" aria-label={`Xóa ${roomType.name}`} title="Xóa loại phòng" onClick={(event) => { event.stopPropagation(); setDeleteError(''); setPendingDeleteRoomType(roomType); }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m4 4v6m6-6v6"/></svg></button>
                     <button className="room-type-edit-button" type="button" aria-label={`Cập nhật ${roomType.name}`} title="Cập nhật" onClick={(event) => { event.stopPropagation(); openEditForm(roomType); }}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 5 4 4M4 20l4-.8L19 8a2.1 2.1 0 0 0-3-3L5 16z"/><path d="M13 7 17 11"/></svg></button>

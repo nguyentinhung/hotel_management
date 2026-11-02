@@ -1,4 +1,11 @@
 const reviewService = require('../services/reviewService');
+const { toCreateReviewRequest } = require('../dto/review/create-review/create-review-request.dto');
+const { toUpdateReviewRequest } = require('../dto/review/update-review/update-review-request.dto');
+const { toReviewListResponse } = require('../dto/review/view-review-list/review-list-response.dto');
+const { toCustomerReviewListResponse } = require('../dto/review/view-customer-review-list/customer-review-list-response.dto');
+const { toReviewDetailsResponse } = require('../dto/review/view-review-details/review-details-response.dto');
+const { toCreateReviewResponse } = require('../dto/review/create-review/create-review-response.dto');
+const { toUpdateReviewResponse } = require('../dto/review/update-review/update-review-response.dto');
 
 function sendError(res, error) {
   const status = Number(error.statusCode) || 500;
@@ -7,27 +14,27 @@ function sendError(res, error) {
 }
 
 async function getDashboardReviews(req, res) {
-  try { return res.json({ reviews: await reviewService.dashboardList(req.auth.roleCode) }); }
+  try { return res.json(toReviewListResponse(await reviewService.dashboardList(req.auth.roleCode))); }
   catch (error) { return sendError(res, error); }
 }
 
 async function getCustomerBookings(req, res) {
-  try { return res.json({ bookings: await reviewService.customerBookings(req.auth.userId) }); }
+  try { return res.json(toCustomerReviewListResponse(await reviewService.customerBookings(req.auth.userId))); }
   catch (error) { return sendError(res, error); }
 }
 
 async function getMyReview(req, res) {
-  try { return res.json(await reviewService.getMine(req.params.reviewId, req.auth.userId)); }
+  try { return res.json(toReviewDetailsResponse(await reviewService.getMine(req.params.reviewId, req.auth.userId))); }
   catch (error) { return sendError(res, error); }
 }
 
 async function createReview(req, res) {
-  try { return res.status(201).json(await reviewService.create(req.body, req.auth.userId)); }
+  try { return res.status(201).json(toCreateReviewResponse(await reviewService.create(toCreateReviewRequest(req.body), req.auth.userId))); }
   catch (error) { return sendError(res, error); }
 }
 
 async function updateReview(req, res) {
-  try { return res.json(await reviewService.update(req.params.reviewId, req.body, req.auth.userId)); }
+  try { return res.json(toUpdateReviewResponse(await reviewService.update(req.params.reviewId, toUpdateReviewRequest(req.body), req.auth.userId))); }
   catch (error) { return sendError(res, error); }
 }
 

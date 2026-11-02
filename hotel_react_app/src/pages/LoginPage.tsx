@@ -3,8 +3,13 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { login } from '../services/authService';
 import { resolveRole } from '../utils/role';
 import { useToast } from '../components/ToastProvider';
+import PasswordToggle from '../components/PasswordToggle';
 
-export default function LoginPage() {
+type LoginPageProps = { audience?: 'customer' | 'staff' };
+
+const staffRoles = ['ADMIN', 'RECEPTIONIST', 'HOUSEKEEPER'];
+
+export default function LoginPage({ audience = 'customer' }: LoginPageProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const { showToast } = useToast();
@@ -20,13 +25,22 @@ export default function LoginPage() {
     setIsSubmitting(true);
     try {
       const authResponse = await login(email, password);
-      const role = resolveRole(authResponse.user) || 'CUSTOMER';
+      const role = resolveRole(authResponse.user);
+      const allowed = audience === 'staff' ? staffRoles.includes(role || '') : role === 'CUSTOMER';
+      if (!role || !allowed) {
+        const message = audience === 'staff'
+          ? 'Tài khoản không có quyền truy cập khu vực nhân viên.'
+          : 'Vui lòng đăng nhập bằng tài khoản khách hàng.';
+        setError(message);
+        showToast(message, 'error');
+        return;
+      }
       const userWithRole = { ...authResponse.user, role };
       showToast('Đăng nhập thành công.', 'success');
       localStorage.setItem('user', JSON.stringify(userWithRole));
       localStorage.setItem('accessToken', authResponse.accessToken);
       localStorage.setItem('refreshToken', authResponse.refreshToken);
-      if (role === 'CUSTOMER') {
+      if (audience === 'customer') {
         const requestedPath = new URLSearchParams(location.search).get('redirect');
         const safePath = requestedPath?.startsWith('/') && !requestedPath.startsWith('//') ? requestedPath : '/';
         navigate(safePath);
@@ -57,8 +71,8 @@ export default function LoginPage() {
         </section>
         <section className="login-form-wrap auth-form-wrap">
           <div className="login-form auth-form">
-            <nav className="auth-switch"><span>Chưa có tài khoản?</span><Link to="/register">Đăng ký</Link></nav>
-            <header className="auth-form-heading"><h1>Đăng nhập</h1><p>Chào mừng bạn trở lại Hotel Lumière</p></header>
+            {audience === 'customer' && <nav className="auth-switch"><span>Chưa có tài khoản?</span><Link to="/register">Đăng ký</Link></nav>}
+            <header className="auth-form-heading"><h1>{audience === 'staff' ? 'Đăng nhập nhân viên' : 'Đăng nhập'}</h1><p>Chào mừng bạn trở lại Hotel Lumière</p></header>
             <form onSubmit={handleSubmit}>
               {error && <div className="error-text" role="alert">{error}</div>}
               <div className="form-group auth-field">
@@ -67,7 +81,7 @@ export default function LoginPage() {
               </div>
               <div className="form-group auth-field">
                 <label htmlFor="password">Mật khẩu</label>
-                <div className="auth-input-shell"><span className="auth-lock-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><rect x="4.5" y="10" width="15" height="11" rx="2" stroke="currentColor" strokeWidth="1.8"/><path d="M8 10V7a4 4 0 1 1 8 0v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/><circle cx="12" cy="15.5" r="1" fill="currentColor"/></svg></span><input id="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Nhập mật khẩu" /><button className="auth-password-toggle" type="button" onClick={() => setShowPassword((visible) => !visible)} aria-label={showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}>{showPassword ? 'Ẩn' : 'Hiện'}</button></div>
+                <div className="auth-input-shell"><span className="auth-lock-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><rect x="4.5" y="10" width="15" height="11" rx="2" stroke="currentColor" strokeWidth="1.8"/><path d="M8 10V7a4 4 0 1 1 8 0v3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/><circle cx="12" cy="15.5" r="1" fill="currentColor"/></svg></span><input id="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Nhập mật khẩu" /><PasswordToggle visible={showPassword} onClick={() => setShowPassword((visible) => !visible)} label="password" /></div>
               </div>
               <div className="auth-options"><Link to="/forgot-password">Quên mật khẩu?</Link></div>
               <button type="submit" className="primary-btn auth-submit" disabled={isSubmitting}>{isSubmitting ? 'Đang đăng nhập...' : <>Đăng nhập <span aria-hidden="true">→</span></>}</button>

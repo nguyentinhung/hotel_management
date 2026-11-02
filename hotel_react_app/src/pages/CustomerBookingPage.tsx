@@ -7,21 +7,32 @@ import type { CustomerBookingResponse, Promotion, RoomAvailabilityItem, ServiceI
 import { useToast } from '../components/ToastProvider';
 import { getActivePromotions, getServices } from '../services/homeService';
 import { validatePromotion as validatePromotionApi } from '../services/promotionValidationService';
+import { getHotelDate } from '../utils/checkInCountdown';
 
 const vnpayEnabled = import.meta.env.VITE_VNPAY_ENABLED === 'true';
-const dateValue = (date: Date) => date.toISOString().slice(0, 10);
-const tomorrowValue = () => {
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  return dateValue(tomorrow);
+const dateValue = getHotelDate;
+const nextDateValue = (date: string) => {
+  const tomorrow = new Date(`${date}T00:00:00.000Z`);
+  tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+  return tomorrow.toISOString().slice(0, 10);
 };
 
 export default function CustomerBookingPage() {
   const { showToast } = useToast();
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const [checkIn, setCheckIn] = useState(params.get('check_in_date') || dateValue(new Date()));
-  const [checkOut, setCheckOut] = useState(params.get('check_out_date') || tomorrowValue());
+  const [checkIn, setCheckIn] = useState(() => {
+    const today = dateValue(new Date());
+    const requestedCheckIn = params.get('check_in_date');
+    return requestedCheckIn && requestedCheckIn >= today ? requestedCheckIn : today;
+  });
+  const [checkOut, setCheckOut] = useState(() => {
+    const today = dateValue(new Date());
+    const requestedCheckIn = params.get('check_in_date');
+    const initialCheckIn = requestedCheckIn && requestedCheckIn >= today ? requestedCheckIn : today;
+    const requestedCheckOut = params.get('check_out_date');
+    return requestedCheckOut && requestedCheckOut > initialCheckIn ? requestedCheckOut : nextDateValue(initialCheckIn);
+  });
   const [adults, setAdults] = useState(Number(params.get('adults') || 2));
   const [children, setChildren] = useState(Number(params.get('children') || 0));
   const [roomOptions, setRoomOptions] = useState<RoomAvailabilityItem[]>([]);
@@ -37,7 +48,6 @@ export default function CustomerBookingPage() {
   const [specialRequest, setSpecialRequest] = useState('');
   const [serviceOptions, setServiceOptions] = useState<ServiceItem[]>([]);
   const [selectedServiceQuantities, setSelectedServiceQuantities] = useState<Record<number, number>>({});
-  const [booking, setBooking] = useState<CustomerBookingResponse | null>(null);
   const [promotionCode, setPromotionCode] = useState('');
   const [appliedPromotion, setAppliedPromotion] = useState<{ promotion_code: string; discount_amount: number; subtotal: number } | null>(null);
   const [promotionMessage, setPromotionMessage] = useState('Nhập mã khuyến mãi trước, sau đó nhấn Áp dụng.');
@@ -171,7 +181,7 @@ export default function CustomerBookingPage() {
       showToast(message, 'error');
       return;
     }
-    if (new Date(`${checkIn}T00:00:00`) < new Date(`${dateValue(new Date())}T00:00:00`)) {
+    if (checkIn < dateValue(new Date())) {
       setError('Ngày nhận phòng không thể ở quá khứ.');
       showToast('Ngày nhận phòng không thể ở quá khứ.', 'error');
       return;
@@ -187,6 +197,7 @@ export default function CustomerBookingPage() {
       return;
     }
 
+    let createdBooking: CustomerBookingResponse | null = null;
     try {
       setIsSubmitting(true);
       setError('');
@@ -205,16 +216,21 @@ export default function CustomerBookingPage() {
         },
         accessToken,
       );
-      setBooking(result.booking);
+      createdBooking = result.booking;
       const method = vnpayEnabled ? 'VNPAY' : 'SIMULATED';
       const deposit = await createFinalPayment(result.booking.booking_code, method, 'DEPOSIT');
       if (method === 'VNPAY') {
         if (!deposit.payment_url) throw new Error('Backend không trả về đường dẫn VNPay.');
+        sessionStorage.setItem('hotelManagement.vnpayReturnPath', '/my-bookings');
         window.location.assign(deposit.payment_url);
       } else {
         navigate(`/make-payment?bookingCode=${encodeURIComponent(result.booking.booking_code)}&paymentType=DEPOSIT&paymentCode=${encodeURIComponent(deposit.payment_code)}`);
       }
     } catch (err) {
+      if (createdBooking) {
+        navigate(`/my-bookings?paymentResult=failed&bookingCode=${encodeURIComponent(createdBooking.booking_code)}`, { replace: true });
+        return;
+      }
       const message = err instanceof Error ? err.message : 'Không thể tạo đặt phòng. Vui lòng thử lại.';
       setError(message);
       showToast(message, 'error');
@@ -243,43 +259,6 @@ export default function CustomerBookingPage() {
           <h1>Vui lòng dùng tài khoản khách hàng</h1>
           <p>Tài khoản lễ tân, quản trị viên hoặc nhân viên không thể tạo đặt phòng trực tuyến.</p>
           <Link className="btn btn-primary" to="/login">Đăng nhập tài khoản khách hàng</Link>
-        </div>
-      </main>
-    );
-  }
-
-  if (booking) {
-    const requiredDepositAmount = booking.required_deposit_amount
-      ?? Math.ceil(Number(booking.total_amount || 0) * 0.3);
-    return (
-      <main className="container section-block">
-        <div className="empty-state-box">
-          <h1>Đặt phòng thành công</h1>
-          <p>Mã đặt phòng: <strong>{booking.booking_code}</strong></p>
-          <p>{booking.room_type_name}{booking.room_number ? ` · Phòng ${booking.room_number}` : ' · Số phòng sẽ được lễ tân sắp xếp trước ngày nhận phòng'}</p>
-          <p>{booking.check_in_date} đến {booking.check_out_date} · {booking.nights} đêm</p>
-          <p>Tổng tiền: <strong>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(booking.total_amount)}</strong></p>
-          <p>Khoản cọc tối thiểu (30% tổng tiền): <strong>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(requiredDepositAmount)}</strong></p>
-          <p>{vnpayEnabled
-            ? 'Booking đã được tạo. Vui lòng hoàn tất cọc VNPay để xác nhận thanh toán.'
-            : 'Booking đã được tạo. Đang mở màn hình mô phỏng đã nhận tiền cọc bằng tiền mặt; không kết nối VNPay.'}</p>
-          {error && !vnpayEnabled && (
-            <button className="btn btn-primary" type="button" disabled={isSubmitting} onClick={async () => {
-              try {
-                setIsSubmitting(true);
-                const deposit = await createFinalPayment(booking.booking_code, 'SIMULATED', 'DEPOSIT');
-                navigate(`/make-payment?bookingCode=${encodeURIComponent(booking.booking_code)}&paymentType=DEPOSIT&paymentCode=${encodeURIComponent(deposit.payment_code)}`);
-              } catch (paymentError) {
-                const message = paymentError instanceof Error ? paymentError.message : 'Không thể tạo giao dịch mô phỏng.';
-                setError(message);
-                showToast(message, 'error');
-              } finally {
-                setIsSubmitting(false);
-              }
-            }}>{isSubmitting ? 'Đang mở mô phỏng...' : 'Thử tạo giao dịch mô phỏng lại'}</button>
-          )}
-          {error && <p className="inline-error" role="alert">{error}</p>}
-          <Link className="btn btn-primary" to="/">Về trang chủ</Link>
         </div>
       </main>
     );

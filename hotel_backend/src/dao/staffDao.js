@@ -1,6 +1,5 @@
 const sql = require('mssql');
 const { getPool } = require('../config/db');
-const StaffModel = require('../models/staffModel');
 
 const staffSelect = `
   SELECT s.id, s.user_id, s.staff_code, s.gender, s.date_of_birth, s.address,
@@ -16,13 +15,13 @@ async function findAll(search = '') {
   const result = await request.query(`${staffSelect}
     WHERE (@search = '%%' OR s.staff_code LIKE @search OR u.full_name LIKE @search OR u.email LIKE @search OR u.phone LIKE @search OR s.position LIKE @search)
     ORDER BY s.staff_code;`);
-  return StaffModel.fromRows(result.recordset);
+  return result.recordset;
 }
 
 async function findById(id) {
   const pool = await getPool();
   const result = await pool.request().input('id', sql.BigInt, id).query(`${staffSelect} WHERE s.id = @id;`);
-  return StaffModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function updateInfo(id, data) {
@@ -43,7 +42,7 @@ async function updateInfo(id, data) {
       UPDATE u SET full_name = @fullName, email = @email, phone = @phone
       FROM dbo.users u INNER JOIN dbo.staff s ON s.user_id = u.id WHERE s.id = @id;
       UPDATE dbo.staff SET gender = @gender, date_of_birth = @dateOfBirth, address = @address,
-        position = @position, hire_date = @hireDate, updated_at = SYSDATETIME()
+        position = @position, hire_date = @hireDate, updated_at = SYSUTCDATETIME()
       WHERE id = @id;
       COMMIT TRANSACTION;
     END TRY
@@ -60,7 +59,7 @@ async function updateStatus(id, status) {
   const result = await pool.request()
     .input('id', sql.BigInt, id)
     .input('status', sql.VarChar(30), status)
-    .query(`UPDATE dbo.staff SET employment_status = @status, updated_at = SYSDATETIME() WHERE id = @id; SELECT @@ROWCOUNT AS affected;`);
+    .query(`UPDATE dbo.staff SET employment_status = @status, updated_at = SYSUTCDATETIME() WHERE id = @id; SELECT @@ROWCOUNT AS affected;`);
   return result.recordset[0]?.affected > 0;
 }
 

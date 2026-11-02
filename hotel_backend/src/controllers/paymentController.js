@@ -1,47 +1,26 @@
-const { makePayment, simulateDepositPayment, getPayments, getCustomerPayments, getInvoices, getInvoiceDetails, getPaymentStatus, getPaymentDetails, confirmPayment } = require('../services/paymentService');
-
-async function getInvoiceList(req, res) {
-  try {
-    const customerId = req.auth.roleCode === 'CUSTOMER' ? req.auth.userId : null;
-    return res.json(await getInvoices(customerId));
-  } catch (error) {
-    console.error('Get invoice list error:', error);
-    return res.status(500).json({ message: 'Khong the tai danh sach hoa don.' });
-  }
-}
-
-async function getInvoiceDetail(req, res) {
-  const invoiceId = Number(req.params.invoiceId);
-  if (!Number.isSafeInteger(invoiceId) || invoiceId < 1) {
-    return res.status(400).json({ message: 'Mã hóa đơn không hợp lệ.' });
-  }
-  try {
-    const customerId = req.auth.roleCode === 'CUSTOMER' ? req.auth.userId : null;
-    const invoice = await getInvoiceDetails(invoiceId, customerId);
-    if (!invoice) return res.status(404).json({ message: 'Không tìm thấy hóa đơn.' });
-    return res.json(invoice);
-  } catch (error) {
-    console.error('Get invoice detail error:', error);
-    return res.status(500).json({ message: 'Không thể tải chi tiết hóa đơn.' });
-  }
-}
+const { makePayment, simulateDepositPayment, getPayments, getCustomerPayments, getPaymentStatus, getPaymentDetails, confirmPayment } = require('../services/paymentService');
+const { toMakePaymentRequest } = require('../dto/payment/make-payment/make-payment-request.dto');
+const { toMakePaymentResponse } = require('../dto/payment/make-payment/make-payment-response.dto');
+const { toPaymentStatusResponse } = require('../dto/payment/view-payment-status/payment-status-response.dto');
+const { toPaymentDetailsResponse } = require('../dto/payment/view-payment-details/payment-details-response.dto');
+const { toConfirmPaymentResponse } = require('../dto/payment/confirm-payment/confirm-payment-response.dto');
+const { toSimulatePaymentRequest } = require('../dto/payment/simulate-payment/simulate-payment-request.dto');
+const { toSimulatePaymentResponse } = require('../dto/payment/simulate-payment/simulate-payment-response.dto');
+const { toPaymentListReceptionResponse } = require('../dto/payment/view-payment-list-reception/payment-list-reception-response.dto');
+const { toPaymentListCustomerResponse } = require('../dto/payment/view-payment-list-customer/payment-list-customer-response.dto');
 
 async function createPayment(req, res) {
   try {
+    const { booking_code: bookingCode, payment_type: paymentType, method } = toMakePaymentRequest(req.body);
     const payment = await makePayment({
       customerId: req.auth.userId,
-      bookingCode: req.body?.booking_code,
-      paymentType: req.body?.payment_type,
-      method: req.body?.method,
+      bookingCode,
+      paymentType,
+      method,
       ipAddress: req.ip,
     });
 
-    return res.status(201).json({
-      payment_code: payment.payment_code,
-      amount: Number(payment.amount),
-      status: payment.status,
-      payment_url: payment.payment_url,
-    });
+    return res.status(201).json(toMakePaymentResponse(payment));
   } catch (error) {
     if (error.statusCode) {
       return res.status(error.statusCode).json({ message: error.message });
@@ -52,54 +31,10 @@ async function createPayment(req, res) {
   }
 }
 
-function serializePayments(payments) {
-  const parseJsonArray = (value) => {
-    if (!value) return [];
-    return Array.isArray(value) ? value : JSON.parse(value);
-  };
-
-  return payments.map((payment) => ({
-    payment_code: payment.payment_code,
-    booking_code: payment.booking_code,
-    guest_full_name: payment.guest_full_name,
-    guest_phone: payment.guest_phone,
-    guest_email: payment.guest_email,
-    check_in_date: payment.check_in_date,
-    check_out_date: payment.check_out_date,
-    adults: Number(payment.adults),
-    children: Number(payment.children),
-    booking_status: payment.booking_status,
-    booking_total_amount: Number(payment.booking_total_amount),
-    booking_deposit_amount: Number(payment.booking_deposit_amount),
-    customer_full_name: payment.customer_full_name,
-    customer_email: payment.customer_email,
-    customer_phone: payment.customer_phone,
-    booking_rooms: parseJsonArray(payment.booking_rooms),
-    booking_guests: parseJsonArray(payment.booking_guests),
-    invoice_number: payment.invoice_number,
-    invoice_room_amount: payment.invoice_room_amount == null ? null : Number(payment.invoice_room_amount),
-    invoice_service_amount: payment.invoice_service_amount == null ? null : Number(payment.invoice_service_amount),
-    invoice_discount_amount: payment.invoice_discount_amount == null ? null : Number(payment.invoice_discount_amount),
-    invoice_tax_amount: payment.invoice_tax_amount == null ? null : Number(payment.invoice_tax_amount),
-    invoice_total_amount: payment.invoice_total_amount == null ? null : Number(payment.invoice_total_amount),
-    invoice_deposit_paid: payment.invoice_deposit_paid == null ? null : Number(payment.invoice_deposit_paid),
-    invoice_amount_due: payment.invoice_amount_due == null ? null : Number(payment.invoice_amount_due),
-    invoice_status: payment.invoice_status,
-    invoice_issued_at: payment.invoice_issued_at,
-    invoice_items: parseJsonArray(payment.invoice_items),
-    payment_type: payment.payment_type,
-    method: payment.method,
-    amount: Number(payment.amount),
-    status: payment.status,
-    paid_at: payment.paid_at,
-    vnpay_transaction_no: payment.vnpay_transaction_no,
-  }));
-}
-
 async function getPaymentList(_req, res) {
   try {
     const payments = await getPayments();
-    return res.json(serializePayments(payments));
+    return res.json(toPaymentListReceptionResponse(payments));
   } catch (error) {
     console.error('Get payment list error:', error);
     return res.status(500).json({ message: 'Không thể tải danh sách thanh toán.' });
@@ -109,7 +44,7 @@ async function getPaymentList(_req, res) {
 async function getCustomerPaymentList(req, res) {
   try {
     const payments = await getCustomerPayments(req.auth.userId);
-    return res.json(serializePayments(payments));
+    return res.json(toPaymentListCustomerResponse(payments));
   } catch (error) {
     console.error('Get customer payment list error:', error);
     return res.status(500).json({ message: 'Không thể tải lịch sử thanh toán của bạn.' });
@@ -123,14 +58,7 @@ async function getPaymentStatusRequest(req, res) {
     const customerId = req.auth.roleCode === 'CUSTOMER' ? req.auth.userId : null;
     const payment = await getPaymentStatus(paymentCode, customerId);
     if (!payment) return res.status(404).json({ message: 'Không tìm thấy giao dịch.' });
-    return res.json({
-      payment_code: payment.payment_code,
-      booking_code: payment.booking_code,
-      payment_type: payment.payment_type,
-      amount: Number(payment.amount),
-      status: payment.status,
-      invoice_id: payment.invoice_id == null ? null : Number(payment.invoice_id),
-    });
+    return res.json(toPaymentStatusResponse(payment));
   } catch (error) {
     console.error('Get payment status error:', error);
     return res.status(500).json({ message: 'Không thể kiểm tra trạng thái giao dịch.' });
@@ -146,21 +74,7 @@ async function getPaymentDetailsRequest(req, res) {
     const customerId = req.auth.roleCode === 'CUSTOMER' ? req.auth.userId : null;
     const payment = await getPaymentDetails(paymentCode, customerId);
     if (!payment) return res.status(404).json({ message: 'KhÃ´ng tÃ¬m tháº¥y giao dá»‹ch.' });
-    return res.json({
-      id: Number(payment.id),
-      payment_code: payment.payment_code,
-      booking_id: Number(payment.booking_id),
-      booking_code: payment.booking_code,
-      invoice_id: payment.invoice_id == null ? null : Number(payment.invoice_id),
-      invoice_number: payment.invoice_number || null,
-      payment_type: payment.payment_type,
-      amount: Number(payment.amount),
-      method: payment.method,
-      status: payment.status,
-      created_at: payment.created_at,
-      paid_at: payment.paid_at,
-      vnpay_transaction_no: payment.vnpay_transaction_no || null,
-    });
+    return res.json(toPaymentDetailsResponse(payment));
   } catch (error) {
     console.error('Get payment details error:', error);
     return res.status(500).json({ message: 'KhÃ´ng thá»ƒ táº£i chi tiáº¿t giao dá»‹ch.' });
@@ -175,11 +89,7 @@ async function confirmPaymentRequest(req, res) {
     }
 
     const result = await confirmPayment(paymentCode);
-    return res.json({
-      message: 'Xác nhận thanh toán thành công.',
-      payment_code: result.payment_code,
-      status: result.status,
-    });
+    return res.json(toConfirmPaymentResponse(result));
   } catch (error) {
     if (error.statusCode) {
       return res.status(error.statusCode).json({ message: error.message });
@@ -192,13 +102,13 @@ async function confirmPaymentRequest(req, res) {
 
 async function simulateDepositPaymentRequest(req, res) {
   const paymentCode = String(req.params?.paymentCode || '').trim();
-  const succeeded = req.body?.succeeded;
+  const { succeeded } = toSimulatePaymentRequest(req.body);
   if (!paymentCode) return res.status(400).json({ message: 'Thiếu mã thanh toán cần mô phỏng.' });
   if (typeof succeeded !== 'boolean') return res.status(400).json({ message: 'Kết quả mô phỏng phải là thành công hoặc thất bại.' });
 
   try {
     const result = await simulateDepositPayment({ paymentCode, customerId: req.auth.userId, succeeded });
-    return res.json({ message: succeeded ? 'Mô phỏng thanh toán cọc thành công.' : 'Mô phỏng giao dịch thất bại.', ...result });
+    return res.json(toSimulatePaymentResponse(succeeded, result));
   } catch (error) {
     if (error.statusCode) return res.status(error.statusCode).json({ message: error.message });
     console.error('Simulate deposit payment error:', error);
@@ -206,4 +116,4 @@ async function simulateDepositPaymentRequest(req, res) {
   }
 }
 
-module.exports = { createPayment, getPaymentList, getCustomerPaymentList, getInvoiceList, getInvoiceDetail, getPaymentStatusRequest, getPaymentDetailsRequest, confirmPaymentRequest, simulateDepositPaymentRequest };
+module.exports = { createPayment, getPaymentList, getCustomerPaymentList, getPaymentStatusRequest, getPaymentDetailsRequest, confirmPaymentRequest, simulateDepositPaymentRequest };

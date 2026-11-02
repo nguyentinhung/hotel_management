@@ -4,6 +4,7 @@ import type { PaymentListItem } from '../services/paymentService';
 import { resolveRole } from '../utils/role';
 import { useToast } from './ToastProvider';
 import DataTable from './DataTable';
+import { retryOrGoToLogin } from '../utils/sessionRetry';
 
 const CUSTOMER_PAGE_SIZE = 5;
 const MANAGEMENT_PAGE_SIZE = 10;
@@ -23,6 +24,7 @@ const formatDate = (value: string | null) => {
     hour: '2-digit',
     minute: '2-digit',
     hourCycle: 'h23',
+    timeZone: 'Asia/Ho_Chi_Minh',
   }).format(date);
 };
 
@@ -203,7 +205,7 @@ export default function PaymentList({ customerOnly = false }: { customerOnly?: b
     return (
       <div className="payment-list-state payment-list-error" role="alert">
         <span>{error}</span>
-        <button className="btn btn-secondary" type="button" onClick={() => void loadPayments()}>Thử lại</button>
+        <button className="btn btn-secondary" type="button" onClick={() => retryOrGoToLogin(error, loadPayments)}>Thử lại</button>
       </div>
     );
   }

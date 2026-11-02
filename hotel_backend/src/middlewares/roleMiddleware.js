@@ -1,7 +1,7 @@
 const jwt = require('jsonwebtoken');
 
 const { jwtSecret: JWT_SECRET } = require('../config/auth');
-const ROLE_CODE_BY_ID = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
+const ROLE_CODE_BY_ID = { 1: 'ADMIN', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'CUSTOMER' };
 
 function requireAdmin(req, res, next) {
   const authorization = req.headers.authorization || '';
@@ -30,7 +30,7 @@ function requireRoomListAccess(req, res, next) {
   if (!token) return res.status(401).json({ success: false, message: 'Vui lòng đăng nhập để tiếp tục.' });
   try {
     const user = jwt.verify(token, JWT_SECRET);
-    const roleById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
+    const roleById = { 1: 'ADMIN', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'CUSTOMER' };
     const roleCode = String(user.role_code || roleById[Number(user.role_id)] || '').toUpperCase();
     if (!['ADMIN', 'RECEPTIONIST'].includes(roleCode)) {
       return res.status(403).json({ success: false, message: 'Bạn không có quyền xem thông tin phòng.' });
@@ -47,7 +47,7 @@ function requireStaffReadAccess(req, res, next) {
   if (!token) return res.status(401).json({ success: false, message: 'Vui lòng đăng nhập để tiếp tục.' });
   try {
     const user = jwt.verify(token, JWT_SECRET);
-    const roleById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
+    const roleById = { 1: 'ADMIN', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'CUSTOMER' };
     const roleCode = String(user.role_code || roleById[Number(user.role_id)] || '').toUpperCase();
     if (!['ADMIN', 'RECEPTIONIST'].includes(roleCode)) {
       return res.status(403).json({ success: false, message: 'Bạn không có quyền xem thông tin nhân viên.' });
@@ -72,7 +72,7 @@ function requirePromotionReadAccess(req, res, next) {
 
   try {
     const user = jwt.verify(token, JWT_SECRET);
-    const roleById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
+    const roleById = { 1: 'ADMIN', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'CUSTOMER' };
     const roleCode = String(user.role_code || roleById[Number(user.role_id)] || '').toUpperCase();
     if (!['ADMIN', 'RECEPTIONIST'].includes(roleCode)) {
       return res.status(403).json({ message: 'Bạn không có quyền xem thông tin khuyến mãi.' });

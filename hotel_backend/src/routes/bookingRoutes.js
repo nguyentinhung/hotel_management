@@ -3,16 +3,22 @@ const bookingController = require('../controllers/bookingController');
 const bookingServiceController = require('../controllers/bookingServiceController');
 const { requireBookingServiceReadAccess, requireBookingServiceWriteAccess } = require('../middlewares/bookingServiceAccess');
 const { requireReceptionist, requireBookingReadAccess } = require('../middlewares/customerAuth');
-const { uploadIdCardImage } = require('../middlewares/upload');
+const { uploadIdCardImages } = require('../middlewares/upload');
 
 const router = express.Router();
-router.post('/bookings/walk-in', requireReceptionist, uploadIdCardImage, bookingController.createWalkInBookingHandler);
+// Keep static booking endpoints ahead of /bookings/:bookingId routes.
+router.get('/bookings/in-house', bookingController.getInHouseBookingsHandler);
+router.post('/bookings/walk-in', requireReceptionist, uploadIdCardImages, bookingController.createWalkInBookingHandler);
 router.post('/bookings/customer', bookingController.createCustomerBookingHandler);
 router.patch('/bookings/:bookingId', bookingController.updateBookingHandler);
+router.post('/bookings/:bookingId/extend', requireReceptionist, bookingController.extendCheckedInBookingHandler);
+router.post('/bookings/:bookingId/hold-extension', requireReceptionist, bookingController.extendBookingHoldHandler);
+router.get('/bookings/:bookingId/extension-billing', requireReceptionist, bookingController.getStayExtensionBillingHandler);
 router.post('/bookings/:bookingId/cancel', bookingController.cancelBookingHandler);
-router.post('/bookings/:bookingId/check-in', requireReceptionist, uploadIdCardImage, bookingController.checkInBookingHandler);
+router.post('/bookings/:bookingId/check-in', requireReceptionist, uploadIdCardImages, bookingController.checkInBookingHandler);
 router.post('/bookings/:bookingId/check-out', bookingController.checkOutBookingHandler);
 router.post('/bookings/:bookingId/invoice', bookingController.createReceptionInvoiceHandler);
+router.post('/bookings/:bookingId/invoice/compensations/sync', requireReceptionist, bookingController.syncReceptionBookingCompensationsHandler);
 router.get('/bookings/:bookingId/assignable-rooms', bookingController.getAssignableRoomsHandler);
 router.post('/bookings/:bookingId/assign-room', bookingController.assignRoomHandler);
 router.get('/bookings/recent', bookingController.getRecentBookingsHandler);

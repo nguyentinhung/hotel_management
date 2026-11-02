@@ -10,6 +10,8 @@ import {
 import ServiceForm from '../components/ServiceForm';
 import { useToast } from '../components/ToastProvider';
 import DataTable from '../components/DataTable';
+import BookingServiceManagementTab from '../components/BookingServiceManagementTab';
+import { retryOrGoToLogin } from '../utils/sessionRetry';
 // import './service-management.css';
 
 interface ServiceListPageProps {
@@ -42,6 +44,7 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
     const [statusFilter, setStatusFilter] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
     const [typeFilter, setTypeFilter] = useState<'ALL' | Service['booking_policy']>('ALL');
     const [currentPage, setCurrentPage] = useState(1);
+    const [activeTab, setActiveTab] = useState<'catalog' | 'booking-services'>('catalog');
 
     // Kiểm tra quyền ADMIN
     const isAdmin = role === 'ADMIN';
@@ -236,9 +239,23 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
         );
     }
 
+    if (activeTab === 'booking-services') {
+        return <div className="service-management-surface">
+            <nav className="service-management-tabs" role="tablist" aria-label="Quản lý dịch vụ">
+                <button type="button" role="tab" aria-selected="false" onClick={() => setActiveTab('catalog')}>Danh sách dịch vụ</button>
+                <button type="button" role="tab" aria-selected="true" className="active" onClick={() => setActiveTab('booking-services')}>Dịch vụ theo booking</button>
+            </nav>
+            <BookingServiceManagementTab />
+        </div>;
+    }
+
     // Service list view
     return (
         <section className="service-page service-list-view" aria-labelledby="service-list-title">
+            <nav className="service-management-tabs" role="tablist" aria-label="Quản lý dịch vụ">
+                <button type="button" role="tab" aria-selected="true" className="active" onClick={() => setActiveTab('catalog')}>Danh sách dịch vụ</button>
+                <button type="button" role="tab" aria-selected="false" onClick={() => setActiveTab('booking-services')}>Dịch vụ theo booking</button>
+            </nav>
             <div className="service-list-card">
                 <div className="service-list-heading-row">
                     <div className="service-list-heading">
@@ -278,7 +295,7 @@ export default function ServiceListPage({ role = 'ADMIN' }: ServiceListPageProps
                 {loadError ? (
                     <div className="service-list-message error-text" role="alert">
                         <p>{loadError}</p>
-                        <button className="btn btn-outline btn-sm" type="button" onClick={() => void loadServices()}>Tải lại danh sách</button>
+                        <button className="btn btn-outline btn-sm" type="button" onClick={() => retryOrGoToLogin(loadError, loadServices)}>Tải lại danh sách</button>
                     </div>
                 ) : loading ? (
                     <p className="service-list-message" role="status">Đang tải danh sách dịch vụ...</p>

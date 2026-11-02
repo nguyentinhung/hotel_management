@@ -1,4 +1,3 @@
-const HomeModel = require('../models/homeModel');
 const {
   getRoomTypes: getRoomTypesFromDao,
   getRoomTypeById,
@@ -86,12 +85,12 @@ async function fetchHomeData() {
     getReviews(),
   ]);
 
-  return HomeModel.fromRow({
+  return ({
     roomTypes: normalizeRoomTypes(roomTypes),
     promotions: normalizePromotions(promotions),
     services: normalizeServices(services),
     reviews: normalizeReviews(reviews),
-  });
+  } ?? null);
 }
 
 module.exports = {

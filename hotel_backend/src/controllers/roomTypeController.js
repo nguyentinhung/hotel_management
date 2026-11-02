@@ -1,13 +1,18 @@
 const path = require('path');
 const fs = require('fs');
 const roomTypeService = require('../services/roomTypeService');
+const { toAddRoomTypeRequest } = require('../dto/room-type/add-room-type/add-room-type-request.dto');
+const { toAddRoomTypeResponse } = require('../dto/room-type/add-room-type/add-room-type-response.dto');
+const { toUpdateRoomTypeRequest } = require('../dto/room-type/update-room-type/update-room-type-request.dto');
+const { toUpdateRoomTypeResponse } = require('../dto/room-type/update-room-type/update-room-type-response.dto');
+const { toDeleteRoomTypeResponse } = require('../dto/room-type/delete-room-type/delete-room-type-response.dto');
 
 const uploadsDir = path.join(__dirname, '../../uploads');
 
 async function createRoomType(req, res) {
   try {
-    const roomType = await roomTypeService.createRoomType(req.body);
-    return res.status(201).json({ message: 'Thêm loại phòng thành công.', roomType });
+    const roomType = await roomTypeService.createRoomType(toAddRoomTypeRequest(req.body));
+    return res.status(201).json(toAddRoomTypeResponse(roomType));
   } catch (error) {
     if (error.statusCode) return res.status(error.statusCode).json({ message: error.message });
     if (error.number === 2601 || error.number === 2627) {
@@ -21,9 +26,9 @@ async function createRoomType(req, res) {
 async function updateRoomType(req, res) {
   const roomTypeId = Number(req.params.roomTypeId);
   try {
-    const roomType = await roomTypeService.updateRoomType(roomTypeId, req.body);
+    const roomType = await roomTypeService.updateRoomType(roomTypeId, toUpdateRoomTypeRequest(req.body));
     if (!roomType) return res.status(404).json({ message: 'Không tìm thấy loại phòng.' });
-    return res.json({ message: 'Cập nhật loại phòng thành công.', roomType });
+    return res.json(toUpdateRoomTypeResponse(roomType));
   } catch (error) {
     if (error.statusCode) return res.status(error.statusCode).json({ message: error.message });
     console.error('Update room type error:', error);
@@ -43,7 +48,7 @@ async function deleteRoomType(req, res) {
       if (Number(roomType.review_count) > 0) reasons.push(`${roomType.review_count} đánh giá`);
       return res.status(409).json({ message: `Không thể xóa “${roomType.room_type_name}” vì còn ${reasons.join(' và ')} liên quan.` });
     }
-    return res.json({ message: `Đã xóa loại phòng “${result.roomType.room_type_name}”.` });
+    return res.json(toDeleteRoomTypeResponse(result.roomType.room_type_name));
   } catch (error) {
     if (error.statusCode) return res.status(error.statusCode).json({ message: error.message });
     if (error.number === 547) return res.status(409).json({ message: 'Không thể xóa loại phòng vì vẫn còn dữ liệu liên quan.' });

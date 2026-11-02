@@ -1,5 +1,5 @@
 const bcrypt = require('bcryptjs');
-const UserModel = require('../models/userModel');
+const { normalizeEmail, normalizePhone, isValidEmail, isValidPhone } = require('../utils/user');
 const userDao = require('../dao/userDao');
 
 const ROLE_CODES = ['ADMIN', 'RECEPTIONIST', 'HOUSEKEEPER', 'CUSTOMER'];
@@ -13,19 +13,19 @@ function normalizeId(value) {
 
 function normalizeUserFields(data) {
   const fullName = String(data.full_name || '').trim();
-  const email = UserModel.normalizeEmail(data.email);
-  const phone = UserModel.normalizePhone(data.phone);
+  const email = normalizeEmail(data.email);
+  const phone = normalizePhone(data.phone);
   if (!fullName || fullName.length > 255 || !email || !phone) throw fail(400, 'Vui lòng nhập đầy đủ thông tin hợp lệ.');
-  if (!UserModel.isValidEmail(email) || email.length > 150) throw fail(400, 'Email không đúng định dạng hoặc vượt quá 150 ký tự.');
-  if (!UserModel.isValidPhone(phone) || phone.length > 20 || phone.replace(/\D/g, '').length < 9) throw fail(400, 'Số điện thoại không đúng định dạng.');
+  if (!isValidEmail(email) || email.length > 150) throw fail(400, 'Email không đúng định dạng hoặc vượt quá 150 ký tự.');
+  if (!isValidPhone(phone) || phone.length > 20 || phone.replace(/\D/g, '').length < 9) throw fail(400, 'Số điện thoại không đúng định dạng.');
   return { fullName, email, phone };
 }
 
 async function getUserList(search = '') {
-  return UserModel.fromResult(await userDao.getUserList(String(search || '').trim().slice(0, 255)));
+  return await userDao.getUserList(String(search || '').trim().slice(0, 255));
 }
 
-async function getUserById(id) { return UserModel.fromResult(await userDao.getUserById(normalizeId(id))); }
+async function getUserById(id) { return await userDao.getUserById(normalizeId(id)); }
 
 async function ensureUnique(email, phone, exceptId) {
   const [emailMatch, phoneMatch] = await Promise.all([
@@ -47,7 +47,7 @@ async function createUser(data = {}) {
   if (!ROLE_CODES.includes(roleCode)) throw fail(400, 'Vai trò không hợp lệ.');
   await ensureUnique(email, phone);
   const passwordHash = await bcrypt.hash(password, 10);
-  return UserModel.fromResult(await userDao.createUser({ fullName, email, phone, passwordHash, roleCode }));
+  return await userDao.createUser({ fullName, email, phone, passwordHash, roleCode });
 }
 
 async function updateUser(id, data = {}) {
@@ -56,7 +56,7 @@ async function updateUser(id, data = {}) {
   if (!await userDao.getUserById(userId)) throw fail(404, 'Không tìm thấy người dùng.');
   const fields = normalizeUserFields(data);
   await ensureUnique(fields.email, fields.phone, userId);
-  return UserModel.fromResult(await userDao.updateUser(userId, fields));
+  return await userDao.updateUser(userId, fields);
 }
 
 async function changeStatus(id, status, actorId) {
@@ -66,7 +66,7 @@ async function changeStatus(id, status, actorId) {
   if (status === 'LOCKED' && Number(actorId) === userId) throw fail(400, 'Bạn không thể khóa tài khoản đang đăng nhập.');
   if (user.status === status) throw fail(400, status === 'LOCKED' ? 'Tài khoản đã bị khóa.' : 'Tài khoản đang hoạt động.');
   if (!await (status === 'LOCKED' ? userDao.lockUser(userId) : userDao.unlockUser(userId))) throw fail(500, 'Không thể cập nhật trạng thái tài khoản.');
-  return UserModel.fromResult(await userDao.getUserById(userId));
+  return await userDao.getUserById(userId);
 }
 
 const lockUser = (id, actorId) => changeStatus(id, 'LOCKED', actorId);
@@ -79,7 +79,7 @@ async function assignUserRole(id, roleCode, actorId) {
   if (Number(actorId) === userId) throw fail(400, 'Bạn không thể tự thay đổi vai trò của tài khoản đang đăng nhập.');
   if (!await userDao.getUserById(userId)) throw fail(404, 'Không tìm thấy người dùng.');
   if (!await userDao.assignUserRole(userId, normalizedRole)) throw fail(400, 'Không thể phân quyền người dùng.');
-  return UserModel.fromResult(await userDao.getUserById(userId));
+  return await userDao.getUserById(userId);
 }
 
 module.exports = { getUserList, getUserById, createUser, updateUser, lockUser, unlockUser, assignUserRole };

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useToast } from '../components/ToastProvider';
 import DataTable from '../components/DataTable';
+import RoomEquipmentAssignments from '../components/RoomEquipmentAssignments';
+import { retryOrGoToLogin } from '../utils/sessionRetry';
 import {
   finishRoomCleaning,
   addRoom,
@@ -54,7 +56,7 @@ export default function RoomsPage({ role = 'ADMIN' }: { role?: Role }) {
   const [typeFilter, setTypeFilter] = useState('ALL');
   const [floorFilter, setFloorFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
-  const [view, setView] = useState<RoomView>('grid');
+  const [view] = useState<RoomView>('list');
   const [page, setPage] = useState(1);
   const [roomTypes, setRoomTypes] = useState<RoomTypeOption[]>([]);
   const [roomTypesLoading, setRoomTypesLoading] = useState(false);
@@ -246,7 +248,7 @@ export default function RoomsPage({ role = 'ADMIN' }: { role?: Role }) {
       <div className="room-management-main-container">
       <header className="room-management-page-info">
         <div><h2>Danh sách phòng</h2><p>Xem và quản lý thông tin, trạng thái và tình trạng phòng trong khách sạn.</p></div>
-        <div className="room-management-header-actions"><strong>{loading ? '—' : `${rooms.length} phòng`}</strong>{isAdmin && <button className="btn btn-primary btn-sm" type="button" onClick={() => void openRoomForm()}>+ Thêm phòng</button>}</div>
+        <div className="room-management-header-actions">{isAdmin && <button className="btn btn-primary btn-sm" type="button" onClick={() => void openRoomForm()}>+ Thêm phòng</button>}</div>
       </header>
       <section className="room-overview-grid" aria-label="Tổng quan trạng thái phòng">
         {stats.map((stat) => <article className="room-overview-card" key={stat.label}>
@@ -265,14 +267,7 @@ export default function RoomsPage({ role = 'ADMIN' }: { role?: Role }) {
       </section>
 
       <section className="room-list-panel">
-        <div className="room-list-toolbar">
-          <div className="room-view-switch" role="group" aria-label="Kiểu hiển thị phòng">
-            <button type="button" className={view === 'grid' ? 'active' : ''} onClick={() => setView('grid')}><span aria-hidden="true">▦</span>Dạng lưới</button>
-            <button type="button" className={view === 'list' ? 'active' : ''} onClick={() => setView('list')}><span aria-hidden="true">☷</span>Dạng danh sách</button>
-          </div>
-        </div>
-        <h2 className="room-list-title"><RoomStatusIcon kind="roomHeading" />Phòng ({filteredRooms.length})</h2>
-        {loading ? <div className="room-management-state" role="status">Đang tải thông tin phòng…</div> : error ? <div className="room-management-state error" role="alert"><span>{error}</span><button className="btn btn-outline" type="button" onClick={() => void reload()}>Thử lại</button></div> : filteredRooms.length === 0 ? <div className="room-management-state">Không có phòng phù hợp với bộ lọc.</div> : view === 'grid' ? (
+        {loading ? <div className="room-management-state" role="status">Đang tải thông tin phòng…</div> : error ? <div className="room-management-state error" role="alert"><span>{error}</span><button className="btn btn-outline" type="button" onClick={() => retryOrGoToLogin(error, reload)}>Thử lại</button></div> : filteredRooms.length === 0 ? <div className="room-management-state">Không có phòng phù hợp với bộ lọc.</div> : view === 'grid' ? (
           <div className="managed-room-grid">{visibleRooms.map((room) => <article className="managed-room-card" key={room.id}>
             <div className="managed-room-card-top"><strong>{room.room_number}</strong><span className={`managed-room-status ${room.status.toLowerCase()}`}>{roomStatusLabels[room.status]}</span></div>
             <div className="managed-room-meta"><RoomStatusIcon kind="bed" /><span>{room.room_type_name}</span></div>
@@ -295,7 +290,7 @@ export default function RoomsPage({ role = 'ADMIN' }: { role?: Role }) {
 
       </div>
 
-      {isAdmin && <section className="room-maintenance-reports"><div className="room-maintenance-heading"><div><h2>Báo cáo bảo trì đang mở</h2><p>Báo cáo sẽ được giữ ở trạng thái đang mở cho đến khi quản trị viên xử lý.</p></div><span>{reports.length} đang mở</span></div>{reports.length ? <div className="room-maintenance-report-list">{reports.map((report) => <article key={report.id}><div><strong>Phòng {report.room_number} · {report.title}</strong><p>{report.description}</p><small>Báo cáo bởi {report.reported_by_name} · {new Date(report.reported_at).toLocaleString('vi-VN')}</small></div><button className="btn btn-primary" type="button" onClick={() => void resolveReport(report)}>Xử lý báo cáo</button></article>)}</div> : <p className="room-management-state">Không có báo cáo bảo trì đang mở.</p>}</section>}
+      {isAdmin && <section className="room-maintenance-reports"><div className="room-maintenance-heading"><div><h2>Báo cáo bảo trì đang mở</h2><p>Báo cáo sẽ được giữ ở trạng thái đang mở cho đến khi quản trị viên xử lý.</p></div><span>{reports.length} đang mở</span></div>{reports.length ? <div className="room-maintenance-report-list">{reports.map((report) => <article key={report.id}><div><strong>Phòng {report.room_number} · {report.title}</strong><p>{report.description}</p><small>Báo cáo bởi {report.reported_by_name} · {new Date(report.reported_at).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</small></div><button className="btn btn-primary" type="button" onClick={() => void resolveReport(report)}>Xử lý báo cáo</button></article>)}</div> : <p className="room-management-state">Không có báo cáo bảo trì đang mở.</p>}</section>}
 
       {roomFormOpen && <div className="room-crud-backdrop" role="presentation">
         <section className="room-crud-dialog" role="dialog" aria-modal="true" aria-labelledby="room-form-title">
@@ -314,7 +309,8 @@ export default function RoomsPage({ role = 'ADMIN' }: { role?: Role }) {
         <section className="room-crud-dialog room-detail-dialog" role="dialog" aria-modal="true" aria-labelledby="room-detail-title">
           <header><div><small>Chi tiết phòng</small><h2 id="room-detail-title">{roomDetail ? `Phòng ${roomDetail.room_number}` : 'Thông tin phòng'}</h2></div><button type="button" className="room-crud-close" aria-label="Đóng" onClick={() => { setRoomDetail(null); setRoomDetailError(''); setConfirmDeleteOpen(false); }}>×</button></header>
           {roomDetailLoading && <p>Đang tải chi tiết phòng...</p>}{roomDetailError && <p className="inline-error" role="alert">{roomDetailError}</p>}
-          {roomDetail && <><dl><div><dt>Trạng thái</dt><dd>{roomStatusLabels[roomDetail.status]}</dd></div><div><dt>Loại phòng</dt><dd>{roomDetail.room_type_name}</dd></div><div><dt>Tầng</dt><dd>{roomDetail.floor}</dd></div><div><dt>Giá cơ bản</dt><dd>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(roomDetail.base_price)}</dd></div><div><dt>Sức chứa</dt><dd>{roomDetail.max_adults} người lớn · {roomDetail.max_children} trẻ em</dd></div>{roomDetail.room_type_description && <div className="room-detail-wide"><dt>Mô tả loại phòng</dt><dd>{roomDetail.room_type_description}</dd></div>}</dl>
+          {roomDetail && <><dl><div><dt>Trạng thái</dt><dd>{roomStatusLabels[roomDetail.status]}</dd></div><div><dt>Loại phòng</dt><dd>{roomDetail.room_type_name}</dd></div><div><dt>Tầng</dt><dd>{roomDetail.floor}</dd></div><div><dt>Giá cơ bản</dt><dd>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(roomDetail.base_price)}</dd></div><div><dt>Sức chứa</dt><dd>{roomDetail.max_adults} người lớn · {roomDetail.max_children} trẻ em</dd></div>{roomDetail.room_type_description && <div className="room-detail-description"><dt>Mô tả loại phòng</dt><dd>{roomDetail.room_type_description}</dd></div>}</dl>
+            <RoomEquipmentAssignments roomId={roomDetail.id} roomNumber={roomDetail.room_number} roomTypeName={roomDetail.room_type_name} roomStatus={roomDetail.status} canAssign={isAdmin} />
             {confirmDeleteOpen ? <div className="room-delete-confirm"><p>Xóa phòng {roomDetail.room_number}? Chỉ xóa được phòng chưa được booking hoặc báo cáo bảo trì sử dụng.</p><button className="btn btn-outline btn-sm" type="button" onClick={() => setConfirmDeleteOpen(false)} disabled={deletePending}>Giữ lại</button><button className="btn btn-danger btn-sm" type="button" onClick={() => void confirmDeleteRoom()} disabled={deletePending}>{deletePending ? 'Đang xóa...' : 'Xác nhận xóa'}</button></div> : <footer>{isAdmin && <><button className="btn btn-outline" type="button" onClick={() => { const selected = roomDetail; setRoomDetail(null); void openRoomForm(selected); }}>Sửa thông tin</button><button className="btn btn-danger" type="button" onClick={() => setConfirmDeleteOpen(true)}>Xóa phòng</button></>}<button className="btn btn-outline" type="button" onClick={() => setRoomDetail(null)}>Đóng</button></footer>}
           </>}
         </section>

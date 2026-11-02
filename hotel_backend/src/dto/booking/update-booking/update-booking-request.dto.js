@@ -1,0 +1,2 @@
+function toUpdateBookingRequest(body = {}) { return { check_in_date: body?.check_in_date, check_out_date: body?.check_out_date, guest_full_name: body?.guest_full_name, guest_phone: body?.guest_phone, guest_email: body?.guest_email, adults: body?.adults, children: body?.children, special_request: body?.special_request, room_selections: body?.room_selections }; }
+module.exports = { toUpdateBookingRequest };

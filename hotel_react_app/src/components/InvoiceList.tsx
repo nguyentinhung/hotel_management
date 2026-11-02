@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getCustomerPaymentList, getInvoiceDetails, getInvoiceList, getPaymentList } from '../services/paymentService';
 import type { InvoiceDetail, InvoiceListItem, PaymentListItem } from '../services/paymentService';
+import { retryOrGoToLogin } from '../utils/sessionRetry';
 
 const money = (value: number) => `${new Intl.NumberFormat('vi-VN').format(value)} ₫`;
 const date = (value: string) => {
@@ -135,7 +136,7 @@ export default function InvoiceList({ customerOnly = false }: { customerOnly?: b
   };
 
   if (loading) return <div className="payment-list-state" role="status">Đang tải danh sách hóa đơn…</div>;
-  if (error) return <div className="payment-list-state payment-list-error" role="alert">{error}<button type="button" className="btn btn-secondary" onClick={() => window.location.reload()}>Thử lại</button></div>;
+  if (error) return <div className="payment-list-state payment-list-error" role="alert">{error}<button type="button" className="btn btn-secondary" onClick={() => retryOrGoToLogin(error, () => window.location.reload())}>Thử lại</button></div>;
 
   return <div className="invoice-list-card">
     <header className="invoice-list-heading"><div><h2>Danh sách hóa đơn <span>({invoices.length} hóa đơn)</span></h2><p>Xem và quản lý các hóa đơn trong khách sạn.</p></div></header>

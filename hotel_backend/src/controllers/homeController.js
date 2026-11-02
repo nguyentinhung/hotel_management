@@ -1,5 +1,7 @@
 const homeService = require('../services/homeService');
 const { fetchHomeData } = homeService;
+const { toRoomTypeListResponse } = require('../dto/room-type/view-room-type-list/room-type-list-response.dto');
+const { toRoomTypeDetailsResponse } = require('../dto/room-type/view-room-type-details/room-type-details-response.dto');
 
 // Lấy dữ liệu tổng hợp cho trang chủ: room type, promotion, service, review
 async function getHomeData(req, res) {
@@ -19,19 +21,7 @@ async function getHomeData(req, res) {
 async function getRoomTypes(req, res) {
   try {
     const roomTypes = await homeService.getRoomTypes();
-    res.json(roomTypes.map((item) => ({
-      id: item.id,
-      name: item.name,
-      description: item.description,
-      base_price: Number(item.base_price ?? 0),
-      max_adults: item.max_adults ?? 0,
-      max_children: item.max_children ?? 0,
-      amenities: String(item.amenities || '').split(',').map((entry) => entry.trim()).filter(Boolean),
-      amenity_ids: String(item.amenity_ids || '').split(',').map(Number).filter(Number.isInteger),
-      image_url: item.image_url || null,
-      average_rating: Number((item.average_rating ?? 0).toFixed(1)),
-      review_count: Number(item.review_count ?? 0),
-    })));
+    res.json(toRoomTypeListResponse(roomTypes));
   } catch (error) {
     console.error('getRoomTypes error:', error);
     res.status(500).json({ message: 'Không thể tải loại phòng.', error: error.message });
@@ -49,7 +39,7 @@ async function getRoomTypeDetails(req, res) {
     if (!roomType) {
       return res.status(404).json({ message: 'Không tìm thấy loại phòng.' });
     }
-    return res.json(roomType);
+    return res.json(toRoomTypeDetailsResponse(roomType));
   } catch (error) {
     console.error('getRoomTypeDetails error:', error);
     return res.status(500).json({ message: 'Không thể tải chi tiết loại phòng.' });

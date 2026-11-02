@@ -1,0 +1,2 @@
+function toCreateCustomerBookingRequest(body = {}) { return { room_type_id: body?.room_type_id, room_selections: body?.room_selections, service_selections: body?.service_selections, promotion_code: body?.promotion_code, check_in_date: body?.check_in_date, check_out_date: body?.check_out_date, adults: body?.adults, children: body?.children === undefined ? 0 : body?.children, special_request: body?.special_request === undefined ? '' : body?.special_request }; }
+module.exports = { toCreateCustomerBookingRequest };

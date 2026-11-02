@@ -37,6 +37,11 @@ export default function ResetPasswordPage() {
         setError('');
         setMessage('');
 
+        if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9\s])\S{8,}$/.test(newPassword)) {
+            setError('Mật khẩu cần ít nhất 8 ký tự, gồm chữ hoa, chữ thường, số và ký tự đặc biệt, không có khoảng trắng.');
+            return;
+        }
+
         if (newPassword !== confirmPassword) {
             setError('Mật khẩu xác nhận không khớp. Vui lòng kiểm tra lại.');
             return;

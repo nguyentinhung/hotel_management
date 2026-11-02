@@ -1,35 +1,42 @@
 ﻿const { getPool, sql } = require('../config/db');
-const EquipmentItemModel = require('../models/equipmentItemModel');
 
 async function findAll() {
   const pool = await getPool();
   const result = await pool.request().query(`
-    SELECT id, name, is_active
-    FROM dbo.equipment_items
-    ORDER BY id;
+    SELECT item.id, item.name, item.description, item.is_active, item.unit_price,
+      CAST(COUNT(asset.id) AS INT) AS asset_count
+    FROM dbo.equipment_items AS item
+    LEFT JOIN dbo.equipment_assets AS asset ON asset.equipment_item_id = item.id
+    GROUP BY item.id, item.name, item.description, item.is_active, item.unit_price
+    ORDER BY item.id;
   `);
-  return EquipmentItemModel.fromRows(result.recordset);
+  return result.recordset;
 }
 
 async function findById(id) {
   const pool = await getPool();
   const result = await pool.request()
     .input('id', sql.Int, id)
-    .query('SELECT id, name, is_active FROM dbo.equipment_items WHERE id = @id;');
-  return EquipmentItemModel.fromRow(result.recordset[0]);
+    .query(`SELECT item.id, item.name, item.description, item.is_active, item.unit_price,
+      (SELECT COUNT(*) FROM dbo.equipment_assets AS asset WHERE asset.equipment_item_id = item.id) AS asset_count
+      FROM dbo.equipment_items AS item WHERE item.id = @id;`);
+  return (result.recordset[0] ?? null);
 }
 
 async function create(equipmentItem) {
   const pool = await getPool();
   const result = await pool.request()
     .input('name', sql.NVarChar(100), equipmentItem.name)
+    .input('description', sql.NVarChar(500), equipmentItem.description ?? null)
     .input('is_active', sql.Bit, equipmentItem.is_active)
+    .input('unit_price', sql.Decimal(12, 2), equipmentItem.unit_price)
     .query(`
-      INSERT INTO dbo.equipment_items (name, is_active)
-      OUTPUT INSERTED.id, INSERTED.name, INSERTED.is_active
-      VALUES (@name, @is_active);
+      INSERT INTO dbo.equipment_items (name, description, is_active, unit_price)
+      OUTPUT INSERTED.id, INSERTED.name, INSERTED.description, INSERTED.is_active, INSERTED.unit_price,
+        0 AS asset_count
+      VALUES (@name, @description, @is_active, @unit_price);
     `);
-  return EquipmentItemModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function update(id, equipmentItem) {
@@ -37,14 +44,21 @@ async function update(id, equipmentItem) {
   const result = await pool.request()
     .input('id', sql.Int, id)
     .input('name', sql.NVarChar(100), equipmentItem.name)
+    .input('descriptionProvided', sql.Bit, Object.hasOwn(equipmentItem, 'description'))
+    .input('description', sql.NVarChar(500), equipmentItem.description ?? null)
     .input('is_active', sql.Bit, equipmentItem.is_active)
+    .input('unit_price', sql.Decimal(12, 2), equipmentItem.unit_price)
     .query(`
       UPDATE dbo.equipment_items
-      SET name = @name, is_active = @is_active
-      OUTPUT INSERTED.id, INSERTED.name, INSERTED.is_active
+      SET name = @name, is_active = @is_active, unit_price = @unit_price,
+          description = CASE WHEN @descriptionProvided = 1 THEN @description ELSE description END
       WHERE id = @id;
+
+      SELECT item.id, item.name, item.description, item.is_active, item.unit_price,
+        (SELECT COUNT(*) FROM dbo.equipment_assets AS asset WHERE asset.equipment_item_id = item.id) AS asset_count
+      FROM dbo.equipment_items AS item WHERE item.id = @id;
     `);
-  return EquipmentItemModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function deleteById(id) {
@@ -69,6 +83,7 @@ async function findRoomsForEquipment(id) {
       FROM dbo.rooms r
       LEFT JOIN dbo.room_equipment_assignments assignment
         ON assignment.room_id = r.id AND assignment.equipment_item_id = @equipmentItemId
+      WHERE r.status = 'AVAILABLE'
       ORDER BY r.floor, r.room_number;
     `);
   return result.recordset;
@@ -94,10 +109,10 @@ async function replaceRoomAssignments(id, roomIds) {
         roomRequest.input(parameter, sql.Int, roomId);
         return `@${parameter}`;
       });
-      const rooms = await roomRequest.query(`SELECT id FROM dbo.rooms WITH (UPDLOCK, HOLDLOCK) WHERE id IN (${roomParameterNames.join(', ')});`);
+      const rooms = await roomRequest.query(`SELECT id FROM dbo.rooms WITH (UPDLOCK, HOLDLOCK) WHERE status = 'AVAILABLE' AND id IN (${roomParameterNames.join(', ')});`);
       if (rooms.recordset.length !== roomIds.length) {
-        const error = new Error('One or more selected rooms no longer exist.');
-        error.statusCode = 400;
+        const error = new Error('Chỉ có thể gán thiết bị cho phòng đang trống. Hãy tải lại danh sách phòng.');
+        error.statusCode = 409;
         throw error;
       }
     }

@@ -1,5 +1,4 @@
 const { sql, getPool } = require('../config/db');
-const ReviewModel = require('../models/reviewModel');
 
 function normalizeReview(row) {
   if (!row) return null;
@@ -27,7 +26,7 @@ async function listDashboardReviews(includeHidden) {
     ${includeHidden ? '' : 'WHERE r.is_hidden = 0'}
     ORDER BY r.id DESC;
   `);
-  return ReviewModel.fromRows(result.recordset.map(normalizeReview));
+  return result.recordset.map(normalizeReview);
 }
 
 async function listCustomerBookings(customerId) {
@@ -88,7 +87,7 @@ async function getCustomerReview(reviewId, customerId) {
       LEFT JOIN dbo.room_types rt ON rt.id = r.room_type_id
       WHERE r.id = @reviewId AND r.customer_id = @customerId;
     `);
-  return ReviewModel.fromRow(normalizeReview(result.recordset[0]));
+  return (normalizeReview(result.recordset[0]) ?? null);
 }
 
 async function createCustomerReview({ bookingId, customerId, rating, comment }) {

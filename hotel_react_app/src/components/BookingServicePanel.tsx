@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import type { Service } from '../types/Service';
 import { useToast } from './ToastProvider';
 import DataTable from './DataTable';
@@ -20,6 +20,7 @@ export default function BookingServicePanel({ bookingId, canAddServices = false,
   const [busy, setBusy] = useState(false);
   const [adding, setAdding] = useState(false);
   const [message, setMessage] = useState('');
+  const submitLock = useRef(false);
   const selected = useMemo(() => services.find((service) => service.id === Number(serviceId)), [services, serviceId]);
 
   const load = async () => {
@@ -47,21 +48,22 @@ export default function BookingServicePanel({ bookingId, canAddServices = false,
 
   const add = async (event: FormEvent) => {
     event.preventDefault();
+    if (submitLock.current) return;
     const token = localStorage.getItem('accessToken');
     if (!token) { showToast('Vui lòng đăng nhập lại.', 'error'); return; }
+    const payload = { booking_room_id: Number(roomId), service_id: Number(serviceId), quantity };
+    submitLock.current = true;
     setBusy(true);
     setMessage('');
     try {
-      const data = await addBookingService(bookingId, {
-        booking_room_id: Number(roomId), service_id: Number(serviceId), quantity,
-      }, token);
+      const data = await addBookingService(bookingId, payload, token);
       if (data.service?.total_amount != null) onTotalChange?.(Number(data.service.total_amount));
       await load();
       setMessage('');
       showToast(`Đã thêm ${data.service.service_name} vào booking.`, 'success');
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Không thể thêm dịch vụ.', 'error');
-    } finally { setBusy(false); }
+    } finally { submitLock.current = false; setBusy(false); }
   };
 
   return <section className="booking-services-panel">
@@ -75,6 +77,6 @@ export default function BookingServicePanel({ bookingId, canAddServices = false,
     {message && <p className="booking-services-message" role="status">{message}</p>}
     {canAddServices && rooms.length === 0 && !message && <p className="booking-services-message">Không tìm thấy phòng thuộc booking trong thời gian lưu trú.</p>}
     {canAddServices && rooms.length > 0 && services.length === 0 && !message && <p className="booking-services-message">Không có dịch vụ nào đang được ghi nhận khi khách yêu cầu.</p>}
-    {usedServices.length > 0 ? <DataTable className="table-wrap"><table className="reception-table"><thead><tr><th>Dịch vụ</th><th>Phòng</th><th>Số lượng</th><th>Đơn giá</th><th>Tổng</th><th>Thời gian</th></tr></thead><tbody>{usedServices.map((item) => <tr key={item.id}><td>{item.service_name}</td><td>{item.room_number || '—'}</td><td>{item.quantity} {item.unit}</td><td>{money(Number(item.unit_price))}</td><td>{money(Number(item.amount))}</td><td>{new Date(item.used_at).toLocaleString('vi-VN')}</td></tr>)}</tbody></table></DataTable> : <p className="booking-services-message">Booking chưa có dịch vụ phát sinh.</p>}
+    {usedServices.length > 0 ? <DataTable className="table-wrap"><table className="reception-table"><thead><tr><th>Dịch vụ</th><th>Phòng</th><th>Số lượng</th><th>Đơn giá</th><th>Tổng</th><th>Thời gian</th></tr></thead><tbody>{usedServices.map((item) => <tr key={item.id}><td>{item.service_name}</td><td>{item.room_number || '—'}</td><td>{item.quantity} {item.unit}</td><td>{money(Number(item.unit_price))}</td><td>{money(Number(item.amount))}</td><td>{new Date(item.used_at).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</td></tr>)}</tbody></table></DataTable> : <p className="booking-services-message">Booking chưa có dịch vụ phát sinh.</p>}
   </section>;
 }

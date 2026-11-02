@@ -92,12 +92,21 @@ export default function ReviewListPage({ role }: { role: Role }) {
     </section>
   </div>;
 
+  const loadReviews = async () => {
+    setError('');
+    try {
+      if (role === 'CUSTOMER') setBookings(await getMyReviewBookings());
+      else setReviews(await getDashboardReviews());
+    } catch (value) {
+      setError(value instanceof Error ? value.message : 'Không thể tải Review.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const load = role === 'CUSTOMER'
-      ? getMyReviewBookings().then(setBookings)
-      : getDashboardReviews().then(setReviews);
-    load.catch((value) => setError(value instanceof Error ? value.message : 'Không thể tải Review.'))
-      .finally(() => setLoading(false));
+    setLoading(true);
+    void loadReviews();
   }, [role]);
 
   if (loading) return <div className="module-content"><p role="status">Đang tải Review…</p></div>;
@@ -140,7 +149,7 @@ export default function ReviewListPage({ role }: { role: Role }) {
       <label><span>Tìm kiếm</span><input type="search" placeholder="Tìm theo tên khách, nội dung hoặc loại phòng..." value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} /></label>
       <label><span>Điểm đánh giá</span><select value={ratingFilter} onChange={(event) => { setRatingFilter(event.target.value); setPage(1); }}><option value="ALL">Tất cả điểm</option>{[5, 4, 3, 2, 1].map((rating) => <option key={rating} value={rating}>{rating} sao</option>)}</select></label>
       {role === 'ADMIN' && <label><span>Trạng thái</span><select value={visibilityFilter} onChange={(event) => { setVisibilityFilter(event.target.value); setPage(1); }}><option value="ALL">Tất cả</option><option value="PUBLIC">Công khai</option><option value="HIDDEN">Đang ẩn</option></select></label>}
-      <button type="button" className="invoice-reset-button" onClick={() => { setSearch(''); setRatingFilter('ALL'); setVisibilityFilter('ALL'); setPage(1); }}>Làm mới</button>
+      <button type="button" className="invoice-reset-button dashboard-refresh-button" disabled={loading} onClick={() => { setSearch(''); setRatingFilter('ALL'); setVisibilityFilter('ALL'); setPage(1); setLoading(true); void loadReviews(); }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.5 9a7 7 0 0 1 11.6-2L20 12M4 12l2.9 5a7 7 0 0 0 11.6-2"/></svg>Làm mới</button>
     </div>
     <section className="invoice-table-section" aria-label="Danh sách đánh giá">
       <div className="table-responsive"><table className="table invoice-table review-table"><thead><tr><th>Khách hàng</th><th>Điểm</th><th>Nội dung</th><th>Loại phòng</th>{role === 'ADMIN' && <><th>Trạng thái</th><th>Thao tác</th></>}</tr></thead>

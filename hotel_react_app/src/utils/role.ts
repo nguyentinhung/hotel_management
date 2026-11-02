@@ -36,10 +36,10 @@ export function resolveRole(user: RoleLike): Role | undefined {
   if (fromStoredRole) return fromStoredRole;
 
   switch (Number(user.role_id)) {
-    case 1: return 'CUSTOMER';
+    case 1: return 'ADMIN';
     case 2: return 'RECEPTIONIST';
     case 3: return 'HOUSEKEEPER';
-    case 4: return 'ADMIN';
+    case 4: return 'CUSTOMER';
     default: break;
   }
 

@@ -168,6 +168,27 @@ export function createReceptionCheckout(bookingId: string | number, method: 'CAS
   );
 }
 
+export interface SyncReceptionCompensationsResponse {
+  success: boolean;
+  invoice: InvoiceDetail;
+  compensation_items: {
+    compensation_id: string;
+    inspection_item_id: string;
+    decision: 'COMPENSATION' | 'NO_COMPENSATION';
+    amount: number;
+    invoice_item_id: string | null;
+    room_number?: string | null;
+    equipment_name?: string | null;
+    asset_code?: string | null;
+  }[];
+}
+
+export function syncReceptionBookingCompensations(bookingId: string | number, token: string) {
+  return api.postWithAuth<SyncReceptionCompensationsResponse>(
+    `/api/bookings/${encodeURIComponent(String(bookingId))}/invoice/compensations/sync`, {}, token,
+  );
+}
+
 export function getPaymentList(): Promise<PaymentListItem[]> {
   return api.get<PaymentListItem[]>('/api/payments', localStorage.getItem('accessToken') || undefined);
 }

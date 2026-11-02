@@ -6,6 +6,12 @@ const jwt = require('jsonwebtoken');
 
 const { jwtSecret: JWT_SECRET } = require('../config/auth');
 
+const PASSWORD_POLICY = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[^A-Za-z0-9\s])\S{8,}$/;
+
+function isValidPassword(password) {
+  return typeof password === 'string' && PASSWORD_POLICY.test(password);
+}
+
 async function hashPassword(password) {
   return bcrypt.hash(password, 10);
 }
@@ -37,10 +43,11 @@ function createOtp() {
 }
 
 module.exports = {
-  normalizeEmail: (value) => UserModel.normalizeEmail(value),
-  normalizePhone: (value) => UserModel.normalizePhone(value),
-  isValidEmail: (value) => UserModel.isValidEmail(value),
-  isValidPhone: (value) => UserModel.isValidPhone(value),
+  normalizeEmail,
+  normalizePhone,
+  isValidEmail,
+  isValidPhone,
+  isValidPassword,
   hashPassword,
   passwordMatches,
   passwordHashMatches,

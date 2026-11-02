@@ -90,7 +90,7 @@ async function updateRoomType(roomTypeId, data, amenityIds) {
     }
     await saveAmenities(transaction, roomTypeId, amenityIds);
     await transaction.commit();
-    return RoomTypeModel.fromRow(result.recordset[0]);
+    return (result.recordset[0] ?? null);
   } catch (error) {
     try { await transaction.rollback(); } catch (rollbackError) { console.error('Room type update rollback error:', rollbackError); }
     throw error;

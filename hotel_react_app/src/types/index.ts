@@ -109,6 +109,7 @@ export interface WalkInBookingPayload {
   guest_full_name: string;
   guest_phone: string;
   guest_email?: string;
+  guest_id_card?: string;
   deposit_amount?: number;
   special_request?: string;
   check_in_now?: boolean;
@@ -169,7 +170,17 @@ export interface RecentBooking {
   deposit_amount: number;
   required_deposit_amount?: number;
   payment_expires_at?: string;
+  hold_until?: string | null;
+  hold_start?: string | null;
+  hold_extended?: boolean;
+  hold_extension_count?: number;
+  expected_arrival_at?: string | null;
   cancellation_reason?: string | null;
+  cancellation_reason_code?: string | null;
+  cancellation_reason_label?: string | null;
+  cancellation_reason_note?: string | null;
+  cancelled_at?: string | null;
+  cancelled_by?: number | null;
   requires_deposit_payment?: boolean;
   deposit_payment_status?: 'NOT_REQUIRED' | 'PAID' | 'PENDING' | 'PARTIAL' | 'FAILED' | 'UNPAID';
   final_paid_amount?: number;
@@ -179,9 +190,10 @@ export interface RecentBooking {
   special_request?: string;
   room_type_name?: string;
   room_number?: string;
-  room_selections?: { room_type_id: number; room_type_name: string; quantity: number; price_per_night: number; image_url?: string | null }[];
+  room_selections?: { room_type_id: number; room_type_name: string; quantity: number; price_per_night: number; total_price_per_night?: number; image_url?: string | null }[];
   room_status?: 'AVAILABLE' | 'OCCUPIED' | 'CLEANING' | 'MAINTENANCE';
   room_type_id?: number;
   assigned_room_id?: number | null;
   has_guest_id_card?: boolean;
+  has_guest_id_card_back?: boolean;
 }

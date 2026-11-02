@@ -1,17 +1,17 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   checkRoomAvailability,
   checkInBooking,
   getAssignableRooms,
-  assignRoomToBooking,
   getActiveBookings,
+  getBookingDetails,
   getBookingHistory,
   cancelBooking,
   createWalkInBooking,
   updateBooking,
 } from '../services/roomService';
 import type {
-  AvailableRoom,
   RecentBooking,
   RoomAvailabilityItem,
   ServiceItem,
@@ -19,9 +19,14 @@ import type {
 } from '../types';
 import BookingServicePanel from './BookingServicePanel';
 import BookingRoomSelectionEditor, { type BookingRoomSelection } from './BookingRoomSelectionEditor';
-import { createReceptionCheckout, createReceptionInvoice, getInvoiceDetails } from '../services/paymentService';
+import { createReceptionCheckout, createReceptionInvoice, getInvoiceDetails, syncReceptionBookingCompensations, type SyncReceptionCompensationsResponse } from '../services/paymentService';
+import StayExtensionModal from './StayExtensionModal';
+import BookingHoldExtensionModal from './BookingHoldExtensionModal';
+import { retryOrGoToLogin } from '../utils/sessionRetry';
+import { formatHotelDateTime, getCheckInDateTime, getHotelDate, getHoldCountdown, STANDARD_CHECK_IN_TIME } from '../utils/checkInCountdown';
 import type { InvoiceDetail } from '../services/paymentService';
 import CheckoutPaymentSuccessModal, { type CheckoutPaymentSuccess } from './CheckoutPaymentSuccessModal';
+import { assignCheckoutCleaningRoom, getCleaningTask, listCheckoutCleaningRooms, listCleaningHousekeepers, saveInspectionItemCompensation, type CheckoutCleaningRoom, type CleaningTaskInspectionReport } from '../services/cleaningTaskService';
 import { getActivePromotions, getServices } from '../services/homeService';
 import { validatePromotion } from '../services/promotionValidationService';
 import type { Promotion } from '../types/Promotion';
@@ -41,13 +46,13 @@ import DataTable from './DataTable';
  */
 
 // Định dạng ngày thành chuỗi YYYY-MM-DD
-const formatDateInput = (date: Date) => date.toISOString().slice(0, 10);
+const formatDateInput = getHotelDate;
 
 // Cộng thêm ngày
 const addDays = (dateStr: string, days: number) => {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + days);
-  return formatDateInput(d);
+  const d = new Date(`${dateStr}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 };
 
 // Định dạng tiền tệ VNĐ
@@ -63,7 +68,6 @@ const calculateNights = (from: string, to: string) => {
 };
 
 const overdueDecisionStorageKey = 'hotelManagement.reception.overdueBookingDecisions';
-const vietnamUtcOffsetMs = 7 * 60 * 60 * 1000;
 
 function loadHandledOverdueBookingIds() {
   try {
@@ -79,20 +83,38 @@ function loadHandledOverdueBookingIds() {
   }
 }
 
-function getVietnamToday(date: Date) {
-  return new Date(date.getTime() + vietnamUtcOffsetMs).toISOString().slice(0, 10);
-}
-
-function getVietnamCheckInCutoffUtc(date: Date) {
-  const today = getVietnamToday(date);
-  return Date.parse(`${today}T11:00:00.000Z`);
-}
-
 function getVietnamCheckoutCutoffUtc(date: string) {
   return Date.parse(`${date}T05:00:00.000Z`);
 }
 
-function formatVietnamDateTime(value: string) {
+function formatHoldRemaining(booking: RecentBooking, now: Date) {
+  if (booking.status === 'CANCELLED') {
+    return booking.cancellation_reason === 'RESERVATION_EXPIRED' ? 'Đã tự động hủy' : 'Đã hủy';
+  }
+  if (booking.status === 'CHECKED_IN') return 'Đã check-in';
+  if (booking.status !== 'CONFIRMED') return 'Chưa xác nhận';
+  const holdUntil = booking.hold_until ? new Date(booking.hold_until).getTime() : NaN;
+  if (!Number.isFinite(holdUntil)) return 'Chưa có hạn giữ phòng';
+  const remaining = holdUntil - now.getTime();
+  if (remaining <= 0) return 'Quá hạn check-in';
+  const totalMinutes = Math.ceil(remaining / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours ? `Còn ${hours} giờ ${minutes} phút` : `Còn ${minutes} phút`;
+}
+
+function getCheckInHoldState(booking: RecentBooking, today: string, now: Date) {
+  if (booking.status === 'CANCELLED' && booking.cancellation_reason === 'RESERVATION_EXPIRED') return 'Đã tự động hủy';
+  if (booking.status === 'CHECKED_IN') return 'Đã check-in';
+  if (booking.status !== 'CONFIRMED') return booking.status;
+  if (booking.hold_until && new Date(booking.hold_until).getTime() <= now.getTime()) return 'Quá hạn check-in';
+  if (booking.hold_extended) return 'Đã gia hạn giữ phòng';
+  if (String(booking.check_in_date).slice(0, 10) > today) return 'Chưa đến hạn check-in';
+  return 'Đang giữ phòng';
+}
+
+function formatVietnamDateTime(value?: string | null) {
+  if (!value) return '—';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' });
 }
@@ -119,15 +141,56 @@ function getBookingRoomSelections(booking: RecentBooking): BookingRoomSelection[
 }
 
 type ReceptionBookingMode = 'management' | 'checkin' | 'checkout';
+type CompensationDecision = 'COMPENSATION' | 'NO_COMPENSATION' | '';
+type CompensationDraft = { decision: CompensationDecision; amount: string };
+
+function calculateCompensationAmount(unitPrice: number): string {
+  const price = Number(unitPrice);
+  if (!Number.isFinite(price) || price < 0) return '0';
+  return String(Math.round(price * 80) / 100);
+}
+
+function updateCompensationDraftForItem(
+  current: Record<string, CompensationDraft>,
+  itemId: string,
+  fallback: CompensationDraft,
+  update: Partial<CompensationDraft>,
+) {
+  return {
+    ...current,
+    [itemId]: { ...(current[itemId] || fallback), ...update },
+  };
+}
+
+function validateCompensationAmount(value: string): string | null {
+  const normalized = value.trim();
+  if (!normalized) return 'Enter an amount greater than zero.';
+  if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized)) return 'Enter a valid numeric amount.';
+
+  const [wholePart, fractionalPart = ''] = normalized.split('.');
+  if (fractionalPart.length > 2) return 'Use no more than 2 decimal places.';
+
+  const whole = (wholePart || '0').replace(/^0+(?=\d)/, '');
+  if (whole.length > 12) return 'The maximum amount is 999999999999.99.';
+  const cents = BigInt(whole) * 100n + BigInt((fractionalPart + '00').slice(0, 2));
+  if (cents <= 0n) return 'Enter an amount greater than zero.';
+  if (cents > 99999999999999n) return 'The maximum amount is 999999999999.99.';
+  return null;
+}
 
 export default function ReceptionRoomBooking({
   mode = 'management',
   onViewBookingHistory,
+  onCheckInComplete,
+  readOnly = false,
 }: {
   mode?: ReceptionBookingMode;
   onViewBookingHistory?: () => void;
+  onCheckInComplete?: () => void;
+  readOnly?: boolean;
 }) {
-  const { showToast, confirmAction } = useToast();
+  const { showToast, confirmAction, confirmActionWithInput } = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
   const today = useMemo(() => formatDateInput(new Date()), []);
   const tomorrow = useMemo(() => addDays(today, 1), [today]);
 
@@ -141,6 +204,7 @@ export default function ReceptionRoomBooking({
   const [availabilityList, setAvailabilityList] = useState<RoomAvailabilityItem[]>([]);
   const [isLoadingAvailability, setIsLoadingAvailability] = useState<boolean>(false);
   const [availabilityError, setAvailabilityError] = useState<string | null>(null);
+  const availabilityRequestId = useRef(0);
 
   // Bộ lọc phụ: Chỉ hiển thị các loại phòng còn trống
   const [filterOnlyAvailable, setFilterOnlyAvailable] = useState<boolean>(false);
@@ -160,12 +224,11 @@ export default function ReceptionRoomBooking({
   const [walkInPromotionLoadError, setWalkInPromotionLoadError] = useState('');
   const [selectedServiceQuantities, setSelectedServiceQuantities] = useState<Record<number, number>>({});
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
-  const [isRoomPickerOpen, setIsRoomPickerOpen] = useState(false);
-  const [pickerRoomQuantities, setPickerRoomQuantities] = useState<Record<number, number>>({});
   const [walkInForm, setWalkInForm] = useState<{
     guest_full_name: string;
     guest_phone: string;
     guest_email: string;
+    guest_id_card: string;
     room_id: string; // ID phòng vật lý được chọn (chuỗi rỗng = auto)
     deposit_amount: number;
     check_in_now: boolean;
@@ -174,13 +237,21 @@ export default function ReceptionRoomBooking({
     guest_full_name: '',
     guest_phone: '',
     guest_email: '',
+    guest_id_card: '',
     room_id: '',
     deposit_amount: 0,
     check_in_now: true,
     special_request: '',
   });
   const [isSubmittingBooking, setIsSubmittingBooking] = useState<boolean>(false);
-  const [walkInIdCardImage, setWalkInIdCardImage] = useState<File | null>(null);
+  const isBookingRequestInFlight = useRef(false);
+  const [walkInIdCardFrontImage, setWalkInIdCardFrontImage] = useState<File | null>(null);
+  const [walkInIdCardBackImage, setWalkInIdCardBackImage] = useState<File | null>(null);
+  const [walkInPurpose, setWalkInPurpose] = useState('LEISURE');
+  const [createRoomTypeFilter, setCreateRoomTypeFilter] = useState('ALL');
+  const [createMaxPrice, setCreateMaxPrice] = useState('');
+  const initialCreateStay = useRef({ checkInDate: '', checkOutDate: '', adults: 0, children: 0 });
+  const initialCreateSelection = useRef({ primaryRoomId: '', typeIds: [] as number[] });
 
   // --- STATE DANH SÁCH ĐẶT PHÒNG GẦN ĐÂY ---
   const [recentBookings, setRecentBookings] = useState<RecentBooking[]>([]);
@@ -195,19 +266,22 @@ export default function ReceptionRoomBooking({
   const [managementStatus, setManagementStatus] = useState('ALL');
   const [managementPaymentStatus, setManagementPaymentStatus] = useState('ALL');
   const [managementPage, setManagementPage] = useState(1);
-  const [isCreateBookingOpen, setIsCreateBookingOpen] = useState(false);
   const [bookingHistory, setBookingHistory] = useState<RecentBooking[]>([]);
   const [handledOverdueBookingIds, setHandledOverdueBookingIds] = useState<Set<string>>(loadHandledOverdueBookingIds);
   const [attentionNow, setAttentionNow] = useState(() => new Date());
+  const [checkInClockNow, setCheckInClockNow] = useState(() => new Date());
   const [isLoadingAttentionBookings, setIsLoadingAttentionBookings] = useState(false);
   const [attentionBookingsError, setAttentionBookingsError] = useState<string | null>(null);
   const [bookingToCancel, setBookingToCancel] = useState<RecentBooking | null>(null);
+  const [overdueCancellationNote, setOverdueCancellationNote] = useState('');
   const [isCancellingBooking, setIsCancellingBooking] = useState(false);
   const [attentionCancellationError, setAttentionCancellationError] = useState<string | null>(null);
   const [selectedBookingDetail, setSelectedBookingDetail] = useState<RecentBooking | null>(null);
   const [isEditingSelectedBooking, setIsEditingSelectedBooking] = useState(false);
   const [isUpdatingSelectedBooking, setIsUpdatingSelectedBooking] = useState(false);
   const [isCancellingSelectedBooking, setIsCancellingSelectedBooking] = useState(false);
+  const [isExtendingStay, setIsExtendingStay] = useState(false);
+  const [isExtendingBookingHold, setIsExtendingBookingHold] = useState(false);
   const [selectedBookingDraft, setSelectedBookingDraft] = useState({
     check_in_date: '',
     check_out_date: '',
@@ -232,14 +306,38 @@ export default function ReceptionRoomBooking({
     : [];
   const [isLoadingBookings, setIsLoadingBookings] = useState<boolean>(false);
   const [selectedCheckInBooking, setSelectedCheckInBooking] = useState<RecentBooking | null>(null);
+  const [checkInConfirmationBooking, setCheckInConfirmationBooking] = useState<RecentBooking | null>(null);
   const [checkInRoomSlots, setCheckInRoomSlots] = useState<Awaited<ReturnType<typeof getAssignableRooms>>['room_slots']>([]);
   const [checkInRoomIds, setCheckInRoomIds] = useState<Record<number, string>>({});
   const [isLoadingCheckInRooms, setIsLoadingCheckInRooms] = useState(false);
-  const [checkInIdCardImage, setCheckInIdCardImage] = useState<File | null>(null);
+  const [checkInIdCardFrontImage, setCheckInIdCardFrontImage] = useState<File | null>(null);
+  const [checkInIdCardBackImage, setCheckInIdCardBackImage] = useState<File | null>(null);
   const [hasVerifiedOriginalId, setHasVerifiedOriginalId] = useState(false);
   const [isCheckingIn, setIsCheckingIn] = useState(false);
   const [isCheckingOut, setIsCheckingOut] = useState<string | number | null>(null);
   const [selectedCheckOutBooking, setSelectedCheckOutBooking] = useState<RecentBooking | null>(null);
+  const [checkoutCleaningRooms, setCheckoutCleaningRooms] = useState<CheckoutCleaningRoom[]>([]);
+  const [viewedCheckoutReportTaskIds, setViewedCheckoutReportTaskIds] = useState<Set<string>>(new Set());
+  const [compensationConfirmedTaskIds, setCompensationConfirmedTaskIds] = useState<Set<string>>(new Set());
+  const [checkoutHousekeepers, setCheckoutHousekeepers] = useState<{ id: string; full_name: string }[]>([]);
+  const [checkoutAssigneeDraft, setCheckoutAssigneeDraft] = useState<Record<string, string>>({});
+  const [loadingCheckoutAssignments, setLoadingCheckoutAssignments] = useState(false);
+  const [assigningCheckoutRoomId, setAssigningCheckoutRoomId] = useState<string | null>(null);
+  const [checkoutAssignmentLoadError, setCheckoutAssignmentLoadError] = useState('');
+  const [checkoutInspectionReport, setCheckoutInspectionReport] = useState<CleaningTaskInspectionReport | null>(null);
+  const [checkoutInspectionTaskId, setCheckoutInspectionTaskId] = useState<string | null>(null);
+  const [compensationDrafts, setCompensationDrafts] = useState<Record<string, CompensationDraft>>({});
+  const [compensationAmountErrors, setCompensationAmountErrors] = useState<Record<string, string>>({});
+  const [savingCompensationItemId, setSavingCompensationItemId] = useState<string | null>(null);
+  const [compensationMessage, setCompensationMessage] = useState('');
+  const [compensationError, setCompensationError] = useState('');
+  const [isCompensationConfirmOpen, setIsCompensationConfirmOpen] = useState(false);
+  const [checkoutCompensationReconciliation, setCheckoutCompensationReconciliation] = useState<Record<string, {
+    invoice: InvoiceDetail;
+    compensationItems: SyncReceptionCompensationsResponse['compensation_items'];
+  }>>({});
+  const [pendingCheckoutCompensations, setPendingCheckoutCompensations] = useState<Record<string, SyncReceptionCompensationsResponse['compensation_items']>>({});
+  const [loadingCheckoutReport, setLoadingCheckoutReport] = useState(false);
   const [isCreatingInvoice, setIsCreatingInvoice] = useState(false);
   const [createdInvoice, setCreatedInvoice] = useState<{ detail: InvoiceDetail; created: boolean } | null>(null);
   const [checkOutPaymentMethod, setCheckOutPaymentMethod] = useState<'CASH' | 'VNPAY'>('CASH');
@@ -249,12 +347,68 @@ export default function ReceptionRoomBooking({
   const vnpayEnabled = import.meta.env.VITE_VNPAY_ENABLED === 'true';
   const [checkoutSuccess, setCheckoutSuccess] = useState<CheckoutPaymentSuccess | null>(null);
 
-  const vietnamToday = getVietnamToday(attentionNow);
-  const overdueCheckInCutoffUtc = getVietnamCheckInCutoffUtc(attentionNow);
+  useEffect(() => {
+    if (!isCompensationConfirmOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsCompensationConfirmOpen(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [isCompensationConfirmOpen]);
+
+  useEffect(() => {
+    if (mode !== 'checkout' || searchParams.get('restoreCheckoutInvoice') !== '1') return;
+    const invoiceId = Number(sessionStorage.getItem('hotelManagement.checkoutInvoiceId'));
+    const bookingId = sessionStorage.getItem('hotelManagement.checkoutBookingId');
+    const wasCreated = sessionStorage.getItem('hotelManagement.checkoutInvoiceCreated') === 'true';
+    const paymentResult = searchParams.get('checkoutPaymentResult');
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('restoreCheckoutInvoice');
+    nextParams.delete('checkoutPaymentResult');
+    setSearchParams(nextParams, { replace: true });
+    if (!Number.isSafeInteger(invoiceId) || invoiceId < 1 || !bookingId) {
+      showToast('Không tìm thấy hóa đơn cần mở lại.', 'error');
+      return;
+    }
+    const accessToken = localStorage.getItem('accessToken');
+    if (!accessToken) {
+      showToast('Session expired. Please sign in again.', 'error');
+      return;
+    }
+    void Promise.all([getInvoiceDetails(invoiceId), getBookingDetails(bookingId, accessToken)]).then(([detail, bookingResult]) => {
+      setCreatedInvoice({ detail, created: wasCreated });
+      setSelectedCheckOutBooking(bookingResult.booking);
+      if (paymentResult === 'failed' || paymentResult === 'invalid') setCheckOutPaymentMethod('VNPAY');
+      sessionStorage.removeItem('hotelManagement.checkoutInvoiceId');
+      sessionStorage.removeItem('hotelManagement.checkoutBookingId');
+      sessionStorage.removeItem('hotelManagement.checkoutInvoiceCreated');
+      sessionStorage.removeItem('hotelManagement.checkoutPaymentCode');
+      sessionStorage.removeItem('hotelManagement.vnpayReturnPath');
+      if (paymentResult === 'failed') showToast('Giao dịch VNPay chưa hoàn tất. Hóa đơn vẫn được giữ để bạn thử lại.', 'error');
+      if (paymentResult === 'invalid') showToast('Không xác thực được kết quả VNPay. Hóa đơn vẫn được giữ để bạn kiểm tra.', 'error');
+    }).catch((error: unknown) => {
+      showToast(error instanceof Error ? error.message : 'Không thể mở lại hóa đơn.', 'error');
+    });
+  }, [mode, searchParams, setSearchParams, showToast]);
+
+  const vietnamToday = getHotelDate(attentionNow);
+  const checkInTodayBookings = useMemo(() => bookingHistory
+    .filter((booking) => booking.status === 'CONFIRMED'
+      && String(booking.check_in_date).slice(0, 10) === getHotelDate(checkInClockNow)
+      // This list shows the hold/check-in window; omit rows whose actual hold starts on another day.
+      && Boolean(booking.hold_start)
+      && String(booking.hold_start).slice(0, 10) === getHotelDate(checkInClockNow))
+    .sort((a, b) => {
+      const timeDifference = getCheckInDateTime(String(a.check_in_date)) - getCheckInDateTime(String(b.check_in_date));
+      if (timeDifference !== 0) return timeDifference;
+      const holdA = a.hold_until ? new Date(a.hold_until).getTime() : Number.POSITIVE_INFINITY;
+      const holdB = b.hold_until ? new Date(b.hold_until).getTime() : Number.POSITIVE_INFINITY;
+      return holdA - holdB;
+    }), [bookingHistory, checkInClockNow]);
   const overdueBookings = bookingHistory.filter((booking) => {
     return booking.status === 'CONFIRMED'
-      && String(booking.check_in_date).slice(0, 10) === vietnamToday
-      && attentionNow.getTime() >= overdueCheckInCutoffUtc
+      && Boolean(booking.hold_until)
+      && attentionNow.getTime() >= new Date(booking.hold_until as string).getTime()
       && !handledOverdueBookingIds.has(String(booking.id));
   });
   const overdueCheckoutBookings = managementBookings.filter((booking) => {
@@ -264,6 +418,8 @@ export default function ReceptionRoomBooking({
       && Number.isFinite(checkoutCutoff)
       && attentionNow.getTime() >= checkoutCutoff;
   });
+  const selectedBookingIsOverdueCheckout = selectedBookingDetail?.status === 'CHECKED_IN'
+    && attentionNow.getTime() >= getVietnamCheckoutCutoffUtc(String(selectedBookingDetail.check_out_date).slice(0, 10));
 
   // Tính số đêm lưu trú hiện tại theo form
   const nights = useMemo(() => calculateNights(checkInDate, checkOutDate), [checkInDate, checkOutDate]);
@@ -283,23 +439,27 @@ export default function ReceptionRoomBooking({
    * 1. HÀM GỌI API KIỂM TRA PHÒNG TRỐNG (CHECK AVAILABILITY)
    * Gửi ngày nhận, ngày trả và số khách để tính toán chính xác phòng nào còn trống
    */
-  const fetchAvailability = async () => {
+  const fetchAvailability = async (criteria?: { check_in_date: string; check_out_date: string; adults: number; children: number }) => {
+    const requestId = ++availabilityRequestId.current;
     try {
       setIsLoadingAvailability(true);
       setAvailabilityError(null);
 
       const res = await checkRoomAvailability({
-        check_in_date: checkInDate,
-        check_out_date: checkOutDate,
-        adults,
-        children,
+        check_in_date: criteria?.check_in_date ?? checkInDate,
+        check_out_date: criteria?.check_out_date ?? checkOutDate,
+        adults: criteria?.adults ?? adults,
+        children: criteria?.children ?? children,
       });
 
+      if (requestId !== availabilityRequestId.current) return [];
       setAvailabilityList(res.data || []);
+      return res.data || [];
     } catch (err) {
-      setAvailabilityError(err instanceof Error ? err.message : 'Lỗi khi kiểm tra phòng trống.');
+      if (requestId === availabilityRequestId.current) setAvailabilityError(err instanceof Error ? err.message : 'Lỗi khi kiểm tra phòng trống.');
+      return [];
     } finally {
-      setIsLoadingAvailability(false);
+      if (requestId === availabilityRequestId.current) setIsLoadingAvailability(false);
     }
   };
 
@@ -316,6 +476,7 @@ export default function ReceptionRoomBooking({
       if (mode === 'management' && accessToken) {
         const history = await getBookingHistory(accessToken);
         setManagementBookings(history.bookings || []);
+        setBookingHistory(history.bookings || []);
       }
     } catch (error) {
       console.error('Could not load bookings:', error);
@@ -356,6 +517,17 @@ export default function ReceptionRoomBooking({
     setHandledOverdueBookingIds(updatedIds);
   };
 
+  const resetOverdueBookingDecision = (bookingId: string | number) => {
+    const updatedIds = new Set(handledOverdueBookingIds);
+    updatedIds.delete(String(bookingId));
+    try {
+      localStorage.setItem(overdueDecisionStorageKey, JSON.stringify([...updatedIds]));
+    } catch (error) {
+      console.error('Could not reset handled overdue-booking decision:', error);
+    }
+    setHandledOverdueBookingIds(updatedIds);
+  };
+
   const handleKeepOverdueBooking = (booking: RecentBooking) => {
     rememberOverdueBookingDecision(booking.id);
     showToast(`Đã giữ booking ${booking.booking_code}.`, 'success');
@@ -371,7 +543,7 @@ export default function ReceptionRoomBooking({
     try {
       setIsCancellingBooking(true);
       setAttentionCancellationError(null);
-      const result = await cancelBooking(bookingToCancel.id, accessToken);
+      const result = await cancelBooking(bookingToCancel.id, accessToken, overdueCancellationNote);
       rememberOverdueBookingDecision(bookingToCancel.id);
       setBookingToCancel(null);
       showToast(result.message || `Đã hủy booking ${bookingToCancel.booking_code}.`, 'success');
@@ -461,7 +633,16 @@ export default function ReceptionRoomBooking({
 
   const handleCancelSelectedBooking = async () => {
     if (!selectedBookingDetail || selectedBookingDetail.status !== 'CONFIRMED') return;
-    if (!await confirmAction({ title: 'Hủy booking?', message: `Bạn có chắc muốn hủy booking ${selectedBookingDetail.booking_code}?`, confirmLabel: 'Hủy booking', destructive: true })) return;
+    const confirmation = await confirmActionWithInput({
+      title: 'Hủy booking?',
+      message: `Bạn có chắc muốn hủy booking ${selectedBookingDetail.booking_code}?`,
+      confirmLabel: 'Hủy booking',
+      destructive: true,
+      inputLabel: 'Ghi chú hủy (không bắt buộc)',
+      inputPlaceholder: 'Nhập ghi chú cho việc hủy booking',
+      inputMaxLength: 500,
+    });
+    if (!confirmation.confirmed) return;
     const accessToken = localStorage.getItem('accessToken');
     if (!accessToken) {
       showToast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.', 'error');
@@ -469,7 +650,7 @@ export default function ReceptionRoomBooking({
     }
     try {
       setIsCancellingSelectedBooking(true);
-      const result = await cancelBooking(selectedBookingDetail.id, accessToken);
+      const result = await cancelBooking(selectedBookingDetail.id, accessToken, confirmation.input);
       setSelectedBookingDetail(null);
       setIsEditingSelectedBooking(false);
       showToast(result.message || `Đã hủy booking ${selectedBookingDetail.booking_code}.`, 'success');
@@ -520,12 +701,17 @@ export default function ReceptionRoomBooking({
       showToast('Vui lòng đối chiếu giấy tờ tùy thân bản gốc trước khi check-in.', 'error');
       return;
     }
-    if (!selectedCheckInBooking.has_guest_id_card && !checkInIdCardImage) {
-      showToast('Vui lòng tải ảnh CCCD lên để check-in booking online.', 'error');
+    if (!selectedCheckInBooking.has_guest_id_card && !checkInIdCardFrontImage) {
+      showToast('Vui lòng tải ảnh CCCD mặt trước lên để check-in booking online.', 'error');
       return;
     }
-    if (checkInIdCardImage && (!['image/jpeg', 'image/png', 'image/webp'].includes(checkInIdCardImage.type) || checkInIdCardImage.size > 5 * 1024 * 1024)) {
-      showToast('Ảnh CCCD phải là JPG, PNG hoặc WEBP và không quá 5 MB.', 'error');
+    if (!selectedCheckInBooking.has_guest_id_card_back && !checkInIdCardBackImage) {
+      showToast('Vui lòng tải ảnh CCCD mặt sau lên để check-in.', 'error');
+      return;
+    }
+    const checkInIdCardImages = [checkInIdCardFrontImage, checkInIdCardBackImage].filter((image): image is File => Boolean(image));
+    if (checkInIdCardImages.some((image) => !['image/jpeg', 'image/png', 'image/webp'].includes(image.type) || image.size > 5 * 1024 * 1024)) {
+      showToast('Mỗi ảnh CCCD phải là JPG, PNG hoặc WEBP và không quá 5 MB.', 'error');
       return;
     }
     const accessToken = localStorage.getItem('accessToken');
@@ -536,29 +722,28 @@ export default function ReceptionRoomBooking({
 
     try {
       setIsCheckingIn(true);
-      await assignRoomToBooking(
+      const result = await checkInBooking(
         selectedCheckInBooking.id,
+        accessToken,
         checkInRoomSlots.map((slot) => ({
           booking_room_id: slot.booking_room_id,
           room_id: Number(checkInRoomIds[slot.booking_room_id]),
         })),
-        accessToken,
-      );
-      const result = await checkInBooking(
-        selectedCheckInBooking.id,
-        accessToken,
-        checkInIdCardImage || undefined,
+        checkInIdCardFrontImage || undefined,
+        checkInIdCardBackImage || undefined,
       );
       showToast(result.message, 'success');
       setSelectedCheckInBooking(null);
       setCheckInRoomSlots([]);
       setCheckInRoomIds({});
-      setCheckInIdCardImage(null);
+      setCheckInIdCardFrontImage(null);
+      setCheckInIdCardBackImage(null);
       setHasVerifiedOriginalId(false);
       await Promise.all([
         fetchRecent(),
         ...(mode === 'checkin' ? [fetchAttentionBookings()] : []),
       ]);
+      onCheckInComplete?.();
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Không thể xác nhận check-in.', 'error');
     } finally {
@@ -573,7 +758,8 @@ export default function ReceptionRoomBooking({
       return;
     }
     setSelectedCheckInBooking(booking);
-    setCheckInIdCardImage(null);
+    setCheckInIdCardFrontImage(null);
+    setCheckInIdCardBackImage(null);
     setHasVerifiedOriginalId(false);
     setCheckInRoomSlots([]);
     setCheckInRoomIds({});
@@ -593,7 +779,27 @@ export default function ReceptionRoomBooking({
     }
   };
 
-  const handleCheckOut = (booking: RecentBooking) => {
+  const loadCheckoutRoomsWithReports = async (bookingId: string | number, accessToken: string) => {
+    const rooms = await listCheckoutCleaningRooms(bookingId, accessToken);
+    return Promise.all(rooms.map(async (room) => {
+      if (!room.task_id || !room.inspection_submitted) return { ...room, inspection_report: null };
+      try {
+        const task = await getCleaningTask(room.task_id, accessToken);
+        const inspectionReport = task.inspection_report ?? null;
+        return {
+          ...room,
+          inspection_report: inspectionReport,
+          report_requires_compensation_decision: Boolean(inspectionReport?.items.some(
+            (item) => item.status === 'DAMAGED' || item.status === 'MISSING',
+          )),
+        };
+      } catch {
+        return { ...room, inspection_report: null };
+      }
+    }));
+  };
+
+  const handleCheckOut = async (booking: RecentBooking) => {
     const accessToken = localStorage.getItem('accessToken');
     if (!accessToken) {
       showToast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.', 'error');
@@ -605,6 +811,201 @@ export default function ReceptionRoomBooking({
     setCheckOutPaymentNote('');
     setCashTendered('');
     setSelectedCheckOutBooking(booking);
+    setCheckoutCleaningRooms([]);
+    setViewedCheckoutReportTaskIds(new Set());
+    setCompensationConfirmedTaskIds(new Set());
+    setCheckoutHousekeepers([]);
+    setCheckoutAssigneeDraft({});
+    setCheckoutAssignmentLoadError('');
+    setLoadingCheckoutAssignments(true);
+    try {
+      const [rooms, housekeepers] = await Promise.all([
+        loadCheckoutRoomsWithReports(booking.id, accessToken),
+        listCleaningHousekeepers(accessToken),
+      ]);
+      setCheckoutCleaningRooms(rooms);
+      setCheckoutHousekeepers(housekeepers);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Không tải được phòng hoặc Housekeeper để phân công.';
+      setCheckoutAssignmentLoadError(message);
+      showToast(message, 'error');
+    } finally {
+      setLoadingCheckoutAssignments(false);
+    }
+  };
+
+  const assignCheckoutHousekeeper = async (room: CheckoutCleaningRoom) => {
+    if (!selectedCheckOutBooking || !room.room_id || !checkoutAssigneeDraft[room.booking_room_id] || assigningCheckoutRoomId) return;
+    const accessToken = localStorage.getItem('accessToken');
+    if (!accessToken) {
+      showToast('Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.', 'error');
+      return;
+    }
+    setAssigningCheckoutRoomId(room.booking_room_id);
+    try {
+      const result = await assignCheckoutCleaningRoom(
+        selectedCheckOutBooking.id,
+        room,
+        checkoutAssigneeDraft[room.booking_room_id],
+        accessToken,
+      );
+      setCheckoutCleaningRooms((current) => current.map((item) => item.booking_room_id === room.booking_room_id
+        ? { ...item, task_id: result.task.id, task_status: result.task.status, assigned_to: result.task.assigned_to, assigned_to_name: result.task.assigned_to_name, inspection_submitted: result.task.inspection_submitted ?? false }
+        : item));
+      showToast(result.already_assigned ? 'Task Checkout Cleaning đã được phân công cho Housekeeper này.' : result.created ? 'Đã tạo và phân công Checkout Cleaning task.' : 'Đã phân công task Checkout Cleaning đang chờ cho Housekeeper.', 'success');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Không thể phân công Checkout Cleaning task.', 'error');
+    } finally {
+      setAssigningCheckoutRoomId(null);
+    }
+  };
+
+  const refreshCheckoutTasks = async () => {
+    if (!selectedCheckOutBooking) return;
+    const accessToken = localStorage.getItem('accessToken');
+    if (!accessToken) return;
+    setLoadingCheckoutAssignments(true);
+    try {
+      const [rooms, housekeepers] = await Promise.all([
+        loadCheckoutRoomsWithReports(selectedCheckOutBooking.id, accessToken),
+        listCleaningHousekeepers(accessToken),
+      ]);
+      setCheckoutCleaningRooms(rooms);
+      setCheckoutHousekeepers(housekeepers);
+      setCheckoutAssignmentLoadError('');
+    } catch (error) {
+      setCheckoutAssignmentLoadError(error instanceof Error ? error.message : 'Could not refresh checkout tasks.');
+    } finally {
+      setLoadingCheckoutAssignments(false);
+    }
+  };
+
+  const openCheckoutInspectionReport = async (taskId: string) => {
+    const accessToken = localStorage.getItem('accessToken');
+    if (!accessToken) return;
+    setLoadingCheckoutReport(true);
+    try {
+      const task = await getCleaningTask(taskId, accessToken);
+      if (!task.inspection_report) throw new Error('Inspection report has not been submitted yet.');
+      const reportRequiresCompensationDecision = task.inspection_report.items.some(
+        (item) => item.status === 'DAMAGED' || item.status === 'MISSING',
+      );
+      setViewedCheckoutReportTaskIds((current) => new Set(current).add(taskId));
+      setCompensationConfirmedTaskIds((current) => {
+        const next = new Set(current);
+        next.delete(taskId);
+        return next;
+      });
+      setCheckoutCleaningRooms((current) => current.map((room) => room.task_id === taskId
+        ? { ...room, report_requires_compensation_decision: reportRequiresCompensationDecision }
+        : room));
+      setCheckoutInspectionReport(task.inspection_report);
+      setCheckoutInspectionTaskId(taskId);
+      setCompensationDrafts(Object.fromEntries(task.inspection_report.items.map((item) => [item.inspection_item_id, {
+        decision: item.compensation_decision || '',
+        amount: item.compensation_decision === 'COMPENSATION'
+          ? String(item.compensation_amount ?? calculateCompensationAmount(item.unit_price))
+          : calculateCompensationAmount(item.unit_price),
+      }])));
+      setCompensationAmountErrors({});
+      setCompensationMessage('');
+      setCompensationError('');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Could not load the inspection report.', 'error');
+    } finally {
+      setLoadingCheckoutReport(false);
+    }
+  };
+
+  const saveCheckoutCompensation = async (itemId: string) => {
+    if (!checkoutInspectionReport || !checkoutInspectionTaskId || savingCompensationItemId) return;
+    const item = checkoutInspectionReport.items.find((entry) => entry.inspection_item_id === itemId);
+    const draft = compensationDrafts[itemId];
+    if (!item || !draft?.decision) return;
+    const amountError = draft.decision === 'COMPENSATION' ? validateCompensationAmount(draft.amount) : null;
+    if (amountError) {
+      setCompensationAmountErrors((current) => ({ ...current, [itemId]: amountError }));
+      setCompensationMessage('');
+      return;
+    }
+    const parsedAmount = draft.decision === 'COMPENSATION' ? Number(draft.amount) : undefined;
+    setCompensationAmountErrors((current) => {
+      const next = { ...current };
+      delete next[itemId];
+      return next;
+    });
+    const token = localStorage.getItem('accessToken');
+    if (!token) { setCompensationError('Your session has expired. Sign in again.'); return; }
+    setSavingCompensationItemId(itemId);
+    setCompensationError('');
+    setCompensationMessage('');
+    try {
+      const response = await saveInspectionItemCompensation(
+        checkoutInspectionTaskId, itemId, draft.decision, parsedAmount, token,
+      );
+      const saved = response.compensation;
+      setCheckoutInspectionReport((current) => current ? {
+        ...current,
+        items: current.items.map((entry) => entry.inspection_item_id === itemId
+          ? { ...entry, compensation_decision: saved.decision, compensation_amount: saved.amount }
+          : entry),
+      } : current);
+      setCompensationMessage(`Saved decision for ${item.equipment_name}.`);
+    } catch (error) {
+      setCompensationError(error instanceof Error ? error.message : 'Could not save this compensation decision.');
+    } finally {
+      setSavingCompensationItemId(null);
+    }
+  };
+
+  const openCompensationConfirmation = () => {
+    if (!checkoutInspectionReport || !selectedCheckOutBooking || savingCompensationItemId) return;
+    setCompensationError('');
+    setCompensationMessage('');
+    setIsCompensationConfirmOpen(true);
+  };
+
+  const confirmApplyCheckoutCompensations = () => {
+    if (!checkoutInspectionReport || !checkoutInspectionTaskId || !selectedCheckOutBooking
+      || savingCompensationItemId || hasUnsavedCompensationChanges || hasUnresolvedCompensationDecisions) return;
+    const report = checkoutInspectionReport;
+    const reportTaskId = checkoutInspectionTaskId;
+    const bookingId = String(selectedCheckOutBooking.id);
+    setPendingCheckoutCompensations((current) => {
+      const itemsByInspectionId = new Map((current[bookingId] || []).map((item) => [item.inspection_item_id, item]));
+      for (const item of report.items) {
+        if (item.compensation_decision === 'COMPENSATION') {
+          itemsByInspectionId.set(item.inspection_item_id, {
+            compensation_id: item.inspection_item_id,
+            inspection_item_id: item.inspection_item_id,
+            decision: 'COMPENSATION',
+            amount: Number(item.compensation_amount || 0),
+            invoice_item_id: null,
+            room_number: report.room_number,
+            equipment_name: item.equipment_name,
+            asset_code: item.asset_code,
+          });
+        } else {
+          itemsByInspectionId.delete(item.inspection_item_id);
+        }
+      }
+      return { ...current, [bookingId]: Array.from(itemsByInspectionId.values()) };
+    });
+    if (reportTaskId) setCompensationConfirmedTaskIds((current) => new Set(current).add(reportTaskId));
+    setCompensationError('');
+    setCompensationMessage('');
+    setIsCompensationConfirmOpen(false);
+    setCheckoutInspectionReport(null);
+    requestAnimationFrame(() => {
+      document.getElementById('checkout-payment-reconciliation')?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+    });
+    const amount = report.items.reduce((total, item) => (
+      item.compensation_decision === 'COMPENSATION' ? total + Number(item.compensation_amount || 0) : total
+    ), 0);
+    showToast(`Đã xác nhận ${formatCurrency(amount)} tiền bồi thường. Khoản này sẽ được cộng khi tạo hóa đơn.`, 'success');
   };
 
   const resumeCheckoutPayment = async (booking: RecentBooking) => {
@@ -641,7 +1042,11 @@ export default function ReceptionRoomBooking({
       const result = await createReceptionCheckout(booking.id, method);
       if (method === 'VNPAY') {
         if (!result.payment_url) throw new Error('Không nhận được đường dẫn thanh toán VNPay.');
-        if (createdInvoice?.detail.id) sessionStorage.setItem('hotelManagement.checkoutInvoiceId', String(createdInvoice.detail.id));
+        if (createdInvoice?.detail.id) {
+          sessionStorage.setItem('hotelManagement.checkoutInvoiceId', String(createdInvoice.detail.id));
+          sessionStorage.setItem('hotelManagement.checkoutInvoiceCreated', String(createdInvoice.created));
+        }
+        sessionStorage.setItem('hotelManagement.checkoutBookingId', String(booking.id));
         sessionStorage.setItem('hotelManagement.checkoutPaymentCode', result.payment_code);
         window.location.assign(result.payment_url);
         return;
@@ -654,8 +1059,13 @@ export default function ReceptionRoomBooking({
         || detail.booking_status.toUpperCase() !== 'CHECKED_OUT') {
         throw new Error('Giao dịch chưa được xác nhận đầy đủ. Hãy kiểm tra trạng thái thanh toán trước khi tiếp tục.');
       }
+      try {
+        setCheckoutCleaningRooms(await listCheckoutCleaningRooms(booking.id, accessToken));
+        setCheckoutAssignmentLoadError('');
+      } catch (error) {
+        setCheckoutAssignmentLoadError(error instanceof Error ? error.message : 'Could not load checkout cleaning tasks.');
+      }
       setCreatedInvoice(null);
-      setSelectedCheckOutBooking(null);
       setCheckoutSuccess({
         detail,
         payment: method === 'CASH' ? { ...payment, paid_at: confirmedAt } : payment,
@@ -670,12 +1080,35 @@ export default function ReceptionRoomBooking({
 
   const createCheckoutInvoice = async () => {
     if (!selectedCheckOutBooking) return;
+    if (!checkoutReportsReadyForInvoice) {
+      showToast('Mở báo cáo của tất cả phòng và xác nhận các quyết định bồi thường trước khi tạo hóa đơn.', 'error');
+      return;
+    }
     try {
       setIsCreatingInvoice(true);
       setCashTendered('');
       setCashTenderError('');
       const result = await createReceptionInvoice(selectedCheckOutBooking.id);
+      const token = localStorage.getItem('accessToken');
+      if (!token) throw new Error('Your session has expired. Sign in again.');
+      const reconciliation = await syncReceptionBookingCompensations(selectedCheckOutBooking.id, token);
       const detail = await getInvoiceDetails(result.invoice_id);
+      const bookingId = String(selectedCheckOutBooking.id);
+      setCheckoutCompensationReconciliation((current) => ({
+        ...current,
+        [bookingId]: {
+          invoice: reconciliation.invoice,
+          compensationItems: reconciliation.compensation_items.filter((item) => item.decision === 'COMPENSATION'),
+        },
+      }));
+      setPendingCheckoutCompensations((current) => {
+        const next = { ...current };
+        delete next[bookingId];
+        return next;
+      });
+      setSelectedCheckOutBooking((current) => current && String(current.id) === bookingId
+        ? { ...current, balance_due: reconciliation.invoice.amount_due }
+        : current);
       setCreatedInvoice({ detail, created: result.created });
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Không thể tạo hoặc tải hóa đơn.', 'error');
@@ -720,17 +1153,17 @@ export default function ReceptionRoomBooking({
     if (mode === 'checkin') void fetchAttentionBookings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
+  useEffect(() => {
+    if (mode !== 'checkin') return undefined;
+    const intervalId = window.setInterval(() => setCheckInClockNow(new Date()), 60000);
+    return () => window.clearInterval(intervalId);
+  }, [mode]);
   const filteredManagementBookings = useMemo(() => {
     const query = managementQuery.trim().toLocaleLowerCase();
-    const sevenDaysFromToday = addDays(vietnamToday, 7);
     return managementBookings.filter((booking) => {
       const checkInDate = String(booking.check_in_date).slice(0, 10);
-      const isCurrentlyStaying = booking.status === 'CHECKED_IN'
-        && checkInDate <= vietnamToday;
-      const isUpcoming = booking.status === 'CONFIRMED'
-        && checkInDate >= vietnamToday
-        && checkInDate <= sevenDaysFromToday;
-      if (!isCurrentlyStaying && !isUpcoming) return false;
+      const isAutoCancelledForHold = booking.status === 'CANCELLED' && booking.cancellation_reason === 'RESERVATION_EXPIRED';
+      if (booking.status !== 'CHECKED_IN' && booking.status !== 'CONFIRMED' && !isAutoCancelledForHold) return false;
       const matchesQuery = !query || [
         booking.booking_code,
         booking.guest_full_name,
@@ -759,6 +1192,58 @@ export default function ReceptionRoomBooking({
   const paginatedManagementBookings = filteredManagementBookings.slice(
     (managementPage - 1) * managementPageSize,
     managementPage * managementPageSize,
+  );
+
+  const upcomingCheckInAttention = (
+    <section className="upcoming-checkin-attention" aria-labelledby="upcoming-checkin-title">
+      <div className="upcoming-checkin-heading">
+        {mode !== 'management' && <span className="upcoming-checkin-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18M12 13v3l2 1"/><circle cx="12" cy="16" r="5"/></svg>
+        </span>}
+        <div>
+          <h4 id="upcoming-checkin-title">Có {checkInTodayBookings.length} booking sắp đến giờ Check-in</h4>
+          <p>Booking đã xác nhận, có ngày nhận phòng hôm nay (giờ Check-in tiêu chuẩn {STANDARD_CHECK_IN_TIME}).</p>
+        </div>
+      </div>
+      {(mode === 'management' ? isLoadingBookings : isLoadingAttentionBookings) && bookingHistory.length === 0 ? (
+        <div className="upcoming-checkin-empty">Đang tải booking Check-in hôm nay...</div>
+      ) : (mode === 'management' ? recentBookingsError : attentionBookingsError) ? (
+        <div className="reception-alert alert-error" role="alert">
+          {mode === 'management' ? recentBookingsError : attentionBookingsError}
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => retryOrGoToLogin(mode === 'management' ? recentBookingsError : attentionBookingsError, mode === 'management' ? fetchRecent : fetchAttentionBookings)}>Thử lại</button>
+        </div>
+      ) : checkInTodayBookings.length === 0 ? (
+        <div className="upcoming-checkin-empty">Không có booking nào Check-in hôm nay.</div>
+      ) : (
+        <div className="upcoming-checkin-list">
+          {checkInTodayBookings.map((booking) => {
+            const countdown = getHoldCountdown(booking.hold_until, mode === 'management' ? attentionNow : checkInClockNow);
+            return <article
+              className="upcoming-checkin-row"
+              key={booking.id}
+              role={mode === 'management' ? 'button' : undefined}
+              tabIndex={mode === 'management' ? 0 : undefined}
+              onClick={mode === 'management' ? () => setSelectedBookingDetail(booking) : undefined}
+              onKeyDown={mode === 'management' ? (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  setSelectedBookingDetail(booking);
+                }
+              } : undefined}
+              title={mode === 'management' ? 'Mở chi tiết booking' : undefined}
+            >
+              <div className="upcoming-checkin-booking">
+                <strong>{booking.booking_code || `#${booking.id}`}</strong>
+                <span>{booking.guest_full_name || 'Chưa có tên'} · {booking.guest_phone || 'Chưa có số điện thoại'}</span>
+              </div>
+              <div className="upcoming-checkin-field"><span>Phòng</span><strong>{booking.room_number || 'Chưa gán'}</strong></div>
+              <div className="upcoming-checkin-field"><span>Bắt đầu giữ phòng</span><strong>{formatHotelDateTime(booking.hold_start)}</strong><small>Check-in tiêu chuẩn: {STANDARD_CHECK_IN_TIME}</small></div>
+              <div className="upcoming-checkin-field"><span>Thời gian còn lại</span><strong className={`upcoming-checkin-countdown upcoming-checkin-countdown-${countdown.status}`}>{countdown.label}</strong><small>Hạn giữ phòng: {formatHotelDateTime(booking.hold_until)}</small></div>
+            </article>;
+          })}
+        </div>
+      )}
+    </section>
   );
 
   // Refresh deposit totals after a payment is confirmed, even when reception
@@ -809,35 +1294,101 @@ export default function ReceptionRoomBooking({
       guest_full_name: '',
       guest_phone: '',
       guest_email: '',
+      guest_id_card: '',
       room_id: defaultRoomId,
       deposit_amount: 0,
       check_in_now: true,
       special_request: 'Khách đặt trực tiếp tại quầy lễ tân',
     });
-    setWalkInIdCardImage(null);
+    initialCreateSelection.current = {
+      primaryRoomId: defaultRoomId,
+      typeIds: roomTypes.map((type) => type.id),
+    };
+    setWalkInIdCardFrontImage(null);
+    setWalkInIdCardBackImage(null);
+    setWalkInPurpose('LEISURE');
     setSelectedServiceQuantities({});
     setWalkInPromotionId('');
     setWalkInPromotionCode('');
     setWalkInAppliedPromotion(null);
     setWalkInPromotionMessage('Chọn promotion hoặc nhập mã để áp dụng.');
+    initialCreateStay.current = { checkInDate, checkOutDate, adults, children };
 
     setIsModalOpen(true);
   };
 
-  const confirmRoomPickerSelection = () => {
-    const selections = availabilityList.flatMap((type) => Array.from(
-      { length: Math.max(0, Math.min(pickerRoomQuantities[type.id] || 0, type.available_rooms)) },
-      () => type,
-    ));
-    if (!selections.length) return;
-    setIsRoomPickerOpen(false);
-    handleOpenWalkInModal(selections);
+  const updateCreateRoomQuantity = (roomTypeId: number, quantity: number) => {
+    const roomType = availabilityList.find((item) => item.id === roomTypeId);
+    if (!roomType) return;
+    const current = [selectedRoomType, ...additionalWalkInTypes].filter((item): item is RoomAvailabilityItem => Boolean(item));
+    const next = current.filter((item) => item.id !== roomTypeId);
+    for (let index = 0; index < Math.max(0, Math.min(quantity, roomType.available_rooms)); index += 1) next.push(roomType);
+    if (!next.length) {
+      showToast('Chọn ít nhất một phòng cho booking.', 'error');
+      return;
+    }
+    if (adults > next.reduce((sum, item) => sum + item.max_adults, 0) || children > next.reduce((sum, item) => sum + item.max_children, 0)) {
+      showToast('Sức chứa các phòng đã chọn không đủ cho số khách hiện tại.', 'error');
+      return;
+    }
+    const [primary, ...additional] = next;
+    const usedByType: Record<number, number> = {};
+    const extraIds: Record<number, string> = {};
+    additional.forEach((item, index) => {
+      const occurrence = usedByType[item.id] || 1;
+      usedByType[item.id] = occurrence + 1;
+      const candidate = item.available_room_list.filter((room) => room.status === 'AVAILABLE')[occurrence];
+      extraIds[index] = candidate ? String(candidate.id) : '';
+    });
+    const firstRoom = primary.available_room_list.find((room) => room.status === 'AVAILABLE');
+    setSelectedRoomType(primary);
+    setAdditionalWalkInTypes(additional);
+    setAdditionalWalkInRoomIds(extraIds);
+    setWalkInForm((form) => ({ ...form, room_id: firstRoom ? String(firstRoom.id) : '' }));
+  };
+
+  const refreshCreateAvailability = async (criteria: { check_in_date: string; check_out_date: string; adults: number; children: number }) => {
+    const rooms = await fetchAvailability(criteria);
+    if (selectedRoomType) {
+      const currentSelections = [selectedRoomType, ...additionalWalkInTypes];
+      let preserved = currentSelections.map((item) => rooms.find((room) => room.id === item.id && room.is_available)).filter((item): item is RoomAvailabilityItem => Boolean(item));
+      if (preserved.length !== currentSelections.length || preserved.length > preserved[0]?.available_rooms) {
+        const first = rooms.find((room) => room.is_available);
+        preserved = first ? [first] : [];
+      }
+      if (preserved.length) {
+        const [primary, ...additional] = preserved;
+        setSelectedRoomType(primary);
+        setAdditionalWalkInTypes(additional);
+        const firstRoom = primary.available_room_list.find((room) => room.status === 'AVAILABLE');
+        setWalkInForm((form) => ({ ...form, room_id: firstRoom ? String(firstRoom.id) : '' }));
+      }
+    }
   };
 
   /**
    * Đóng modal đặt phòng
    */
-  const handleCloseModal = () => {
+  const handleCloseModal = async () => {
+    if (isSubmittingBooking || isLoadingAvailability) return;
+    const hasUnsavedChanges = Boolean(
+      walkInForm.guest_full_name.trim() || walkInForm.guest_phone.trim() || walkInForm.guest_email.trim() || walkInForm.guest_id_card.trim()
+      || walkInIdCardFrontImage || walkInIdCardBackImage || Number(walkInForm.deposit_amount) > 0
+      || Object.values(selectedServiceQuantities).some((quantity) => quantity > 0)
+      || walkInPromotionCode.trim()
+      || walkInPurpose !== 'LEISURE'
+      || walkInForm.special_request !== 'Khách đặt trực tiếp tại quầy lễ tân'
+      || checkInDate !== initialCreateStay.current.checkInDate || checkOutDate !== initialCreateStay.current.checkOutDate
+      || adults !== initialCreateStay.current.adults || children !== initialCreateStay.current.children
+      || walkInForm.room_id !== initialCreateSelection.current.primaryRoomId
+      || [selectedRoomType?.id, ...additionalWalkInTypes.map((type) => type.id)].some((id, index) => id !== initialCreateSelection.current.typeIds[index])
+    );
+    if (hasUnsavedChanges && !await confirmAction({
+      title: 'Đóng form tạo booking?',
+      message: 'Thông tin bạn đã nhập sẽ bị xóa. Bạn có muốn đóng form không?',
+      confirmLabel: 'Đóng form',
+      destructive: true,
+    })) return;
     setIsModalOpen(false);
     setSelectedRoomType(null);
     setAdditionalWalkInTypes([]);
@@ -877,7 +1428,12 @@ export default function ReceptionRoomBooking({
    */
   const handleSubmitWalkIn = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isBookingRequestInFlight.current) return;
     if (!selectedRoomType) return;
+    if (new Date(checkOutDate) <= new Date(checkInDate)) {
+      showToast('Ngày trả phòng phải sau ngày nhận phòng.', 'error');
+      return;
+    }
 
     // Validate guest contact and identity fields before submitting.
     if (!walkInForm.guest_full_name.trim()) {
@@ -905,16 +1461,17 @@ export default function ReceptionRoomBooking({
       showToast('Số khách vượt quá sức chứa của các phòng đã chọn.', 'error');
       return;
     }
-    if (!walkInIdCardImage) {
-      showToast('Vui lòng tải ảnh CCCD của khách lên.', 'error');
+    if (!walkInIdCardFrontImage || !walkInIdCardBackImage) {
+      showToast('Vui lòng tải đủ ảnh CCCD mặt trước và mặt sau của khách.', 'error');
       return;
     }
-    if (!['image/jpeg', 'image/png', 'image/webp'].includes(walkInIdCardImage.type) || walkInIdCardImage.size > 5 * 1024 * 1024) {
-      showToast('Ảnh CCCD phải là JPG, PNG hoặc WEBP và không quá 5 MB.', 'error');
+    if ([walkInIdCardFrontImage, walkInIdCardBackImage].some((image) => !['image/jpeg', 'image/png', 'image/webp'].includes(image.type) || image.size > 5 * 1024 * 1024)) {
+      showToast('Mỗi ảnh CCCD phải là JPG, PNG hoặc WEBP và không quá 5 MB.', 'error');
       return;
     }
 
     try {
+      isBookingRequestInFlight.current = true;
       setIsSubmittingBooking(true);
       const payload: WalkInBookingPayload = {
         room_type_id: selectedRoomType.id,
@@ -934,12 +1491,13 @@ export default function ReceptionRoomBooking({
         guest_full_name: walkInForm.guest_full_name,
         guest_phone: normalizedPhone,
         guest_email: normalizedEmail || undefined,
+        guest_id_card: walkInForm.guest_id_card.trim() || undefined,
         deposit_amount: Number(walkInForm.deposit_amount || 0),
-        special_request: walkInForm.special_request,
+        special_request: [walkInPurpose ? `Purpose: ${walkInPurpose}` : '', walkInForm.special_request].filter(Boolean).join(' · '),
         check_in_now: true,
       };
 
-      const res = await createWalkInBooking(payload, walkInIdCardImage);
+      const res = await createWalkInBooking(payload, walkInIdCardFrontImage, walkInIdCardBackImage);
 
       showToast(`${res.message} (Khách: ${res.booking.guest_full_name}, Phòng: ${res.booking.room_number || 'Tự gán'}${Number(res.booking.discount_amount || 0) > 0 ? `, Promotion ${res.booking.promotion_code}: giảm ${formatCurrency(Number(res.booking.discount_amount))}` : ''}, Tổng: ${formatCurrency(res.booking.total_amount)})`, 'success');
       setIsModalOpen(false);
@@ -948,23 +1506,11 @@ export default function ReceptionRoomBooking({
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Đặt phòng tại quầy thất bại.', 'error');
     } finally {
+      isBookingRequestInFlight.current = false;
       setIsSubmittingBooking(false);
     }
   };
 
-  // Lọc danh sách theo sức chứa khách và bộ lọc "Chỉ phòng còn trống"
-  const displayedRoomTypes = useMemo(() => {
-    return availabilityList.filter((item) => {
-      const matchesCapacity = item.capacity_matched;
-      const matchesAvailability = !filterOnlyAvailable || item.is_available;
-      return matchesCapacity && matchesAvailability;
-    });
-  }, [availabilityList, filterOnlyAvailable]);
-
-  // Thống kê tổng quan nhanh cho Lễ tân
-  const totalAvailableRoomsCount = useMemo(() => {
-    return availabilityList.reduce((sum, item) => sum + item.available_rooms, 0);
-  }, [availabilityList]);
   const visibleBookings = recentBookings.filter((booking) => {
     if (mode === 'checkin') return booking.status === 'CONFIRMED';
     if (mode === 'checkout') return booking.status === 'CHECKED_IN';
@@ -995,10 +1541,127 @@ export default function ReceptionRoomBooking({
   const cashTenderedIsEmpty = cashTendered.trim() === '';
   const cashTenderedAmount = cashTenderedIsEmpty ? 0 : Math.max(0, Number(cashTendered) || 0);
   const cashChangeDue = Math.max(0, cashTenderedAmount - invoiceBalanceDue);
+  const savedCompensationTotal = checkoutInspectionReport?.items.reduce((total, item) => (
+    item.compensation_decision === 'COMPENSATION' ? total + Number(item.compensation_amount || 0) : total
+  ), 0) || 0;
+  const hasUnsavedCompensationChanges = checkoutInspectionReport?.items.some((item) => {
+    const draft = compensationDrafts[item.inspection_item_id];
+    if (!draft) return false;
+    if (draft.decision !== (item.compensation_decision || '')) return true;
+    return draft.decision === 'COMPENSATION'
+      && Number(draft.amount) !== Number(item.compensation_amount || 0);
+  }) || false;
+  const hasUnresolvedCompensationDecisions = checkoutInspectionReport?.items.some((item) => (
+    (item.status === 'DAMAGED' || item.status === 'MISSING') && !item.compensation_decision
+  )) || false;
+  const checkoutReportsViewed = checkoutCleaningRooms.length > 0
+    && checkoutCleaningRooms.every((room) => Boolean(
+      room.task_id && room.inspection_submitted && viewedCheckoutReportTaskIds.has(room.task_id),
+    ));
+  const checkoutCompensationsConfirmed = checkoutReportsViewed
+    && checkoutCleaningRooms.every((room) => (
+      !room.report_requires_compensation_decision
+      || Boolean(room.task_id && compensationConfirmedTaskIds.has(room.task_id))
+    ));
+  const checkoutReportsReadyForInvoice = checkoutReportsViewed && checkoutCompensationsConfirmed;
+  const checkoutInvoicePrerequisites = checkoutCleaningRooms.flatMap((room) => {
+    const roomLabel = room.room_number || `booking room #${room.booking_room_id}`;
+    if (!room.task_id) return [`Phòng ${roomLabel}: chưa có Checkout Cleaning task.`];
+    if (!room.inspection_submitted) return [`Phòng ${roomLabel}: Housekeeper chưa gửi báo cáo inspection.`];
+    if (!viewedCheckoutReportTaskIds.has(room.task_id)) return [`Phòng ${roomLabel}: bạn chưa mở xem báo cáo.`];
+    if (room.report_requires_compensation_decision && !compensationConfirmedTaskIds.has(room.task_id)) {
+      return [`Phòng ${roomLabel}: chưa lưu và xác nhận quyết định bồi thường.`];
+    }
+    return [];
+  });
+  if (checkoutCleaningRooms.length === 0 && !loadingCheckoutAssignments) {
+    checkoutInvoicePrerequisites.push('Chưa tải được danh sách phòng cần kiểm tra. Hãy làm mới danh sách.');
+  }
+  const activeCheckoutReconciliation = selectedCheckOutBooking
+    ? checkoutCompensationReconciliation[String(selectedCheckOutBooking.id)]
+    : undefined;
+  const pendingCheckoutItems = selectedCheckOutBooking
+    ? pendingCheckoutCompensations[String(selectedCheckOutBooking.id)]
+    : undefined;
+  const displayedCheckoutCompensationItems = pendingCheckoutItems ?? activeCheckoutReconciliation?.compensationItems ?? [];
+  const displayedCheckoutCompensationTotal = displayedCheckoutCompensationItems.reduce((total, item) => total + Number(item.amount || 0), 0);
+  const reconciledFinalPaid = activeCheckoutReconciliation?.invoice.payments
+    .filter((payment) => payment.payment_type.toUpperCase() === 'FINAL' && payment.status.toUpperCase() === 'SUCCESS')
+    .reduce((total, payment) => total + Number(payment.amount || 0), 0);
+  const createRoomTypeOptions = availabilityList.filter((item) => {
+    const typeMatches = createRoomTypeFilter === 'ALL' || String(item.id) === createRoomTypeFilter;
+    const priceMatches = !createMaxPrice || Number(item.base_price) <= Number(createMaxPrice);
+    return typeMatches && priceMatches && (!filterOnlyAvailable || item.is_available);
+  });
+  const selectedCreateRoomCounts = [selectedRoomType, ...additionalWalkInTypes].reduce<Record<number, number>>((counts, item) => {
+    if (item) counts[item.id] = (counts[item.id] || 0) + 1;
+    return counts;
+  }, {});
+  const hasAvailableAssignedRooms = Boolean(selectedRoomType?.is_available && walkInForm.room_id
+    && additionalWalkInTypes.every((type, index) => type.is_available && Boolean(additionalWalkInRoomIds[index])));
 
   return (
     <div className={`reception-booking-module${mode === 'management' ? ' booking-management-main-container' : ''}`}>
-      {checkoutSuccess && <CheckoutPaymentSuccessModal result={checkoutSuccess} onClose={() => setCheckoutSuccess(null)} />}
+      {checkoutSuccess && <CheckoutPaymentSuccessModal result={checkoutSuccess} onClose={() => { setCheckoutSuccess(null); setSelectedCheckOutBooking(null); }} />}
+      {checkoutInspectionReport && <div className="cleaning-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !savingCompensationItemId) setCheckoutInspectionReport(null); }}>
+        <section className="cleaning-task-modal cleaning-detail-modal" role="dialog" aria-modal="true" aria-labelledby="checkout-inspection-report-title">
+          <div className="cleaning-modal-title"><div><span>Checkout Cleaning · Room {checkoutInspectionReport.room_number}</span><h3 id="checkout-inspection-report-title">Equipment Inspection Report</h3></div><button type="button" aria-label="Close report" disabled={Boolean(savingCompensationItemId)} onClick={() => setCheckoutInspectionReport(null)}>×</button></div>
+          <dl className="cleaning-inspection-report-summary checkout-inspection-report-summary"><div><dt>Booking</dt><dd>{checkoutInspectionReport.booking_code || '—'}{checkoutInspectionReport.guest_full_name ? ` · ${checkoutInspectionReport.guest_full_name}` : ''}</dd></div><div><dt>Housekeeper</dt><dd>{checkoutInspectionReport.housekeeper_name}</dd></div><div><dt>Submitted at</dt><dd>{formatVietnamDateTime(checkoutInspectionReport.submitted_at)}</dd></div></dl>
+          <div className="cleaning-inspection-report-items checkout-inspection-report-items">{checkoutInspectionReport.items.map((item) => {
+            const draft = compensationDrafts[item.inspection_item_id] || { decision: '', amount: '' };
+            const canDecide = item.status === 'DAMAGED' || item.status === 'MISSING';
+            return <article key={item.inspection_item_id}>
+              <div className="checkout-inspection-equipment-identity"><strong>{item.equipment_name}</strong><small>{item.asset_code}</small></div>
+              <span className={`cleaning-inspection-status is-${item.status.toLowerCase()}`}>{item.status}</span>
+              <p>{item.notes || '—'}</p>
+              {canDecide && <div className="checkout-compensation-controls">
+                <strong>Compensation decision</strong>
+                <div className="checkout-compensation-options">
+                  <label><input type="radio" name={`compensation-${item.inspection_item_id}`} checked={draft.decision === 'COMPENSATION'} disabled={Boolean(savingCompensationItemId)} onChange={() => setCompensationDrafts((current) => updateCompensationDraftForItem(current, item.inspection_item_id, draft, { decision: 'COMPENSATION', amount: calculateCompensationAmount(item.unit_price) }))} /> Compensation</label>
+                  <label><input type="radio" name={`compensation-${item.inspection_item_id}`} checked={draft.decision === 'NO_COMPENSATION'} disabled={Boolean(savingCompensationItemId)} onChange={() => {
+                    setCompensationDrafts((current) => updateCompensationDraftForItem(current, item.inspection_item_id, draft, { decision: 'NO_COMPENSATION' }));
+                    setCompensationAmountErrors((current) => {
+                      const next = { ...current };
+                      delete next[item.inspection_item_id];
+                      return next;
+                    });
+                  }} /> No compensation</label>
+                </div>
+                {draft.decision === 'COMPENSATION' && <label className="checkout-compensation-amount">Amount (80% of equipment price)<input type="number" min="0" step="0.01" value={calculateCompensationAmount(item.unit_price)} readOnly aria-readonly="true" /></label>}
+                {item.compensation_decision && <p className="checkout-compensation-saved">Saved: {item.compensation_decision === 'COMPENSATION' ? 'Compensation' : 'No compensation'}{item.compensation_decision === 'COMPENSATION' ? ` · ${formatCurrency(Number(item.compensation_amount || 0))}` : ''}</p>}
+                <button type="button" className="btn btn-outline checkout-compensation-save" disabled={!draft.decision || Boolean(savingCompensationItemId)} onClick={() => void saveCheckoutCompensation(item.inspection_item_id)}>
+                  {savingCompensationItemId === item.inspection_item_id ? 'Saving…' : 'Save decision'}
+                </button>
+              </div>}
+            </article>;
+          })}</div>
+          {checkoutInspectionReport.items.some((item) => item.status === 'DAMAGED' || item.status === 'MISSING') && <section className="checkout-compensation-apply">
+            <div><span>Saved compensation total</span><strong>{formatCurrency(savedCompensationTotal)}</strong><small>Confirm returns to checkout payment. The charge is added when you create the invoice.</small></div>
+            <button type="button" className="btn btn-primary" disabled={Boolean(savingCompensationItemId) || hasUnsavedCompensationChanges || hasUnresolvedCompensationDecisions} onClick={openCompensationConfirmation}>Xác nhận bồi thường</button>
+            {hasUnsavedCompensationChanges && <small className="checkout-compensation-unsaved">Save your changed decisions before applying them to the invoice.</small>}
+            {hasUnresolvedCompensationDecisions && <small className="checkout-compensation-unsaved">Save a Compensation or No compensation decision for every damaged or missing item.</small>}
+          </section>}
+          {compensationMessage && <p className="checkout-compensation-feedback is-success" role="status">{compensationMessage}</p>}
+          {compensationError && <p className="checkout-compensation-feedback is-error" role="alert">{compensationError}</p>}
+        </section>
+      </div>}
+      {isCompensationConfirmOpen && checkoutInspectionReport && <div className="app-confirm-backdrop checkout-compensation-confirm-backdrop" role="presentation" onMouseDown={(event) => {
+        if (event.target === event.currentTarget) setIsCompensationConfirmOpen(false);
+      }}>
+        <section className="app-confirm-dialog checkout-compensation-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="checkout-compensation-confirm-title" aria-describedby="checkout-compensation-confirm-description">
+          <header className="checkout-compensation-confirm-header">
+            <h2 id="checkout-compensation-confirm-title">Confirm Compensation</h2>
+            <button type="button" aria-label="Close confirmation" onClick={() => setIsCompensationConfirmOpen(false)}>×</button>
+          </header>
+          <p id="checkout-compensation-confirm-description">Confirm the saved equipment compensation and return to Check-out &amp; Payment? No invoice will be created yet; the charge will be added when you create it.</p>
+          <div className="checkout-compensation-confirm-total"><span>Saved compensation total</span><strong>{formatCurrency(savedCompensationTotal)}</strong></div>
+          {compensationError && <p className="checkout-compensation-confirm-error" role="alert">{compensationError}</p>}
+          <footer>
+            <button type="button" className="btn btn-outline" onClick={() => setIsCompensationConfirmOpen(false)}>Cancel</button>
+            <button type="button" className="btn btn-primary" onClick={confirmApplyCheckoutCompensations}>Confirm</button>
+          </footer>
+        </section>
+      </div>}
       {mode === 'management' && <>
       <section className="booking-management-toolbar">
         <div>
@@ -1006,308 +1669,56 @@ export default function ReceptionRoomBooking({
           <p>Theo dõi thông tin đặt phòng, trạng thái và thanh toán của khách.</p>
         </div>
         <div className="booking-management-toolbar-actions">
-          {onViewBookingHistory && <button type="button" className="btn btn-outline" onClick={onViewBookingHistory}>Xem lịch sử booking</button>}
-          <button
+          {!readOnly && onViewBookingHistory && <button type="button" className="btn btn-outline" onClick={onViewBookingHistory}>Xem lịch sử booking</button>}
+          {!readOnly && <button
             type="button"
             className="btn btn-primary"
-            aria-expanded={isCreateBookingOpen}
-            onClick={() => setIsCreateBookingOpen((open) => !open)}
-          >
-            {isCreateBookingOpen ? 'Đóng tạo booking' : '＋ Tạo booking'}
-          </button>
-        </div>
-      </section>
-      {isCreateBookingOpen && <>
-      {/* =========================================================================
-          KHỐI 1: BỘ LỌC KIỂM TRA PHÒNG TRỐNG (CHECK ROOM AVAILABILITY CONTROLS)
-          ========================================================================= */}
-      <div className="availability-search-card">
-        <div className="search-card-header">
-          <div>
-            <h3 className="module-section-title">Kiểm tra phòng trống & Đặt tại quầy</h3>
-            <p className="module-section-subtitle">
-              Tra cứu chính xác loại phòng còn trống theo ngày để tư vấn và tạo đơn cho khách đến trực tiếp tại quầy lễ tân.
-            </p>
-          </div>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => void fetchAvailability()}
+            aria-haspopup="dialog"
+            onClick={async () => {
+              initialCreateStay.current = { checkInDate, checkOutDate, adults, children };
+              initialCreateSelection.current = { primaryRoomId: '', typeIds: [] };
+              setSelectedRoomType(null);
+              setIsModalOpen(true);
+              const rooms = await fetchAvailability();
+              const firstAvailable = rooms.find((room) => room.is_available);
+              if (firstAvailable) handleOpenWalkInModal([firstAvailable]);
+              else if (rooms.length) {
+                handleOpenWalkInModal([rooms[0]]);
+                showToast('Không có phòng khả dụng theo ngày này. Bạn có thể đổi thông tin lưu trú trong popup.', 'error');
+              }
+              else {
+                setSelectedRoomType(null);
+                setIsModalOpen(true);
+                showToast('Không có phòng phù hợp trong khoảng ngày và số khách đã chọn.', 'error');
+              }
+            }}
             disabled={isLoadingAvailability}
           >
-            {isLoadingAvailability ? 'Đang kiểm tra...' : 'Làm mới'}
-          </button>
+            {isLoadingAvailability ? 'Đang tải phòng…' : '＋ Tạo booking'}
+          </button>}
         </div>
-
-        <div className="reception-filter-grid">
-          <div className="filter-field">
-            <label htmlFor="rec-checkin">Ngày nhận phòng</label>
-            <input
-              id="rec-checkin"
-              type="date"
-              value={checkInDate}
-              onChange={(e) => {
-                const nextIn = e.target.value;
-                setCheckInDate(nextIn);
-                if (new Date(checkOutDate) <= new Date(nextIn)) {
-                  setCheckOutDate(addDays(nextIn, 1));
-                }
-              }}
-            />
-          </div>
-
-          <div className="filter-field">
-            <label htmlFor="rec-checkout">Ngày trả phòng</label>
-            <input
-              id="rec-checkout"
-              type="date"
-              value={checkOutDate}
-              onChange={(e) => {
-                const nextOut = e.target.value;
-                if (new Date(nextOut) <= new Date(checkInDate)) {
-                  setCheckOutDate(addDays(checkInDate, 1));
-                } else {
-                  setCheckOutDate(nextOut);
-                }
-              }}
-            />
-          </div>
-
-          <div className="filter-field">
-            <label htmlFor="rec-adults">Người lớn</label>
-            <select
-              id="rec-adults"
-              value={adults}
-              onChange={(e) => setAdults(Number(e.target.value))}
-            >
-              {[1, 2, 3, 4, 5, 6].map((num) => (
-                <option key={num} value={num}>
-                  {num} người lớn
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="filter-field">
-            <label htmlFor="rec-children">Trẻ em</label>
-            <select
-              id="rec-children"
-              value={children}
-              onChange={(e) => setChildren(Number(e.target.value))}
-            >
-              {[0, 1, 2, 3, 4].map((num) => (
-                <option key={num} value={num}>
-                  {num} trẻ em
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="filter-action-wrap">
-            <button
-              type="button"
-              className="btn btn-primary full-width"
-              onClick={() => void fetchAvailability()}
-              disabled={isLoadingAvailability}
-            >
-              {isLoadingAvailability ? 'Đang kiểm tra...' : 'Kiểm tra phòng'}
-            </button>
-          </div>
-        </div>
-
-        {/* Thanh tóm tắt nhanh tình trạng phòng trống */}
-        <div className="reception-stat-strip">
-          <div className="stat-pill">
-            <span className="pill-label">Khoảng thời gian:</span>
-            <strong>{checkInDate} → {checkOutDate} ({nights} đêm)</strong>
-          </div>
-          <div className="stat-pill">
-            <span className="pill-label">Tổng phòng còn trống:</span>
-            <strong className="text-success">{totalAvailableRoomsCount} phòng</strong>
-          </div>
-          <div className="stat-pill">
-            <span className="pill-label">Loại phòng phù hợp:</span>
-            <strong>
-              {availabilityList.filter((i) => i.capacity_matched && i.is_available).length} / {availabilityList.length} loại
-            </strong>
-          </div>
-          <div className="stat-toggle-pill">
-            <label className="toggle-checkbox-label">
-              <input
-                type="checkbox"
-                checked={filterOnlyAvailable}
-                onChange={(e) => setFilterOnlyAvailable(e.target.checked)}
-              />
-              <span>Chỉ hiển thị loại phòng còn trống</span>
-            </label>
-          </div>
-        </div>
-
-        {availabilityError && <div className="reception-alert alert-error">{availabilityError}</div>}
-      </div>
-
-      {/* =========================================================================
-          KHỐI 2: DANH SÁCH LOẠI PHÒNG VÀ TÌNH TRẠNG PHÒNG TRỐNG
-          ========================================================================= */}
-      <div className="reception-room-list-section">
-        <h4 className="section-title-sm">Danh sách loại phòng & Sẵn sàng đón khách</h4>
-
-        {displayedRoomTypes.length === 0 ? (
-          <div className="empty-state-box">
-            <strong>Không có phòng phù hợp</strong>
-            <span>
-              Không tìm thấy loại phòng đủ sức chứa cho {adults} người lớn và {children} trẻ em trong khoảng thời gian đã chọn.
-              Vui lòng điều chỉnh số khách hoặc chọn ngày khác.
-            </span>
-          </div>
-        ) : (
-          <div className="reception-room-grid">
-            {displayedRoomTypes.map((room) => {
-              const estimatedTotal = room.base_price * nights;
-
-              return (
-                <div
-                  key={room.id}
-                  className={`reception-room-card ${!room.is_available ? 'card-sold-out' : ''}`}
-                >
-                  <div className="card-top-header">
-                    <div>
-                      <h4 className="room-title">{room.name}</h4>
-                      <span className="room-capacity-info">
-                        Tối đa {room.max_adults} người lớn, {room.max_children} trẻ em
-                      </span>
-                    </div>
-
-                    {/* Huy hiệu tình trạng phòng trống */}
-                    {room.capacity_matched ? (
-                      room.is_available ? (
-                        <span className="badge-status-available">
-                          Còn {room.available_rooms} / {room.total_rooms} phòng
-                        </span>
-                      ) : (
-                        <span className="badge-status-soldout">
-                          Hết phòng ngày này
-                        </span>
-                      )
-                    ) : (
-                      <span className="badge-status-soldout">
-                        Không đủ sức chứa
-                      </span>
-                    )}
-                  </div>
-
-                  <p className="room-desc-text">{room.description}</p>
-
-                  {/* Hiển thị số phòng vật lý cụ thể còn trống */}
-                  <div className="physical-rooms-box">
-                    <span className="physical-rooms-label">Số phòng trống:</span>
-                    {room.available_room_list && room.available_room_list.length > 0 ? (
-                      <div className="room-tags-wrapper">
-                        {room.available_room_list.map((r: AvailableRoom) => (
-                          <span key={r.id} className="room-number-tag" title={`Tầng ${r.floor || 1}`}>
-                            Phòng {r.room_number}
-                          </span>
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="text-muted text-sm">Không còn phòng vật lý nào trống</span>
-                    )}
-                  </div>
-
-                  <div className="card-footer-pricing">
-                    <div>
-                      <div className="price-primary">{formatCurrency(room.base_price)} <small>/ đêm</small></div>
-                      <div className="price-total-est">
-                        Tổng {nights} đêm: <strong>{formatCurrency(estimatedTotal)}</strong>
-                      </div>
-                    </div>
-
-                    {room.is_available && <span className="room-selection-hint">Có thể chọn cho booking</span>}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-        <div className="booking-now-bar">
-          <span>Chọn ngày lưu trú và loại phòng, sau đó tạo booking cho khách.</span>
-          <button type="button" className="btn btn-primary booking-now-button" disabled={!availabilityList.some((roomType) => roomType.is_available)} onClick={() => { setPickerRoomQuantities({}); setIsRoomPickerOpen(true); }}>Booking Now</button>
-        </div>
-      </div>
-      </>}
-
-      {/* =========================================================================
-          KHỐI 3: MODAL ĐẶT PHÒNG TRỰC TIẾP TẠI QUẦY (WALK-IN BOOKING MODAL)
-          ========================================================================= */}
-      {isRoomPickerOpen && <div className="modal-backdrop" onClick={() => setIsRoomPickerOpen(false)}>
-        <div className="room-picker-modal" role="dialog" aria-modal="true" aria-labelledby="walkin-room-picker-title" onClick={(event) => event.stopPropagation()}>
-          <div className="modal-header"><div><h3 id="walkin-room-picker-title">Chọn phòng cho booking</h3><p>Có thể chọn nhiều loại phòng trong cùng một booking.</p></div><button type="button" className="modal-close-btn" onClick={() => setIsRoomPickerOpen(false)}>Đóng</button></div>
-          <div className="room-picker-list">{availabilityList.filter((roomType) => roomType.is_available).map((roomType) => {
-            const quantity = pickerRoomQuantities[roomType.id] || 0;
-            return <div className={`room-picker-option ${quantity > 0 ? 'selected' : ''}`} key={roomType.id}>
-              <input aria-label={`Số lượng ${roomType.name}`} type="number" min="0" max={roomType.available_rooms} value={quantity} onChange={(event) => setPickerRoomQuantities({ ...pickerRoomQuantities, [roomType.id]: Math.max(0, Math.min(roomType.available_rooms, Number(event.target.value) || 0)) })} />
-              <span className="room-picker-option-copy"><strong>{roomType.name}</strong><small>Tối đa {roomType.max_adults} người lớn, {roomType.max_children} trẻ em · Còn {roomType.available_rooms} phòng</small></span>
-              <strong className="room-picker-price">{formatCurrency(roomType.base_price)} / đêm</strong>
-            </div>;
-          })}</div>
-          <div className="room-picker-footer"><span>{Object.values(pickerRoomQuantities).reduce((sum, quantity) => sum + quantity, 0)} phòng được chọn</span><div><button type="button" className="btn btn-outline" onClick={() => setIsRoomPickerOpen(false)}>Hủy</button><button type="button" className="btn btn-primary" disabled={!Object.values(pickerRoomQuantities).some((quantity) => quantity > 0)} onClick={confirmRoomPickerSelection}>Tiếp tục</button></div></div>
-        </div>
-      </div>}
-
-      {isModalOpen && selectedRoomType && (
-        <div className="modal-backdrop" onClick={handleCloseModal}>
-          <div className="walkin-modal-container" onClick={(e) => e.stopPropagation()}>
+      </section>
+      {isModalOpen && (
+        <div className="modal-backdrop booking-create-backdrop" onClick={handleCloseModal}>
+          <div className="walkin-modal-container booking-create-modal" role="dialog" aria-modal="true" aria-labelledby="walkin-booking-title" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <div>
-                <h3>Đặt phòng tại quầy (Walk-in Booking)</h3>
-                <p>Tạo đơn trực tiếp cho khách đến quầy lễ tân • {selectedRoomType.name}</p>
+                <h3 id="walkin-booking-title">Tạo booking mới</h3>
+                <p>{selectedRoomType ? `Đặt tại quầy · ${selectedRoomType.name} · booking sẽ check-in ngay khi tạo` : 'Không có phòng phù hợp với điều kiện lưu trú hiện tại.'}</p>
               </div>
-              <button type="button" className="modal-close-btn" onClick={handleCloseModal}>
-                Đóng
+              <button type="button" className="modal-close-btn" aria-label="Đóng form tạo booking" onClick={handleCloseModal} disabled={isSubmittingBooking || isLoadingAvailability}>
+                ×
               </button>
             </div>
 
-            <form onSubmit={handleSubmitWalkIn} className="walkin-modal-form">
+            {selectedRoomType ? <form onSubmit={handleSubmitWalkIn} className="walkin-modal-form">
               {/* Tóm tắt thông tin phòng đã chọn */}
-              <div className="booking-summary-strip">
-                <div>
-                  <strong>Loại phòng:</strong> {[selectedRoomType, ...additionalWalkInTypes].map((type) => type.name).join(', ')}
-                </div>
-                <div>
-                  <strong>Lưu trú:</strong> {checkInDate} → {checkOutDate} ({nights} đêm)
-                </div>
-                <div>
-                  <strong>Giá/đêm:</strong> {formatCurrency([selectedRoomType, ...additionalWalkInTypes].reduce((sum, type) => sum + type.base_price, 0))}
-                </div>
-                <div>
-                  <strong>Tổng tiền phòng:</strong>{' '}
-                  <span className="text-highlight">
-                    {formatCurrency(walkInRoomTotal)}
-                  </span>
-                </div>
-                <div><strong>Tổng tiền dịch vụ:</strong> <span className="text-highlight">{formatCurrency(walkInServiceTotal)}</span></div>
-                <div><strong>Tổng trước promotion:</strong> <span>{formatCurrency(walkInSubtotal)}</span></div>
-                {selectedWalkInPromotion && <div><strong>Promotion {selectedWalkInPromotion.code}:</strong> <span className="text-highlight">− {formatCurrency(walkInDiscount)}</span></div>}
-                <div><strong>Tổng booking dự kiến:</strong> <span className="text-highlight">{formatCurrency(walkInTotal)}</span></div>
-              </div>
 
-              <div className="booking-room-summary">
-                <h3>Khuyến mãi</h3>
-                <div className="booking-promotion-selection">
-                  <div>{isWalkInPromotionApplied
-                    ? <><strong>{walkInAppliedPromotion.code}</strong><span>Đã giảm {formatCurrency(walkInDiscount)}</span></>
-                    : <span>{walkInAppliedPromotion ? 'Tạm tính đã thay đổi, vui lòng áp dụng lại mã.' : 'Chưa chọn mã khuyến mãi'}</span>}
-                  </div>
-                  <button type="button" className="btn btn-outline" onClick={() => setIsWalkInPromotionModalOpen(true)}>
-                    {isWalkInPromotionApplied ? 'Đổi promotion' : 'Chọn promotion'}
-                  </button>
-                </div>
-                <p className={`customer-promotion-message${isWalkInPromotionApplied ? ' is-success' : ''}`} role="status" aria-live="polite">{walkInPromotionMessage}</p>
-                <p>Tạm tính: {formatCurrency(walkInSubtotal)}{isWalkInPromotionApplied ? ` · Giảm ${formatCurrency(walkInDiscount)} · Còn ${formatCurrency(walkInTotal)}` : ''}</p>
-              </div>
+
+
 
               {/* Thông tin khách hàng đến quầy */}
-              <div className="form-sub-header">Thông tin khách hàng</div>
+              <section className="booking-create-section"><h4 className="form-sub-header">Guest Information</h4>
               <div className="form-row-2">
                 <div className="form-group">
                   <label htmlFor="guest_full_name">
@@ -1344,10 +1755,18 @@ export default function ReceptionRoomBooking({
 
               <div className="form-row-2">
                 <div className="form-group">
-                  <label htmlFor="guest_id_card_image">Ảnh CCCD khách hàng <span className="req">*</span></label>
-                  <input id="guest_id_card_image" type="file" accept="image/jpeg,image/png,image/webp" required onChange={(event) => setWalkInIdCardImage(event.target.files?.[0] || null)} />
-                  <small>Chấp nhận JPG, PNG hoặc WEBP, tối đa 5 MB.</small>
-                  {walkInIdCardImage && <small>Đã chọn: {walkInIdCardImage.name}</small>}
+                  <label htmlFor="guest_id_card_number">Citizen ID / CCCD</label>
+                  <input id="guest_id_card_number" type="text" inputMode="numeric" maxLength={50} value={walkInForm.guest_id_card} onChange={(e) => setWalkInForm({ ...walkInForm, guest_id_card: e.target.value })} placeholder="Số CCCD / hộ chiếu" />
+                  <small>Ảnh giấy tờ tùy thân vẫn cần tải lên để hoàn tất check-in.</small>
+                </div>
+                <div className="form-group">
+                  <label htmlFor="guest_id_card_front_image">Ảnh CCCD mặt trước <span className="req">*</span></label>
+                  <input id="guest_id_card_front_image" type="file" accept="image/jpeg,image/png,image/webp" required onChange={(event) => setWalkInIdCardFrontImage(event.target.files?.[0] || null)} />
+                  {walkInIdCardFrontImage && <small>Đã chọn: {walkInIdCardFrontImage.name}</small>}
+                  <label htmlFor="guest_id_card_back_image">Ảnh CCCD mặt sau <span className="req">*</span></label>
+                  <input id="guest_id_card_back_image" type="file" accept="image/jpeg,image/png,image/webp" required onChange={(event) => setWalkInIdCardBackImage(event.target.files?.[0] || null)} />
+                  <small>Chấp nhận JPG, PNG hoặc WEBP, tối đa 5 MB mỗi ảnh.</small>
+                  {walkInIdCardBackImage && <small>Đã chọn: {walkInIdCardBackImage.name}</small>}
                 </div>
 
                 <div className="form-group">
@@ -1362,25 +1781,59 @@ export default function ReceptionRoomBooking({
                   />
                 </div>
               </div>
+              </section>
+
+              <section className="booking-create-section"><h4 className="form-sub-header">Stay Information</h4>
+                <div className="booking-stay-grid">
+                  <label>Check-in Date<input type="date" min={today} value={checkInDate} onChange={(event) => {
+                    const nextIn = event.target.value;
+                    const nextOut = new Date(nextIn) >= new Date(checkOutDate) ? addDays(nextIn, 1) : checkOutDate;
+                    setCheckInDate(nextIn); setCheckOutDate(nextOut);
+                    void refreshCreateAvailability({ check_in_date: nextIn, check_out_date: nextOut, adults, children });
+                  }} /></label>
+                  <label>Check-out Date<input type="date" min={addDays(checkInDate, 1)} value={checkOutDate} onChange={(event) => {
+                    const nextOut = event.target.value;
+                    if (new Date(nextOut) <= new Date(checkInDate)) return;
+                    setCheckOutDate(nextOut);
+                    void refreshCreateAvailability({ check_in_date: checkInDate, check_out_date: nextOut, adults, children });
+                  }} /></label>
+                  <label>Number of Nights<input type="number" value={nights} readOnly aria-readonly="true" /></label>
+                  <label>Adults<select value={adults} onChange={(event) => {
+                    const nextAdults = Number(event.target.value); setAdults(nextAdults);
+                    void refreshCreateAvailability({ check_in_date: checkInDate, check_out_date: checkOutDate, adults: nextAdults, children });
+                  }}>{[1,2,3,4,5,6].map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
+                  <label>Children<select value={children} onChange={(event) => {
+                    const nextChildren = Number(event.target.value); setChildren(nextChildren);
+                    void refreshCreateAvailability({ check_in_date: checkInDate, check_out_date: checkOutDate, adults, children: nextChildren });
+                  }}>{[0,1,2,3,4].map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
+                  <label>Purpose of Stay<select value={walkInPurpose} onChange={(event) => setWalkInPurpose(event.target.value)}><option value="LEISURE">Leisure</option><option value="BUSINESS">Business</option><option value="OTHER">Other</option></select></label>
+                </div>
+              </section>
+
+              <section className="booking-create-section"><h4 className="form-sub-header">Select Room Type</h4>
+                <div className="booking-room-filter-grid">
+                  <label>Room Type<select value={createRoomTypeFilter} onChange={(event) => setCreateRoomTypeFilter(event.target.value)}><option value="ALL">All room types</option>{availabilityList.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+                  <label>Max Price / night<input type="number" min="0" value={createMaxPrice} onChange={(event) => setCreateMaxPrice(event.target.value)} placeholder="Any price" /></label>
+                  <label>Availability<select value={filterOnlyAvailable ? 'AVAILABLE' : 'ALL'} onChange={(event) => setFilterOnlyAvailable(event.target.value === 'AVAILABLE')}><option value="ALL">All results</option><option value="AVAILABLE">Available only</option></select></label>
+                </div>
+                {createRoomTypeOptions.length ? <div className="booking-create-room-type-grid">{createRoomTypeOptions.map((roomType) => {
+                  const quantity = selectedCreateRoomCounts[roomType.id] || 0;
+                  return <article key={roomType.id} className={`booking-create-room-type-card${quantity ? ' is-selected' : ''}`}>
+                    {roomType.image_url ? <img src={roomType.image_url} alt={roomType.name} loading="lazy" /> : <div className="booking-room-image-placeholder">No room image in catalog</div>}
+                    <div className="booking-create-room-type-copy"><label><input type="checkbox" disabled={roomType.available_rooms < 1} checked={quantity > 0} onChange={(event) => updateCreateRoomQuantity(roomType.id, event.target.checked ? 1 : 0)} /> <strong>{roomType.name}</strong></label>
+                      <small>Up to {roomType.max_adults} adults · {roomType.max_children} children</small><b>{formatCurrency(roomType.base_price)} <small>/ night</small></b>
+                      <span className={roomType.available_rooms ? 'room-availability-ok' : 'room-availability-none'}>{roomType.available_rooms} available</span>
+                      {quantity > 0 && <label className="booking-room-quantity">Rooms<select value={quantity} onChange={(event) => updateCreateRoomQuantity(roomType.id, Number(event.target.value))}>{Array.from({ length: Math.min(roomType.available_rooms, 10) }, (_, index) => index + 1).map((count) => <option key={count} value={count}>{count}</option>)}</select></label>}
+                    </div>
+                  </article>;
+                })}</div> : <div className="empty-state-box">No room types match these stay dates, guest counts, and filters.</div>}
+              </section>
 
               {/* Chọn số phòng cụ thể & Thanh toán */}
-              <div className="form-sub-header">Xếp phòng & Thanh toán</div>
-              <div className="form-row-2">
-                <div className="form-group">
-                  <label htmlFor="assigned_room_id">Chọn số phòng vật lý <span className="optional-hint">(có thể gán sau nếu phòng đang dọn)</span></label>
-                  <select
-                    id="assigned_room_id"
-                    value={walkInForm.room_id}
-                    onChange={(e) => setWalkInForm({ ...walkInForm, room_id: e.target.value })}
-                  >
-                    {selectedRoomType.available_room_list.filter((room) => room.status === 'AVAILABLE' && !additionalWalkInTypes.some((type, index) => type.id === selectedRoomType.id && additionalWalkInRoomIds[index] === String(room.id))).map((r: AvailableRoom) => (
-                      <option key={r.id} value={r.id}>
-                        Phòng {r.room_number} (Tầng {r.floor || 1})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
+              <section className="booking-create-section"><h4 className="form-sub-header">Assign Room ({selectedRoomType.name})</h4>
+              <div className="booking-assignment-summary"><span><b>Selected Room Type</b>{selectedRoomType.name}</span><span><b>Stay Duration</b>{nights} nights</span><span><b>Check-in</b>{checkInDate}</span><span><b>Check-out</b>{checkOutDate}</span></div>
+              {selectedRoomType.available_room_list.some((room) => room.status === 'AVAILABLE') ? <div className="booking-assign-room-grid">{selectedRoomType.available_room_list.filter((room) => room.status === 'AVAILABLE').map((room) => <label key={room.id} className={`booking-assign-room-card${walkInForm.room_id === String(room.id) ? ' is-selected' : ''}`}><input type="radio" name="assigned_room_id_card" checked={walkInForm.room_id === String(room.id)} onChange={() => setWalkInForm({ ...walkInForm, room_id: String(room.id) })} /><span>Room {room.room_number}</span><small>Available · Floor {room.floor || 1}</small></label>)}</div> : <div className="empty-state-box">No physical room is ready for assignment in this type and date range.</div>}
+              <div className="booking-deposit-row">
                 <div className="form-group">
                   <label htmlFor="deposit_amount">Số tiền khách đã thanh toán trước (VNĐ, nếu có)</label>
                   <input
@@ -1402,20 +1855,23 @@ export default function ReceptionRoomBooking({
                 <div className="form-group"><label htmlFor={`walkin-room-${index}`}>{type.name} · {formatCurrency(type.base_price)} / đêm</label><select id={`walkin-room-${index}`} value={additionalWalkInRoomIds[index] || ''} onChange={(event) => setAdditionalWalkInRoomIds({ ...additionalWalkInRoomIds, [index]: event.target.value })}>{type.available_room_list.filter((availableRoom) => availableRoom.status === 'AVAILABLE' && String(availableRoom.id) !== walkInForm.room_id && (String(availableRoom.id) === additionalWalkInRoomIds[index] || !usedRoomIds.includes(String(availableRoom.id)))).map((availableRoom) => <option key={availableRoom.id} value={availableRoom.id}>Phòng {availableRoom.room_number} (Tầng {availableRoom.floor || 1})</option>)}</select></div>
                 <div className="form-group"><label>Phòng trong booking</label><span>{index + 2}</span></div>
               </div>;
-              })}
+              })}</section>
 
-              <div className="form-sub-header">Dịch vụ đi kèm</div>
+              <section className="booking-create-section"><h4 className="form-sub-header">Additional Services</h4>
               {serviceOptions.length > 0 ? (
                 <div className="service-selection-grid">
                   {serviceOptions.map((service) => (
                     <div className="service-choice-row" key={service.id}>
                       <div className="service-choice-info">
+                        <label className="booking-service-check"><input type="checkbox" checked={Boolean(selectedServiceQuantities[service.id])} onChange={(event) => setSelectedServiceQuantities({ ...selectedServiceQuantities, [service.id]: event.target.checked ? 1 : 0 })} />
                         <strong>{service.name}</strong>
                         <span>{formatCurrency(service.price)} / {service.unit}</span>
+                        </label>
                       </div>
                       <input
+                        aria-label={`Quantity ${service.name}`}
                         type="number"
-                        min={0}
+                        min={selectedServiceQuantities[service.id] ? 1 : 0}
                         max={10}
                         value={selectedServiceQuantities[service.id] || 0}
                         onChange={(e) => setSelectedServiceQuantities({
@@ -1441,7 +1897,49 @@ export default function ReceptionRoomBooking({
                     setWalkInForm({ ...walkInForm, special_request: e.target.value })
                   }
                 />
-              </div>
+              </div></section>
+
+              <section className="booking-create-section booking-room-summary">
+                <h3 className="form-sub-header">Promotion / Discount</h3>
+                <div className="booking-promotion-selection">
+                  <div>{isWalkInPromotionApplied
+                    ? <><strong>{walkInAppliedPromotion.code}</strong><span>Đã giảm {formatCurrency(walkInDiscount)}</span></>
+                    : <span>{walkInAppliedPromotion ? 'Tạm tính đã thay đổi, vui lòng áp dụng lại mã.' : 'Chưa chọn mã khuyến mãi'}</span>}
+                  </div>
+                  <button type="button" className="btn btn-outline" onClick={() => setIsWalkInPromotionModalOpen(true)}>
+                    {isWalkInPromotionApplied ? 'Đổi promotion' : 'Chọn promotion'}
+                  </button>
+                  {walkInAppliedPromotion && <button type="button" className="btn btn-outline" onClick={() => { setWalkInPromotionId(''); setWalkInPromotionCode(''); setWalkInAppliedPromotion(null); setWalkInPromotionMessage('Đã bỏ promotion.'); }}>Remove</button>}
+                </div>
+                <p className={`customer-promotion-message${isWalkInPromotionApplied ? ' is-success' : ''}`} role="status" aria-live="polite">{walkInPromotionMessage}</p>
+                <p>Tạm tính: {formatCurrency(walkInSubtotal)}{isWalkInPromotionApplied ? ` · Giảm ${formatCurrency(walkInDiscount)} · Còn ${formatCurrency(walkInTotal)}` : ''}</p>
+              </section>
+
+              <section className="booking-create-section booking-summary-strip">
+                {selectedRoomType.image_url && <img className="booking-summary-room-image" src={selectedRoomType.image_url} alt={selectedRoomType.name} />}
+                <div>
+                  <strong>Room Type:</strong> {[selectedRoomType, ...additionalWalkInTypes].map((type) => type.name).join(', ')}
+                </div>
+                <div>
+                  <strong>Room Number:</strong> {selectedRoomType.available_room_list.find((room) => String(room.id) === walkInForm.room_id)?.room_number || 'Not assigned'}
+                </div>
+                <div>
+                  <strong>Stay:</strong> {checkInDate} → {checkOutDate} · {nights} nights
+                </div>
+                <div>
+                  <strong>Guests:</strong> {adults} adults · {children} children
+                </div>
+                <div><strong>Room Price / night:</strong> {formatCurrency([selectedRoomType, ...additionalWalkInTypes].reduce((sum, type) => sum + type.base_price, 0))}</div>
+                <div>
+                  <strong>Room Subtotal:</strong>{' '}
+                  <span className="text-highlight">
+                    {formatCurrency(walkInRoomTotal)}
+                  </span>
+                </div>
+                <div><strong>Service Subtotal:</strong> <span className="text-highlight">{formatCurrency(walkInServiceTotal)}</span></div>
+                <div><strong>Discount:</strong> <span>{formatCurrency(walkInDiscount)}</span>{selectedWalkInPromotion && ` · ${selectedWalkInPromotion.code}`}</div>
+                <div><strong>Estimated Total:</strong> <span className="text-highlight">{formatCurrency(walkInTotal)}</span><small>Backend confirms the final amount on creation.</small></div>
+              </section>
 
               <div className="modal-actions-bar">
                 <button
@@ -1450,17 +1948,21 @@ export default function ReceptionRoomBooking({
                   onClick={handleCloseModal}
                   disabled={isSubmittingBooking}
                 >
-                  Hủy bỏ
+                  Cancel
+                </button>
+                <button type="button" className="btn btn-outline" disabled title="Backend hiện chưa hỗ trợ lưu booking nháp.">
+                  Save as Draft · chưa hỗ trợ
                 </button>
                 <button
                   type="submit"
                   className="btn btn-primary"
-                  disabled={isSubmittingBooking}
+                  disabled={isSubmittingBooking || !hasAvailableAssignedRooms}
+                  title={!hasAvailableAssignedRooms ? 'Chọn phòng còn trống và gán phòng thực tế trước khi tạo booking.' : undefined}
                 >
-                  {isSubmittingBooking ? 'Đang tạo đơn...' : 'Xác nhận đặt phòng tại quầy'}
+                  {isSubmittingBooking ? 'Đang tạo đơn...' : 'Create Booking'}
                 </button>
               </div>
-            </form>
+            </form> : <div className="booking-create-empty">{isLoadingAvailability ? <><strong>Checking room availability…</strong><p>Loading room types and available rooms for the selected stay.</p></> : <><strong>Không có loại phòng trong kết quả</strong><p>Chỉnh thông tin lưu trú để kiểm tra lại phòng.</p></>}<div className="booking-empty-search"><label>Check-in<input type="date" min={today} value={checkInDate} onChange={(event) => setCheckInDate(event.target.value)} disabled={isLoadingAvailability} /></label><label>Check-out<input type="date" min={addDays(checkInDate, 1)} value={checkOutDate} onChange={(event) => setCheckOutDate(event.target.value)} disabled={isLoadingAvailability} /></label><label>Adults<select value={adults} onChange={(event) => setAdults(Number(event.target.value))} disabled={isLoadingAvailability}>{[1,2,3,4,5,6].map((count) => <option key={count}>{count}</option>)}</select></label><label>Children<select value={children} onChange={(event) => setChildren(Number(event.target.value))} disabled={isLoadingAvailability}>{[0,1,2,3,4].map((count) => <option key={count}>{count}</option>)}</select></label></div><button type="button" className="btn btn-primary" disabled={isLoadingAvailability} onClick={async () => { const rooms = await fetchAvailability(); const first = rooms.find((room) => room.is_available) || rooms[0]; if (first) handleOpenWalkInModal([first]); else showToast('Không tìm thấy loại phòng phù hợp.', 'error'); }}>Check Availability</button></div>}
           </div>
         </div>
       )}
@@ -1510,22 +2012,45 @@ export default function ReceptionRoomBooking({
           KHỐI 4: DANH SÁCH CÁC ĐƠN ĐẶT PHÒNG GẦN ĐÂY (RECENT BOOKINGS)
           ========================================================================= */}
       {mode === 'management' && <section className="booking-management-list-panel">
-        {overdueCheckoutBookings.length > 0 && <aside className="booking-management-checkout-alert" role="alert">
-          <div>
-            <strong>Có {overdueCheckoutBookings.length} booking chưa checkout đúng hạn</strong>
-            <p>Đã qua 12:00 ngày trả phòng nhưng khách vẫn đang lưu trú. Vui lòng liên hệ và xử lý checkout.</p>
-          </div>
-          <ul>
-            {overdueCheckoutBookings.map((booking) => (
-              <li key={booking.id}>
-                <strong>{booking.booking_code}</strong>
-                <span>{booking.guest_full_name} · {booking.guest_phone}</span>
-                <span>{booking.room_number ? `Phòng ${booking.room_number}` : booking.room_type_name || 'Chưa gán phòng'}</span>
-                <span>Hạn trả phòng: {String(booking.check_out_date).slice(0, 10)}</span>
-              </li>
-            ))}
-          </ul>
-        </aside>}
+        <div className="booking-attention-grid">
+          {upcomingCheckInAttention}
+          <aside className="booking-management-checkout-alert" aria-labelledby="overdue-checkout-title">
+            <div>
+              <strong id="overdue-checkout-title">Có {overdueCheckoutBookings.length} booking chưa checkout đúng hạn</strong>
+              <p>Đã qua 12:00 ngày trả phòng nhưng khách vẫn đang lưu trú. Vui lòng liên hệ và xử lý checkout.</p>
+            </div>
+            {overdueCheckoutBookings.length === 0 ? (
+              <div className="booking-attention-empty">Không có booking nào quá hạn checkout.</div>
+            ) : <ul>
+              {overdueCheckoutBookings.map((booking) => (
+                <li
+                  key={booking.id}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Mở giao diện lưu trú cho ${booking.booking_code}`}
+                  onClick={() => {
+                    setSelectedBookingDetail(booking);
+                    setIsEditingSelectedBooking(false);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      setSelectedBookingDetail(booking);
+                      setIsEditingSelectedBooking(false);
+                    }
+                  }}
+                >
+                  <div className="booking-attention-overdue-guest">
+                    <strong>{booking.booking_code}</strong>
+                    <span>{booking.guest_full_name} · {booking.guest_phone}</span>
+                  </div>
+                  <div><span>Phòng</span><strong>{booking.room_number ? `Phòng ${booking.room_number}` : booking.room_type_name || 'Chưa gán phòng'}</strong></div>
+                  <div><span>Hạn trả phòng</span><strong>{String(booking.check_out_date).slice(0, 10)}</strong></div>
+                </li>
+              ))}
+            </ul>}
+          </aside>
+        </div>
         <div className="booking-management-filter-grid">
           <label>
             <span>Tìm booking</span>
@@ -1550,6 +2075,7 @@ export default function ReceptionRoomBooking({
               <option value="ALL">Tất cả trạng thái</option>
               <option value="CONFIRMED">CONFIRMED</option>
               <option value="CHECKED_IN">CHECKED_IN</option>
+              <option value="CANCELLED">Đã tự động hủy</option>
             </select>
           </label>
           <label>
@@ -1588,6 +2114,8 @@ export default function ReceptionRoomBooking({
                 <th>Liên hệ</th>
                 <th>Loại phòng</th>
                 <th>Nhận phòng</th>
+                <th>Hạn giữ phòng</th>
+                <th>Tình trạng check-in</th>
                 <th>Trả phòng</th>
                 <th>Trạng thái</th>
                 <th>Thanh toán</th>
@@ -1596,9 +2124,9 @@ export default function ReceptionRoomBooking({
             </thead>
             <tbody>
               {isLoadingBookings && managementBookings.length === 0 ? (
-                <tr><td colSpan={9} className="booking-management-empty">Đang tải danh sách booking...</td></tr>
+                <tr><td colSpan={11} className="booking-management-empty">Đang tải danh sách booking...</td></tr>
               ) : paginatedManagementBookings.length === 0 ? (
-                <tr><td colSpan={9} className="booking-management-empty">Không có booking đang lưu trú hoặc nhận phòng trong 7 ngày tới.</td></tr>
+                <tr><td colSpan={11} className="booking-management-empty">Không có booking phù hợp với bộ lọc.</td></tr>
               ) : paginatedManagementBookings.map((booking) => (
                 <tr
                   key={booking.id}
@@ -1620,6 +2148,8 @@ export default function ReceptionRoomBooking({
                     <div>{booking.room_type_name || '—'}{booking.room_number ? ` · P.${booking.room_number}` : ''}</div>
                   </td>
                   <td>{String(booking.check_in_date).slice(0, 10)}</td>
+                  <td>{booking.hold_until ? formatVietnamDateTime(booking.hold_until) : '—'}<small className="booking-hold-remaining">{formatHoldRemaining(booking, attentionNow)}</small></td>
+                  <td><span className="booking-hold-status">{getCheckInHoldState(booking, vietnamToday, attentionNow)}</span></td>
                   <td>{String(booking.check_out_date).slice(0, 10)}</td>
                   <td>
                     <span className={`booking-management-status booking-management-status-${booking.status.toLowerCase()}`}>
@@ -1656,74 +2186,13 @@ export default function ReceptionRoomBooking({
             <h4 className="module-section-title">{bookingTableTitle}</h4>
             <p className="module-section-subtitle">{bookingTableDescription}</p>
           </div>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            onClick={() => void fetchRecent()}
-            disabled={isLoadingBookings}
-          >
-            {isLoadingBookings ? 'Đang tải...' : 'Làm mới'}
-          </button>
         </div>
 
-        {mode === 'checkin' && <section className="overdue-bookings-attention" aria-labelledby="overdue-bookings-title">
-          <div className="recent-card-header">
-            <div>
-              <h4 id="overdue-bookings-title" className="module-section-title">Booking chưa Check-in</h4>
-              <p className="module-section-subtitle">
-                {overdueBookings.length} booking cần xử lý
-              </p>
-            </div>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => void fetchAttentionBookings()}
-              disabled={isLoadingAttentionBookings}
-            >
-              {isLoadingAttentionBookings ? 'Đang tải...' : 'Làm mới'}
-            </button>
-          </div>
-          {isLoadingAttentionBookings && bookingHistory.length === 0 ? (
-            <div className="empty-state-box">Đang tải booking cần xử lý...</div>
-          ) : attentionBookingsError ? (
-            <div className="reception-alert alert-error">
-              {attentionBookingsError}
-              <button type="button" className="btn btn-secondary btn-sm" onClick={() => void fetchAttentionBookings()}>Thử lại</button>
-            </div>
-          ) : overdueBookings.length === 0 ? (
-            <div className="empty-state-box">Không có booking nào cần xử lý sau 18:00 hôm nay.</div>
-          ) : (
-            <div className="overdue-booking-list">
-              {overdueBookings.map((booking) => (
-                <article className="overdue-booking-item" key={booking.id}>
-                  <dl className="booking-detail-grid">
-                    <div><dt>Booking ID</dt><dd>{booking.id}</dd></div>
-                    <div><dt>Khách hàng</dt><dd>{booking.guest_full_name}</dd></div>
-                    <div><dt>Số điện thoại</dt><dd>{booking.guest_phone}</dd></div>
-                    <div><dt>Số phòng</dt><dd>{booking.room_number || 'Chưa gán'}</dd></div>
-                    <div><dt>Loại phòng</dt><dd>{booking.room_type_name || '—'}</dd></div>
-                    <div><dt>Ngày check-in</dt><dd>{String(booking.check_in_date).slice(0, 10)}</dd></div>
-                    <div><dt>Check-in time (mốc xử lý)</dt><dd>18:00</dd></div>
-                    <div><dt>Thời gian tạo booking</dt><dd>{formatVietnamDateTime(booking.created_at)}</dd></div>
-                    <div><dt>Tiền đặt cọc</dt><dd>{formatCurrency(Number(booking.deposit_amount || 0))}</dd></div>
-                    <div><dt>Payment status</dt><dd>{getDepositPaymentStatus(booking)}</dd></div>
-                    <div><dt>Trạng thái booking</dt><dd>{booking.status}</dd></div>
-                  </dl>
-                  <p>Booking này đã đến thời gian xử lý nhưng khách vẫn chưa check-in. Bạn có muốn hủy booking không?</p>
-                  <div className="booking-actions">
-                    <button type="button" className="btn btn-outline" onClick={() => setSelectedBookingDetail(booking)}>View Details</button>
-                    <button type="button" className="btn btn-outline" onClick={() => handleKeepOverdueBooking(booking)}>Keep Booking</button>
-                    <button type="button" className="btn btn-primary" onClick={() => { setAttentionCancellationError(null); setBookingToCancel(booking); }}>Cancel Booking</button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          )}
-        </section>}
+        {mode === 'checkin' && upcomingCheckInAttention}
 
         {recentBookingsError && <div className="reception-alert alert-error" role="alert">
           {recentBookingsError}
-          <button type="button" className="btn btn-secondary btn-sm" onClick={() => void fetchRecent()}>Retry</button>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => retryOrGoToLogin(recentBookingsError, fetchRecent)}>Retry</button>
         </div>}
 
         {mode !== 'management' && <form
@@ -1836,7 +2305,7 @@ export default function ReceptionRoomBooking({
                       {b.check_in_date ? String(b.check_in_date).slice(0, 10) : ''} →{' '}
                       {b.check_out_date ? String(b.check_out_date).slice(0, 10) : ''}
                     </td>
-                    <td className="text-sm">{b.created_at ? new Date(b.created_at).toLocaleString('vi-VN') : '—'}</td>
+                    <td className="text-sm">{b.created_at ? new Date(b.created_at).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : '—'}</td>
                     <td>{formatCurrency(b.total_amount)}</td>
                     <td>{formatCurrency(b.deposit_amount)}</td>
                     <td>
@@ -1850,8 +2319,8 @@ export default function ReceptionRoomBooking({
                           <button type="button" disabled title="Khách cần thanh toán đủ cọc tối thiểu 30% trước khi check-in.">Chưa đủ cọc</button>
                         ) : (
                           <button type="button" className="reception-booking-action" onClick={() => {
-                            void openCheckInPage(b);
-                          }}>Xác nhận check-in</button>
+                          setCheckInConfirmationBooking(b);
+                          }}>Check in</button>
                         )
                       ) : mode === 'checkout' && b.has_pending_final_payment ? (
                         <button type="button" className="reception-booking-action" disabled={String(isCheckingOut) === String(b.id)} onClick={() => void resumeCheckoutPayment(b)}>
@@ -1871,9 +2340,20 @@ export default function ReceptionRoomBooking({
           </table>
         </DataTable>
         {selectedBookingDetail && <div className={`booking-detail-backdrop${mode === 'management' ? ' booking-management-detail-backdrop' : ''}`} onMouseDown={(event) => { if (event.target === event.currentTarget && !isUpdatingSelectedBooking && !isCancellingSelectedBooking) { setSelectedBookingDetail(null); setIsEditingSelectedBooking(false); } }}>
-          <section className="booking-detail-modal" role="dialog" aria-modal="true" aria-labelledby="reception-booking-detail-title">
-            <header className="booking-detail-header"><div><span>Chi tiết booking</span><h3 id="reception-booking-detail-title">{selectedBookingDetail.booking_code}</h3></div><button type="button" aria-label="Đóng" disabled={isUpdatingSelectedBooking || isCancellingSelectedBooking} onClick={() => { setSelectedBookingDetail(null); setIsEditingSelectedBooking(false); }}>×</button></header>
-            {isEditingSelectedBooking && selectedBookingDetail.status === 'CONFIRMED' ? (
+          <section className={`booking-detail-modal${selectedBookingIsOverdueCheckout ? ' booking-overdue-detail-mode' : ''}`} role="dialog" aria-modal="true" aria-labelledby="reception-booking-detail-title">
+            {selectedBookingIsOverdueCheckout ? (
+              <header className="overdue-detail-page-header">
+                <div className="overdue-detail-title-row">
+                  <h2 id="reception-booking-detail-title">Chi tiết booking</h2>
+                  <div className="overdue-detail-header-actions">
+                    {!readOnly && <button type="button" className="btn btn-outline stay-extension-trigger" onClick={() => setIsExtendingStay(true)}>＋ Gia hạn lưu trú</button>}
+                    {!readOnly && <button type="button" className="btn btn-primary" onClick={() => { const booking = selectedBookingDetail; setSelectedBookingDetail(null); handleCheckOut(booking); }}>Check out</button>}
+                    <button type="button" aria-label="Đóng" disabled={isUpdatingSelectedBooking || isCancellingSelectedBooking} onClick={() => setSelectedBookingDetail(null)}>×</button>
+                  </div>
+                </div>
+              </header>
+            ) : <header className="booking-detail-header"><div><span>Chi tiết booking</span><h3 id="reception-booking-detail-title">{selectedBookingDetail.booking_code}</h3></div><button type="button" aria-label="Đóng" disabled={isUpdatingSelectedBooking || isCancellingSelectedBooking} onClick={() => { setSelectedBookingDetail(null); setIsEditingSelectedBooking(false); }}>×</button></header>}
+            {isEditingSelectedBooking && !readOnly && selectedBookingDetail.status === 'CONFIRMED' ? (
               <form className="booking-edit-form" onSubmit={(event) => void handleUpdateSelectedBooking(event)}>
                 <label>Khách hàng<input required maxLength={100} value={selectedBookingDraft.guest_full_name} onChange={(event) => setSelectedBookingDraft({ ...selectedBookingDraft, guest_full_name: event.target.value })} /></label>
                 <label>Số điện thoại<input required type="tel" maxLength={20} value={selectedBookingDraft.guest_phone} onChange={(event) => setSelectedBookingDraft({ ...selectedBookingDraft, guest_phone: event.target.value })} /></label>
@@ -1899,32 +2379,110 @@ export default function ReceptionRoomBooking({
                 </div>
               </form>
             ) : <>
+              {selectedBookingIsOverdueCheckout && <>
+                <section className="overdue-detail-booking-banner">
+                  <div className="overdue-detail-booking-code"><strong>{selectedBookingDetail.booking_code}</strong><span>Quá hạn checkout</span></div>
+                  <div><span aria-hidden="true">♙</span>{selectedBookingDetail.guest_full_name}</div>
+                  <div><span aria-hidden="true">☎</span>{selectedBookingDetail.guest_phone}</div>
+                  <div><span aria-hidden="true">▤</span>Phòng {selectedBookingDetail.room_number || selectedBookingDetail.room_type_name || 'Chưa gán'}</div>
+                  <div><span aria-hidden="true">▢</span>Hạn trả phòng: {String(selectedBookingDetail.check_out_date).slice(0, 10)}</div>
+                </section>
+                <section className="overdue-detail-stay-card">
+                  <h3>Thông tin lưu trú</h3>
+                  <dl>
+                    <div><dt>Ngày nhận phòng:</dt><dd>{String(selectedBookingDetail.check_in_date).slice(0, 10)}</dd></div>
+                    <div><dt>Hạn trả phòng:</dt><dd className="booking-overdue-date">{String(selectedBookingDetail.check_out_date).slice(0, 10)}</dd></div>
+                    <div><dt>Thời gian lưu trú:</dt><dd>{calculateNights(String(selectedBookingDetail.check_in_date).slice(0, 10), String(selectedBookingDetail.check_out_date).slice(0, 10))} đêm ({String(selectedBookingDetail.check_in_date).slice(0, 10)} → {String(selectedBookingDetail.check_out_date).slice(0, 10)})</dd></div>
+                  </dl>
+                </section>
+              </>}
               <dl className="booking-detail-grid">
                 <div><dt>Khách hàng</dt><dd>{selectedBookingDetail.guest_full_name}</dd></div><div><dt>Điện thoại</dt><dd>{selectedBookingDetail.guest_phone}</dd></div>
                 <div><dt>Email</dt><dd>{selectedBookingDetail.guest_email || '—'}</dd></div><div><dt>Loại phòng / phòng</dt><dd>{selectedBookingDetail.room_type_name || '—'}{selectedBookingDetail.room_number ? ` · P.${selectedBookingDetail.room_number}` : ' · Chưa gán'}</dd></div>
-                <div><dt>Nhận phòng</dt><dd>{String(selectedBookingDetail.check_in_date).slice(0, 10)}</dd></div><div><dt>Trả phòng</dt><dd>{String(selectedBookingDetail.check_out_date).slice(0, 10)}</dd></div>
+                <div><dt>Nhận phòng</dt><dd>{String(selectedBookingDetail.check_in_date).slice(0, 10)}</dd></div><div><dt>Hạn trả phòng</dt><dd className={selectedBookingIsOverdueCheckout ? 'booking-overdue-date' : undefined}>{String(selectedBookingDetail.check_out_date).slice(0, 10)}</dd></div>
+                <div><dt>Thời gian lưu trú</dt><dd>{calculateNights(String(selectedBookingDetail.check_in_date).slice(0, 10), String(selectedBookingDetail.check_out_date).slice(0, 10))} đêm ({String(selectedBookingDetail.check_in_date).slice(0, 10)} → {String(selectedBookingDetail.check_out_date).slice(0, 10)})</dd></div>
                 <div><dt>Số khách</dt><dd>{selectedBookingDetail.adults} người lớn, {selectedBookingDetail.children} trẻ em</dd></div><div><dt>Trạng thái</dt><dd>{selectedBookingDetail.status}</dd></div>
                 <div><dt>Tổng tiền</dt><dd>{formatCurrency(selectedBookingDetail.total_amount)}</dd></div><div><dt>Đã cọc</dt><dd>{formatCurrency(selectedBookingDetail.deposit_amount)}</dd></div>
                 <div><dt>Đã thanh toán checkout</dt><dd>{formatCurrency(selectedBookingDetail.final_paid_amount || 0)}</dd></div><div><dt>Còn phải thu</dt><dd>{formatCurrency(selectedBookingDetail.balance_due ?? (selectedBookingDetail.total_amount - selectedBookingDetail.deposit_amount))}</dd></div>
                 <div className="booking-detail-wide"><dt>Yêu cầu đặc biệt</dt><dd>{selectedBookingDetail.special_request || 'Không có'}</dd></div>
+                {selectedBookingDetail.status === 'CANCELLED' && <div className="booking-detail-wide booking-cancellation-info">
+                  <dt>Lý do hủy</dt><dd>{selectedBookingDetail.cancellation_reason_label || 'Chưa ghi nhận'}</dd>
+                  {selectedBookingDetail.cancellation_reason_note && <><dt>Ghi chú hủy</dt><dd>{selectedBookingDetail.cancellation_reason_note}</dd></>}
+                  {selectedBookingDetail.cancelled_at && <><dt>Thời điểm hủy</dt><dd>{formatVietnamDateTime(selectedBookingDetail.cancelled_at)}</dd></>}
+                  <dt>Người thực hiện</dt><dd>{selectedBookingDetail.cancellation_reason_code === 'CUSTOMER_CANCELLED' ? 'Customer' : selectedBookingDetail.cancellation_reason_code === 'RECEPTIONIST_CANCELLED' ? 'Receptionist' : ['CHECK_IN_EXPIRED', 'PAYMENT_TIMEOUT', 'ROOMS_UNAVAILABLE'].includes(selectedBookingDetail.cancellation_reason_code || '') ? 'System' : 'Chưa ghi nhận'}</dd>
+                </div>}
               </dl>
-              <BookingServicePanel bookingId={selectedBookingDetail.id} canAddServices={selectedBookingDetail.status === 'CHECKED_IN' || (selectedBookingDetail.status === 'CONFIRMED' && String(selectedBookingDetail.check_in_date).slice(0, 10) <= today && String(selectedBookingDetail.check_out_date).slice(0, 10) > today)} onTotalChange={(total) => {
+              {mode === 'management' && selectedBookingDetail.status === 'CONFIRMED' && <section className="booking-hold-detail-card" aria-label="Thông tin giữ phòng">
+                <h4>Thông tin giữ phòng</h4>
+                <dl>
+                  <div><dt>Hạn giữ phòng</dt><dd>{formatVietnamDateTime(selectedBookingDetail.hold_until)}</dd></div>
+                  <div><dt>Thời gian còn lại</dt><dd>{formatHoldRemaining(selectedBookingDetail, attentionNow)}</dd></div>
+                  <div><dt>Số lần gia hạn</dt><dd>{Number(selectedBookingDetail.hold_extension_count ?? (selectedBookingDetail.hold_extended ? 1 : 0))}/2</dd></div>
+                  <div><dt>Trạng thái check-in</dt><dd>{getCheckInHoldState(selectedBookingDetail, vietnamToday, attentionNow)}</dd></div>
+                  <div><dt>Giờ khách dự kiến đến</dt><dd>{formatVietnamDateTime(selectedBookingDetail.expected_arrival_at)}</dd></div>
+                  <div><dt>Thời lượng mỗi lần gia hạn</dt><dd>+2 giờ (tối đa 4 giờ)</dd></div>
+                </dl>
+                {Number(selectedBookingDetail.hold_extension_count ?? (selectedBookingDetail.hold_extended ? 1 : 0)) >= 2 && <p className="booking-hold-extension-limit-note" role="status">Booking đã sử dụng tối đa 2 lần gia hạn giữ phòng.</p>}
+              </section>}
+              {mode === 'checkin' && <BookingServicePanel bookingId={selectedBookingDetail.id} canAddServices={!readOnly && selectedBookingDetail.status === 'CHECKED_IN'} onTotalChange={(total) => {
                 setSelectedBookingDetail((current) => current ? { ...current, total_amount: total } : current);
                 setRecentBookings((current) => current.map((booking) => String(booking.id) === String(selectedBookingDetail.id) ? { ...booking, total_amount: total } : booking));
                 setManagementBookings((current) => current.map((booking) => String(booking.id) === String(selectedBookingDetail.id) ? { ...booking, total_amount: total } : booking));
-              }} />
+              }} />}
               <div className="booking-detail-actions">
-                {mode === 'management' && selectedBookingDetail.status === 'CONFIRMED' && <>
+                {mode === 'management' && !readOnly && selectedBookingDetail.status === 'CONFIRMED' && (
+                  selectedBookingDetail.requires_deposit_payment
+                    && Number(selectedBookingDetail.deposit_amount) < Number(selectedBookingDetail.required_deposit_amount || 0)
+                    ? <button type="button" disabled title="Khách cần thanh toán đủ tiền cọc tối thiểu 30% trước khi check-in.">Chưa đủ cọc</button>
+                    : <button type="button" className="btn btn-primary" onClick={() => setCheckInConfirmationBooking(selectedBookingDetail)}>Check in</button>
+                )}
+                {mode === 'management' && !readOnly && selectedBookingDetail.status === 'CONFIRMED' && <>
+                  {selectedBookingDetail.hold_until && new Date(selectedBookingDetail.hold_until).getTime() > attentionNow.getTime() && <button type="button" className="btn btn-outline" disabled={Number(selectedBookingDetail.hold_extension_count ?? (selectedBookingDetail.hold_extended ? 1 : 0)) >= 2} onClick={() => setIsExtendingBookingHold(true)}>Gia hạn giữ phòng</button>}
                   <button type="button" className="btn btn-primary" onClick={startEditingSelectedBooking}>Cập nhật booking</button>
                   <button type="button" className="btn btn-outline" onClick={() => void handleCancelSelectedBooking()} disabled={isCancellingSelectedBooking || isUpdatingSelectedBooking}>
                     {isCancellingSelectedBooking ? 'Đang hủy...' : 'Hủy booking'}
                   </button>
                 </>}
+                {mode === 'management' && !readOnly && selectedBookingDetail.status === 'CHECKED_IN' && <button type="button" className="btn btn-primary stay-extension-trigger" onClick={() => setIsExtendingStay(true)}><span aria-hidden="true">＋</span> Gia hạn lưu trú</button>}
+                {mode === 'management' && !readOnly && selectedBookingDetail.status === 'CHECKED_IN' && <button type="button" className="btn btn-primary" onClick={() => handleCheckOut(selectedBookingDetail)}>Check out</button>}
                 <button type="button" className="btn btn-outline" onClick={() => setSelectedBookingDetail(null)} disabled={isUpdatingSelectedBooking || isCancellingSelectedBooking}>Đóng</button>
               </div>
             </>}
           </section>
         </div>}
+        {isExtendingStay && selectedBookingDetail && <StayExtensionModal
+          booking={selectedBookingDetail}
+          onClose={() => {
+            setIsExtendingStay(false);
+          }}
+          onSuccess={(extension) => {
+            setSelectedBookingDetail((current) => current ? {
+              ...current,
+              check_out_date: extension.check_out_date,
+              total_amount: extension.total_amount,
+              balance_due: extension.balance_due,
+            } : current);
+            setIsExtendingStay(false);
+            showToast('Gia hạn lưu trú thành công.', 'success');
+            void fetchRecent();
+          }}
+        />}
+        {isExtendingBookingHold && selectedBookingDetail && <BookingHoldExtensionModal
+          booking={selectedBookingDetail}
+          onClose={() => setIsExtendingBookingHold(false)}
+          onSuccess={(hold) => {
+            const updatedBooking = { ...selectedBookingDetail, ...hold };
+            resetOverdueBookingDecision(updatedBooking.id);
+            setSelectedBookingDetail(updatedBooking);
+            setRecentBookings((current) => current.map((booking) => String(booking.id) === String(updatedBooking.id) ? { ...booking, ...hold } : booking));
+            setManagementBookings((current) => current.map((booking) => String(booking.id) === String(updatedBooking.id) ? { ...booking, ...hold } : booking));
+            setBookingHistory((current) => current.map((booking) => String(booking.id) === String(updatedBooking.id) ? { ...booking, ...hold } : booking));
+            setIsExtendingBookingHold(false);
+            setAttentionNow(new Date());
+            showToast('Đã gia hạn giữ phòng.', 'success');
+            void fetchRecent();
+          }}
+        />}
         {bookingToCancel && (
           <div className="booking-detail-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !isCancellingBooking) setBookingToCancel(null); }}>
             <section className="booking-detail-modal" role="dialog" aria-modal="true" aria-labelledby="overdue-cancel-title">
@@ -1936,12 +2494,45 @@ export default function ReceptionRoomBooking({
               <p><strong>Booking:</strong> {bookingToCancel.booking_code} · {bookingToCancel.guest_full_name}</p>
               <p><strong>Số tiền đặt cọc hiện có:</strong> {formatCurrency(Number(bookingToCancel.deposit_amount || 0))}</p>
               <p>Chính sách xử lý tiền cọc do backend quyết định; giao diện không tự xác định hoàn tiền hay khấu trừ.</p>
+              <label className="booking-cancellation-note-label">
+                <span>Ghi chú hủy (không bắt buộc)</span>
+                <textarea value={overdueCancellationNote} onChange={(event) => setOverdueCancellationNote(event.target.value)} maxLength={500} rows={3} placeholder="Nhập ghi chú cho việc hủy booking" />
+              </label>
               {attentionCancellationError && <div className="reception-alert alert-error">{attentionCancellationError}</div>}
               <div className="booking-detail-actions">
                 <button type="button" className="btn btn-outline" onClick={() => setBookingToCancel(null)} disabled={isCancellingBooking}>Không, quay lại</button>
                 <button type="button" className="btn btn-primary" onClick={() => void handleCancelOverdueBooking()} disabled={isCancellingBooking}>
                   {isCancellingBooking ? 'Đang hủy...' : 'Xác nhận cancel'}
                 </button>
+              </div>
+            </section>
+          </div>
+        )}
+        {checkInConfirmationBooking && (
+          <div className="booking-detail-backdrop" onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setCheckInConfirmationBooking(null);
+          }}>
+            <section className="booking-detail-modal booking-checkin-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="checkin-confirm-title">
+              <header className="booking-detail-header">
+                <div><span>CHECK-IN GUEST</span><h3 id="checkin-confirm-title">Xác nhận check-in</h3></div>
+                <button type="button" aria-label="Đóng" onClick={() => setCheckInConfirmationBooking(null)}>×</button>
+              </header>
+              <div className="booking-checkin-confirm-content">
+                <p>Bạn muốn bắt đầu check-in cho booking này?</p>
+                <dl>
+                  <div><dt>Mã booking</dt><dd>{checkInConfirmationBooking.booking_code}</dd></div>
+                  <div><dt>Khách hàng</dt><dd>{checkInConfirmationBooking.guest_full_name}</dd></div>
+                  <div><dt>Phòng</dt><dd>{checkInConfirmationBooking.room_number || checkInConfirmationBooking.room_type_name || 'Chưa gán'}</dd></div>
+                </dl>
+                <p className="booking-checkin-confirm-note">Tiếp tục để kiểm tra giấy tờ khách và xác nhận phòng trước khi hoàn tất check-in.</p>
+              </div>
+              <div className="booking-detail-actions">
+                <button type="button" className="btn btn-outline" onClick={() => setCheckInConfirmationBooking(null)}>Hủy</button>
+                <button type="button" className="btn btn-primary" onClick={() => {
+                  const booking = checkInConfirmationBooking;
+                  setCheckInConfirmationBooking(null);
+                  void openCheckInPage(booking);
+                }}>Tiếp tục check-in</button>
               </div>
             </section>
           </div>
@@ -1973,13 +2564,20 @@ export default function ReceptionRoomBooking({
                     <label>Số điện thoại<input value={selectedCheckInBooking.guest_phone} readOnly /></label>
                     <label>Email<input value={selectedCheckInBooking.guest_email || 'Chưa cung cấp'} readOnly /></label>
                     <div className="checkin-identity-upload">
-                      {selectedCheckInBooking.has_guest_id_card && <div className="checkin-identity-saved"><strong>Ảnh CCCD</strong><span>Đã lưu trong hồ sơ khách; chọn ảnh mới nếu cần cập nhật.</span></div>}
-                      <label>{selectedCheckInBooking.has_guest_id_card ? 'Cập nhật ảnh CCCD' : <>Ảnh CCCD khách đặt online <span className="req">*</span></>}<input
+                      {selectedCheckInBooking.has_guest_id_card && <div className="checkin-identity-saved"><strong>Mặt trước CCCD</strong><span>Đã lưu trong hồ sơ khách.</span></div>}
+                      <label>{selectedCheckInBooking.has_guest_id_card ? 'Cập nhật ảnh mặt trước' : <>Ảnh CCCD mặt trước <span className="req">*</span></>}<input
                         type="file"
                         accept="image/jpeg,image/png,image/webp"
                         required={!selectedCheckInBooking.has_guest_id_card}
-                        onChange={(event) => setCheckInIdCardImage(event.target.files?.[0] || null)}
-                      />{checkInIdCardImage && <small>Ảnh mới: {checkInIdCardImage.name}</small>}<small>JPG, PNG hoặc WEBP, tối đa 5 MB.</small></label>
+                        onChange={(event) => setCheckInIdCardFrontImage(event.target.files?.[0] || null)}
+                      />{checkInIdCardFrontImage && <small>Ảnh mới: {checkInIdCardFrontImage.name}</small>}</label>
+                      {selectedCheckInBooking.has_guest_id_card_back && <div className="checkin-identity-saved"><strong>Mặt sau CCCD</strong><span>Đã lưu trong hồ sơ khách.</span></div>}
+                      <label>{selectedCheckInBooking.has_guest_id_card_back ? 'Cập nhật ảnh mặt sau' : <>Ảnh CCCD mặt sau <span className="req">*</span></>}<input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        required={!selectedCheckInBooking.has_guest_id_card_back}
+                        onChange={(event) => setCheckInIdCardBackImage(event.target.files?.[0] || null)}
+                      />{checkInIdCardBackImage && <small>Ảnh mới: {checkInIdCardBackImage.name}</small>}<small>JPG, PNG hoặc WEBP, tối đa 5 MB mỗi ảnh.</small></label>
                     </div>
                   </div>
                   <label className="checkbox-inline checkin-identity-confirmation">
@@ -2001,7 +2599,7 @@ export default function ReceptionRoomBooking({
                         room.status === 'AVAILABLE'
                         && (!usedByOtherSlot.has(String(room.id)) || checkInRoomIds[slot.booking_room_id] === String(room.id)));
                       return <label key={slot.booking_room_id}>
-                        <span>{slot.room_type_name} · Phòng {index + 1}</span>
+                        {checkInRoomSlots.length > 1 && <span>{slot.room_type_name} · Phòng {index + 1}</span>}
                         <select
                           required
                           value={checkInRoomIds[slot.booking_room_id] || ''}
@@ -2049,13 +2647,13 @@ export default function ReceptionRoomBooking({
 
                 <div className="booking-actions checkin-workflow-actions">
                   <button type="button" className="btn btn-outline" onClick={() => setSelectedCheckInBooking(null)} disabled={isCheckingIn}>Hủy</button>
-                  <button type="submit" className="btn btn-primary" disabled={isCheckingIn || isLoadingCheckInRooms}>{isCheckingIn ? 'Đang xác nhận...' : 'Xác nhận check-in'}</button>
+                  <button type="submit" className="btn btn-primary" disabled={isCheckingIn || isLoadingCheckInRooms}>{isCheckingIn ? 'Đang check-in...' : 'Check in'}</button>
                 </div>
               </form>
             </section>
           </div>
         )}
-        {selectedCheckOutBooking && !createdInvoice && (
+        {selectedCheckOutBooking && !createdInvoice && !checkoutSuccess && (
           <div className="checkout-page-backdrop">
             <section className="checkout-page" role="dialog" aria-modal="true" aria-labelledby="checkout-modal-title">
               <header className="checkout-page-header">
@@ -2087,19 +2685,74 @@ export default function ReceptionRoomBooking({
                     <div><small>Số khách</small><strong>{selectedCheckOutBooking.adults} người lớn · {selectedCheckOutBooking.children} trẻ em</strong></div>
                   </div>
                 </section>
-                <section className="checkout-page-section">
+                <section className="checkout-page-section checkout-cleaning-assignments">
+                  <h4>Assign Housekeeper · Checkout Cleaning</h4>
+                  <p>Phân công công việc riêng cho từng phòng thuộc booking này.</p>
+                  {checkoutAssignmentLoadError && <p role="alert">{checkoutAssignmentLoadError}</p>}
+                  {loadingCheckoutAssignments ? <p role="status">Loading booking rooms…</p> : checkoutCleaningRooms.length === 0
+                    ? <p>No booking rooms are available for this checkout.</p>
+                    : <div className="checkout-cleaning-room-list">{checkoutCleaningRooms.map((room) => <div className="checkout-cleaning-room-row" key={room.booking_room_id}>
+                      <div className="checkout-cleaning-room-info">
+                        <strong>{room.room_number ? `Room ${room.room_number}` : 'Unassigned room'}</strong>
+                        <small>Booking room #{room.booking_room_id}{room.room_id ? ` · Room ID ${room.room_id}` : ''}</small>
+                        <span>Task status: {room.task_status || 'No task'} · Housekeeper: {room.assigned_to_name || 'Unassigned'}</span>
+                      </div>
+                      {(!room.task_id || (room.task_status === 'PENDING_ASSIGNMENT' && !room.assigned_to)) && <div className="checkout-cleaning-room-controls">
+                        <select aria-label={`Housekeeper for room ${room.room_number || room.booking_room_id}`} value={checkoutAssigneeDraft[room.booking_room_id] || ''} disabled={Boolean(assigningCheckoutRoomId) || !room.room_id} onChange={(event) => setCheckoutAssigneeDraft((current) => ({ ...current, [room.booking_room_id]: event.target.value }))}>
+                          <option value="">Select Housekeeper</option>{checkoutHousekeepers.map((housekeeper) => <option key={housekeeper.id} value={housekeeper.id}>{housekeeper.full_name}</option>)}
+                        </select>
+                        <button type="button" className="btn btn-primary" disabled={!room.room_id || !checkoutAssigneeDraft[room.booking_room_id] || Boolean(assigningCheckoutRoomId)} onClick={() => void assignCheckoutHousekeeper(room)}>{assigningCheckoutRoomId === room.booking_room_id ? 'Assigning…' : 'Assign Housekeeper'}</button>
+                      </div>}
+                    </div>)}</div>}
+                </section>
+                <section className="checkout-page-section checkout-cleaning-assignments">
+                  <div className="checkout-inspection-section-heading">
+                    <h4>Equipment Inspection Report</h4>
+                    <button type="button" className="btn btn-outline" disabled={loadingCheckoutAssignments} onClick={() => void refreshCheckoutTasks()}>{loadingCheckoutAssignments ? 'Loading…' : 'Refresh'}</button>
+                  </div>
+                  <p>Review every submitted room report and confirm compensation decisions before creating the invoice.</p>
+                  {checkoutAssignmentLoadError && <p role="alert">{checkoutAssignmentLoadError}</p>}
+                  {loadingCheckoutAssignments ? <p role="status">Loading latest task and report status…</p> : checkoutCleaningRooms.length === 0
+                    ? <p>No Checkout Cleaning tasks are available for this booking.</p>
+                    : <div className="checkout-cleaning-room-list">{checkoutCleaningRooms.map((room) => <div className="checkout-cleaning-room-row" key={`report-${room.booking_room_id}`}>
+                      <div className="checkout-cleaning-room-info">
+                        <strong>{room.room_number ? `Room ${room.room_number}` : 'Unassigned room'}</strong>
+                        <small>Booking room #{room.booking_room_id}{room.room_id ? ` · Room ID ${room.room_id}` : ''}</small>
+                        <span>Cleaning Task status: {room.task_status || 'No task'}</span>
+                        <span>Assigned Housekeeper: {room.assigned_to_name || 'Unassigned'}</span>
+                        <span>Inspection report: {room.inspection_submitted ? 'Đã gửi báo cáo' : 'Chưa gửi báo cáo'}</span>
+                        {room.task_id && room.inspection_submitted && <span>{viewedCheckoutReportTaskIds.has(room.task_id) ? 'Report viewed' : 'Report not viewed'}</span>}
+                        {room.report_requires_compensation_decision && <span>{room.task_id && compensationConfirmedTaskIds.has(room.task_id) ? 'Compensation confirmed' : 'Compensation not confirmed'}</span>}
+                        {room.inspection_submitted && room.inspection_report?.submitted_at && <span>Submitted at: {formatVietnamDateTime(room.inspection_report.submitted_at)}</span>}
+                      </div>
+                      {room.task_id && room.inspection_submitted && <button type="button" className="btn btn-outline" disabled={loadingCheckoutReport} onClick={() => void openCheckoutInspectionReport(room.task_id!)}>{loadingCheckoutReport ? 'Loading report…' : 'View Inspection Report'}</button>}
+                    </div>)}</div>}
+                </section>
+                <section id="checkout-payment-reconciliation" className="checkout-page-section">
                   <h4>Đối soát chi phí booking</h4>
                   <div className="checkout-charge-row"><span>Tiền phòng và dịch vụ đã tính trong booking</span><strong>{formatCurrency(Number(selectedCheckOutBooking.total_amount || 0))}</strong></div>
-                  <div className="checkout-charge-row"><span>Đã thanh toán trước / đặt cọc</span><strong>− {formatCurrency(Number(selectedCheckOutBooking.deposit_amount || 0))}</strong></div>
-                  <div className="checkout-charge-row"><span>Đã thanh toán checkout</span><strong>− {formatCurrency(Number(selectedCheckOutBooking.final_paid_amount || 0))}</strong></div>
-                  <div className="checkout-total-row"><span>Còn phải thu</span><strong>{formatCurrency(Math.max(0, Number(selectedCheckOutBooking.balance_due ?? (selectedCheckOutBooking.total_amount - selectedCheckOutBooking.deposit_amount - Number(selectedCheckOutBooking.final_paid_amount || 0))) || 0))}</strong></div>
-                  <p className="checkout-page-note">Các khoản phát sinh ngoài booking cần được ghi nhận vào booking trước khi thu tiền.</p>
+                  {displayedCheckoutCompensationItems.length > 0 && <>
+                    <div className="checkout-charge-row checkout-compensation-reconciliation-total"><span>{pendingCheckoutItems ? 'Bồi thường thiết bị (chờ tạo hóa đơn)' : 'Bồi thường thiết bị'}</span><strong>{formatCurrency(displayedCheckoutCompensationTotal)}</strong></div>
+                    {displayedCheckoutCompensationItems.map((item) => <div className="checkout-charge-row checkout-compensation-reconciliation-item" key={item.compensation_id}>
+                      <span>{item.equipment_name || 'Thiết bị'}{item.asset_code ? ` · ${item.asset_code}` : ''}{item.room_number ? ` · Phòng ${item.room_number}` : ''}</span>
+                      <strong>{formatCurrency(Number(item.amount || 0))}</strong>
+                    </div>)}
+                  </>}
+                  {activeCheckoutReconciliation && <div className="checkout-charge-row"><span>Tổng hóa đơn sau đồng bộ (đã gồm bồi thường)</span><strong>{formatCurrency(activeCheckoutReconciliation.invoice.total_amount)}</strong></div>}
+                  <div className="checkout-charge-row"><span>Đã thanh toán trước / đặt cọc</span><strong>− {formatCurrency(Number(activeCheckoutReconciliation?.invoice.deposit_paid ?? selectedCheckOutBooking.deposit_amount ?? 0))}</strong></div>
+                  <div className="checkout-charge-row"><span>Đã thanh toán checkout</span><strong>− {formatCurrency(Number(reconciledFinalPaid ?? selectedCheckOutBooking.final_paid_amount ?? 0))}</strong></div>
+                  <div className="checkout-total-row"><span>{pendingCheckoutItems ? 'Còn phải thu (tạm tính)' : 'Còn phải thu'}</span><strong>{formatCurrency(Math.max(0, Number(activeCheckoutReconciliation?.invoice.amount_due ?? (Number(selectedCheckOutBooking.total_amount || 0) + displayedCheckoutCompensationTotal - Number(selectedCheckOutBooking.deposit_amount || 0) - Number(selectedCheckOutBooking.final_paid_amount || 0))) || 0))}</strong></div>
+                  <p className="checkout-page-note">{pendingCheckoutItems ? 'Bồi thường đã xác nhận, chưa tạo hóa đơn. Tạo hóa đơn để ghi nhận chính thức và tiếp tục thanh toán.' : 'Các khoản phát sinh ngoài booking cần được ghi nhận vào booking trước khi thu tiền.'}</p>
                 </section>
                 <section className="checkout-page-section">
                   <h4>Hóa đơn</h4>
+                {!checkoutReportsReadyForInvoice && !loadingCheckoutAssignments && <div className="reception-alert alert-error" role="alert" aria-live="polite">
+                  <strong>Chưa thể tạo hóa đơn.</strong>
+                  <ul>{checkoutInvoicePrerequisites.map((message) => <li key={message}>{message}</li>)}</ul>
+                </div>}
                 <div className="checkout-page-actions">
                   <button className="btn btn-outline" type="button" disabled={isCheckingOut != null} onClick={() => setSelectedCheckOutBooking(null)}>Quay lại</button>
-                  <button className="btn btn-primary checkout-create-invoice-btn" type="button" disabled={isCheckingOut != null || isCreatingInvoice} onClick={() => void createCheckoutInvoice()}>
+                  <button className="btn btn-primary checkout-create-invoice-btn" type="button" disabled={!checkoutReportsReadyForInvoice || isCheckingOut != null || isCreatingInvoice} title={!checkoutReportsReadyForInvoice ? 'Xem báo cáo và xác nhận bồi thường trước khi tạo hóa đơn.' : undefined} onClick={() => void createCheckoutInvoice()}>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8"/></svg>
                     {isCreatingInvoice ? 'Đang tạo hóa đơn…' : 'Tạo hóa đơn'}
                   </button>

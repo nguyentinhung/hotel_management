@@ -1,7 +1,4 @@
 const http = require('http');
-
-// Expose only VNPay's signed callbacks to the public tunnel. Do not point
-// ngrok directly at the full application server.
 const allowedPaths = new Set([
   '/api/payments/vnpay/ipn',
   '/api/payments/vnpay/return',

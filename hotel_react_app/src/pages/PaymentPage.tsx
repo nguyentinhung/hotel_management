@@ -45,6 +45,8 @@ export default function MakePaymentPage() {
     : '/reception?module=Check-out';
   const successHeading = isReceptionCheckout ? 'Checkout đã thanh toán thành công' : 'Thanh toán thành công';
   const successReturnPath = isReceptionCheckout ? '/reception' : '/';
+  const returnResult = new URLSearchParams(window.location.search).get('paymentResult');
+  const shouldSkipFailedVnpayReturnPage = vnpayEnabled && ['failed', 'invalid'].includes(returnResult || '');
   const successReturnLabel = isReceptionCheckout ? 'Quay về lễ tân' : 'Quay về trang chủ';
 
   useEffect(() => {
@@ -67,12 +69,20 @@ export default function MakePaymentPage() {
     const params = new URLSearchParams(window.location.search);
     const result = params.get('paymentResult');
     const paymentCode = params.get('paymentCode');
-    if (result === 'failed') {
-      setReturnMessage('Giao dịch VNPay chưa thành công. Bạn có thể thử lại.');
+    const checkoutInvoiceId = sessionStorage.getItem('hotelManagement.checkoutInvoiceId');
+    if ((result === 'failed' || result === 'invalid') && checkoutInvoiceId) {
+      navigate(`/reception?module=Check-out&restoreCheckoutInvoice=1&checkoutPaymentResult=${result}`, { replace: true });
       return;
     }
-    if (result === 'invalid') {
-      setReturnMessage('Không xác thực được kết quả VNPay. Hãy kiểm tra lịch sử thanh toán.');
+    if (result === 'failed' || result === 'invalid') {
+      const returnPath = sessionStorage.getItem('hotelManagement.vnpayReturnPath')
+        || (isReceptionCheckout ? checkoutReturnPath : paymentType === 'DEPOSIT' ? '/my-bookings' : '/');
+      sessionStorage.removeItem('hotelManagement.vnpayReturnPath');
+      const target = new URL(returnPath, window.location.origin);
+      target.searchParams.set('paymentResult', result);
+      const returnedBookingCode = params.get('bookingCode') || bookingCode;
+      if (returnedBookingCode) target.searchParams.set('bookingCode', returnedBookingCode);
+      navigate(`${target.pathname}${target.search}`, { replace: true });
       return;
     }
     if (result !== 'success') return;
@@ -102,6 +112,8 @@ export default function MakePaymentPage() {
                 throw new Error('Backend chưa xác nhận đầy đủ trạng thái hóa đơn và check-out.');
               }
               sessionStorage.removeItem('hotelManagement.checkoutInvoiceId');
+              sessionStorage.removeItem('hotelManagement.checkoutBookingId');
+              sessionStorage.removeItem('hotelManagement.checkoutInvoiceCreated');
               sessionStorage.removeItem('hotelManagement.checkoutPaymentCode');
               setCheckoutPaymentSuccess({ detail, payment: confirmedPayment });
             } else {
@@ -134,7 +146,7 @@ export default function MakePaymentPage() {
       cancelled = true;
       if (timeout) clearTimeout(timeout);
     };
-  }, [isReceptionCheckout]);
+  }, [isReceptionCheckout, navigate]);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -212,6 +224,8 @@ export default function MakePaymentPage() {
       setIsSubmitting(false);
     }
   };
+
+  if (shouldSkipFailedVnpayReturnPage) return null;
 
   return (
     <main className="payment-page">
