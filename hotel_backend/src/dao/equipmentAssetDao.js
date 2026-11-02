@@ -1,5 +1,4 @@
 const { getPool, sql } = require('../config/db');
-const EquipmentAssetModel = require('../models/equipmentAssetModel');
 
 const ASSET_SELECT = `
   SELECT CONVERT(varchar(20), asset.id) AS id, asset.equipment_item_id, asset.asset_code, asset.serial_number,
@@ -15,7 +14,7 @@ async function findAllByEquipmentItemId(equipmentItemId) {
   const result = await pool.request()
     .input('equipmentItemId', sql.Int, equipmentItemId)
     .query(`${ASSET_SELECT} WHERE asset.equipment_item_id = @equipmentItemId ORDER BY asset.id;`);
-  return EquipmentAssetModel.fromRows(result.recordset);
+  return result.recordset;
 }
 
 async function findById(equipmentItemId, assetId) {
@@ -24,7 +23,7 @@ async function findById(equipmentItemId, assetId) {
     .input('equipmentItemId', sql.Int, equipmentItemId)
     .input('assetId', sql.BigInt, assetId)
     .query(`${ASSET_SELECT} WHERE asset.equipment_item_id = @equipmentItemId AND asset.id = @assetId;`);
-  return EquipmentAssetModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function create(equipmentItemId, asset) {
@@ -43,7 +42,7 @@ async function create(equipmentItemId, asset) {
       SELECT item.id, @assetCode, @serialNumber, @status, @purchaseDate, @notes
       FROM dbo.equipment_items AS item WHERE item.id = @equipmentItemId;
     `);
-  return EquipmentAssetModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function update(equipmentItemId, assetId, asset) {
@@ -64,7 +63,7 @@ async function update(equipmentItemId, assetId, asset) {
              INSERTED.status, INSERTED.purchase_date, INSERTED.notes, CAST(NULL AS varchar(10)) AS current_room_name
       WHERE equipment_item_id = @equipmentItemId AND id = @assetId;
     `);
-  return EquipmentAssetModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function getDeleteReferenceState(equipmentItemId, assetId) {

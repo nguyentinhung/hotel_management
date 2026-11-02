@@ -1,13 +1,23 @@
 const { getProfileByUserId, updateProfileByUserId } = require('../dao/profileDao');
-const ProfileModel = require('../models/profileModel');
 
 async function getProfile(userId) {
-  return ProfileModel.fromResult(await getProfileByUserId(userId));
+  return await getProfileByUserId(userId);
 }
 
 async function updateProfile(userId, input = {}) {
-  const { fullName, phone } = ProfileModel.normalizeUpdate(input);
-  return ProfileModel.fromResult(await updateProfileByUserId(userId, fullName, phone));
+  const fullName = typeof input.full_name === 'string' ? input.full_name.trim() : '';
+  const phone = typeof input.phone === 'string' ? input.phone.trim() : '';
+  if (!fullName || fullName.length > 255) {
+    const error = new Error('Họ tên không được để trống và tối đa 255 ký tự.');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!/^\+?[0-9\s\-()]{9,20}$/.test(phone) || phone.replace(/\D/g, '').length < 9) {
+    const error = new Error('Số điện thoại không đúng định dạng.');
+    error.statusCode = 400;
+    throw error;
+  }
+  return await updateProfileByUserId(userId, fullName, phone);
 }
 
 module.exports = { getProfile, updateProfile };

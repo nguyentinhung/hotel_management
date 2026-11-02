@@ -1,14 +1,27 @@
 const { sql, getPool } = require('../config/db');
-const RoomModel = require('../models/roomModel');
-const RoomAvailabilityModel = require('../models/roomAvailabilityModel');
-const RoomStatusModel = require('../models/roomStatusModel');
 
 function quoteSqlIdentifier(identifier) {
   return `[${String(identifier).replace(/]/g, ']]')}]`;
 }
 
 function activeReservationPredicate(alias) {
-  return `(${alias}.status = 'CHECKED_IN' OR (${alias}.status = 'PENDING_PAYMENT' AND ${alias}.created_at > DATEADD(minute, -15, SYSUTCDATETIME())) OR ${alias}.status = 'CONFIRMED')`;
+  return `(${alias}.status = 'CHECKED_IN' OR (${alias}.status = 'CONFIRMED' AND (
+    (CASE WHEN ${alias}.hold_extended = 1 AND ${alias}.expected_arrival_at IS NOT NULL AND ${alias}.hold_until IS NOT NULL
+      THEN ${alias}.hold_until
+      ELSE DATEADD(hour, 4, CASE WHEN ${alias}.created_at > DATEADD(hour, 14, CONVERT(datetime2, ${alias}.check_in_date))
+        THEN ${alias}.created_at ELSE DATEADD(hour, 14, CONVERT(datetime2, ${alias}.check_in_date)) END)
+    END) > DATEADD(hour, 7, SYSUTCDATETIME())
+    OR EXISTS (SELECT 1 FROM dbo.booking_rooms hold_br JOIN dbo.rooms hold_room ON hold_room.id = hold_br.room_id
+      WHERE hold_br.booking_id = ${alias}.id AND hold_room.status = 'OCCUPIED')
+  )) OR (
+    ${alias}.status = 'PENDING_PAYMENT' AND (
+      ${alias}.created_at > DATEADD(minute, -15, DATEADD(hour, 7, SYSUTCDATETIME()))
+      OR EXISTS (SELECT 1 FROM dbo.payments pending_payment
+        WHERE pending_payment.booking_id = ${alias}.id
+          AND pending_payment.payment_type = 'DEPOSIT'
+          AND pending_payment.status = 'PENDING')
+    )
+  ))`;
 }
 
 /**
@@ -167,14 +180,14 @@ async function checkRoomAvailability({ checkInDate, checkOutDate, adults = 1, ch
       type.max_adults >= Number(adults) &&
       type.max_children >= Number(children);
 
-    return RoomAvailabilityModel.fromAvailability({
+    return {
       type,
       totalRooms,
       bookedRooms: bookedRoomsCount,
       availableCount,
       capacityMatched,
       availableRoomNumbers,
-    });
+    };
   });
 }
 
@@ -216,7 +229,7 @@ async function getAvailableRoomsForType({ roomTypeId, checkInDate, checkOutDate 
       ORDER BY r.room_number;
     `);
 
-  return RoomModel.fromRows(result.recordset);
+  return result.recordset;
 }
 
 async function getRoomList() {
@@ -228,7 +241,7 @@ async function getRoomList() {
     INNER JOIN dbo.room_types rt ON rt.id = r.room_type_id
     ORDER BY r.floor, r.room_number;
   `);
-  return RoomModel.fromRows(result.recordset);
+  return result.recordset;
 }
 
 async function getRoomDetails(roomId) {
@@ -243,7 +256,7 @@ async function getRoomDetails(roomId) {
       INNER JOIN dbo.room_types rt ON rt.id = r.room_type_id
       WHERE r.id = @roomId;
     `);
-  return RoomModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function createRoom({ roomNumber, roomTypeId, floor }) {
@@ -476,7 +489,7 @@ async function updateRoomStatus(roomId, status, currentStatus = 'CLEANING') {
       SELECT @@ROWCOUNT AS updated_count, (SELECT status FROM dbo.rooms WHERE id = @roomId) AS status;
     `);
   if (!result.recordset[0]?.updated_count) throw new Error('Room is not waiting for cleaning completion.');
-  return RoomStatusModel.fromRow({ room_id: roomId, status: result.recordset[0].status });
+  return ({ room_id: roomId, status: result.recordset[0].status } ?? null);
 }
 
 module.exports = {

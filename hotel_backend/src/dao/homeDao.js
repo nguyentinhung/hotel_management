@@ -1,8 +1,13 @@
 const { sql, getPool } = require('../config/db');
-const RoomTypeModel = require('../models/roomTypeModel');
-const PromotionModel = require('../models/promotionModel');
-const ServiceModel = require('../models/serviceModel');
-const ReviewModel = require('../models/reviewModel');
+
+function parseAmenityIds(value) {
+  return String(value ?? '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map(Number)
+    .filter((id) => Number.isInteger(id) && id > 0);
+}
 
 async function getRoomTypes() {
   const pool = await getPool();
@@ -46,7 +51,7 @@ async function getRoomTypes() {
     ORDER BY rt.id;
   `);
 
-  return RoomTypeModel.fromRows(result.recordset);
+  return result.recordset;
 }
 
 async function getRoomTypeById(roomTypeId) {
@@ -110,16 +115,16 @@ async function getRoomTypeById(roomTypeId) {
   ]);
 
   const roomType = roomTypeResult.recordset[0];
-  return RoomTypeModel.fromRow({
+  return ({
     ...roomType,
     base_price: Number(roomType.base_price ?? 0),
     average_rating: roomType.average_rating == null ? null : Number(roomType.average_rating),
     review_count: Number(roomType.review_count ?? 0),
     amenities: String(roomType.amenities || '').split(',').map((item) => item.trim()).filter(Boolean),
-    amenity_ids: String(roomType.amenity_ids || '').split(',').map(Number).filter(Number.isInteger),
+    amenity_ids: parseAmenityIds(roomType.amenity_ids),
     images: imagesResult.recordset,
     reviews: reviewsResult.recordset,
-  });
+  } ?? null);
 }
 
 async function getPromotions() {
@@ -128,11 +133,11 @@ async function getPromotions() {
     SELECT id, code, name, description, discount_type, discount_value, max_discount,
            valid_from, valid_to, is_active
     FROM promotions
-    WHERE is_active = 1 AND GETDATE() BETWEEN valid_from AND valid_to
+    WHERE is_active = 1 AND CONVERT(date, DATEADD(hour, 7, SYSUTCDATETIME())) BETWEEN valid_from AND valid_to
     ORDER BY id;
   `);
 
-  return PromotionModel.fromRows(result.recordset);
+  return result.recordset;
 }
 
 async function getServices(activeOnly = true) {
@@ -150,7 +155,7 @@ async function getServices(activeOnly = true) {
   query += ` ORDER BY id;`;
 
   const result = await request.query(query);
-  return ServiceModel.fromRows(result.recordset);
+  return result.recordset;
 }
 
 async function getActiveServiceById(id) {
@@ -158,7 +163,7 @@ async function getActiveServiceById(id) {
   const result = await pool.request()
     .input('id', sql.Int, id)
     .query(`SELECT id, name, description, price, unit, is_active, booking_policy FROM services WHERE id = @id AND is_active = 1 AND is_deleted = 0;`);
-  return ServiceModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function getReviews() {
@@ -179,7 +184,7 @@ async function getReviews() {
     ORDER BY r.id DESC;
   `);
 
-  return ReviewModel.fromRows(result.recordset);
+  return result.recordset;
 }
 
 module.exports = {

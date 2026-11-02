@@ -30,7 +30,7 @@ function isActiveEquipmentType(item: EquipmentItem): boolean {
   return item.is_active === true || item.is_active === 1;
 }
 
-export default function RoomEquipmentAssignments({ roomId, roomNumber, roomTypeName, canAssign }: { roomId: number; roomNumber: string; roomTypeName: string; canAssign: boolean }) {
+export default function RoomEquipmentAssignments({ roomId, roomNumber, roomTypeName, roomStatus, canAssign }: { roomId: number; roomNumber: string; roomTypeName: string; roomStatus: string; canAssign: boolean }) {
   const { showToast } = useToast();
   const [assignments, setAssignments] = useState<RoomEquipmentAssignment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -233,9 +233,10 @@ export default function RoomEquipmentAssignments({ roomId, roomNumber, roomTypeN
           <h3 id={`room-equipment-title-${roomId}`}>Danh sách thiết bị trong phòng <span>({assignments.length} thiết bị)</span></h3>
           <p>Các thiết bị vật lý hiện đang được gán cho phòng này.</p>
         </div>
-        {canAssign && <button className="btn btn-primary btn-sm" type="button" onClick={() => void openAssignForm()}>
+        {canAssign && roomStatus === 'AVAILABLE' && <button className="btn btn-primary btn-sm" type="button" onClick={() => void openAssignForm()}>
           + Thêm thiết bị vào phòng
         </button>}
+        {canAssign && roomStatus !== 'AVAILABLE' && <small>Chỉ thêm thiết bị khi phòng đang trống.</small>}
       </div>
 
       {loading ? <p className="room-equipment-state" role="status">Đang tải danh sách thiết bị...</p>

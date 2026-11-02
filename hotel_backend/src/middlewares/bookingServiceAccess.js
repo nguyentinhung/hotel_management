@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 const { jwtSecret: JWT_SECRET } = require('../config/auth');
-const roleCodeById = { 1: 'CUSTOMER', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'ADMIN' };
+const roleCodeById = { 1: 'ADMIN', 2: 'RECEPTIONIST', 3: 'HOUSEKEEPER', 4: 'CUSTOMER' };
 const getRoleCode = (claims) => String(claims.role_code || '').toUpperCase() || roleCodeById[Number(claims.role_id)];
 
 function requireBookingServiceReadAccess(req, res, next) {

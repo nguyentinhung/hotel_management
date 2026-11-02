@@ -2,10 +2,12 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 
 type ToastKind = 'success' | 'error' | 'info';
 type ToastItem = { id: number; message: string; kind: ToastKind };
-export type ConfirmOptions = { title?: string; message: string; confirmLabel?: string; destructive?: boolean };
+export type ConfirmOptions = { title?: string; message: string; confirmLabel?: string; destructive?: boolean; inputLabel?: string; inputPlaceholder?: string; inputMaxLength?: number };
+export type ConfirmInputResult = { confirmed: boolean; input: string };
 type ToastContextValue = {
   showToast: (message: string, kind?: ToastKind) => void;
   confirmAction: (options: ConfirmOptions) => Promise<boolean>;
+  confirmActionWithInput: (options: ConfirmOptions) => Promise<ConfirmInputResult>;
 };
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -13,21 +15,30 @@ const ToastContext = createContext<ToastContextValue | null>(null);
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toast, setToast] = useState<ToastItem | null>(null);
   const [confirmation, setConfirmation] = useState<ConfirmOptions | null>(null);
-  const confirmResolver = useRef<((confirmed: boolean) => void) | null>(null);
+  const [confirmationInput, setConfirmationInput] = useState('');
+  const confirmResolver = useRef<((result: ConfirmInputResult) => void) | null>(null);
   const showToast = useCallback((message: string, kind: ToastKind = 'info') => {
     setToast({ id: Date.now() + Math.random(), message, kind });
   }, []);
   const confirmAction = useCallback((options: ConfirmOptions) => new Promise<boolean>((resolve) => {
-    confirmResolver.current?.(false);
+    confirmResolver.current?.({ confirmed: false, input: '' });
+    confirmResolver.current = (result) => resolve(result.confirmed);
+    setConfirmationInput('');
+    setConfirmation(options);
+  }), []);
+  const confirmActionWithInput = useCallback((options: ConfirmOptions) => new Promise<ConfirmInputResult>((resolve) => {
+    confirmResolver.current?.({ confirmed: false, input: '' });
     confirmResolver.current = resolve;
+    setConfirmationInput('');
     setConfirmation(options);
   }), []);
   const finishConfirmation = useCallback((confirmed: boolean) => {
     const resolve = confirmResolver.current;
     confirmResolver.current = null;
     setConfirmation(null);
-    resolve?.(confirmed);
-  }, []);
+    resolve?.({ confirmed, input: confirmed ? confirmationInput.trim() : '' });
+    setConfirmationInput('');
+  }, [confirmationInput]);
 
   useEffect(() => {
     if (!toast) return;
@@ -44,7 +55,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [confirmation, finishConfirmation]);
 
-  return <ToastContext.Provider value={{ showToast, confirmAction }}>
+  return <ToastContext.Provider value={{ showToast, confirmAction, confirmActionWithInput }}>
     {children}
     <div className="app-toast-region" aria-live="polite" aria-atomic="true">
       {toast && <div className={`app-toast app-toast-${toast.kind}`} role={toast.kind === 'error' ? 'alert' : 'status'}>
@@ -58,6 +69,16 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         <span className="app-confirm-eyebrow">Xác nhận thao tác</span>
         <h2 id="app-confirm-title">{confirmation.title || 'Bạn có chắc chắn?'}</h2>
         <p id="app-confirm-message">{confirmation.message}</p>
+        {confirmation.inputLabel && <label className="app-confirm-input-label">
+          <span>{confirmation.inputLabel}</span>
+          <textarea
+            value={confirmationInput}
+            onChange={(event) => setConfirmationInput(event.target.value)}
+            maxLength={confirmation.inputMaxLength || 500}
+            placeholder={confirmation.inputPlaceholder || ''}
+            rows={3}
+          />
+        </label>}
         <footer>
           <button type="button" className="btn btn-outline" onClick={() => finishConfirmation(false)}>Hủy</button>
           <button type="button" className={confirmation.destructive ? 'app-confirm-danger' : 'btn btn-primary'} onClick={() => finishConfirmation(true)}>{confirmation.confirmLabel || 'Xác nhận'}</button>

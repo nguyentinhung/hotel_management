@@ -1,4 +1,10 @@
 const staffService = require('../services/staffService');
+const { toStaffListResponse } = require('../dto/staff/view-staff-list/staff-list-response.dto');
+const { toStaffDetailsResponse } = require('../dto/staff/view-staff-details/staff-details-response.dto');
+const { toUpdateStaffInformationRequest } = require('../dto/staff/update-staff-information/update-staff-information-request.dto');
+const { toUpdateStaffInformationResponse } = require('../dto/staff/update-staff-information/update-staff-information-response.dto');
+const { toUpdateStaffStatusRequest } = require('../dto/staff/update-staff-status/update-staff-status-request.dto');
+const { toUpdateStaffStatusResponse } = require('../dto/staff/update-staff-status/update-staff-status-response.dto');
 
 const messages = {
   NOT_FOUND: 'Kh\u00f4ng t\u00ecm th\u1ea5y nh\u00e2n vi\u00ean.',
@@ -9,7 +15,7 @@ const messages = {
 async function getStaffList(req, res) {
   try {
     const staff = await staffService.list(req.query.search);
-    return res.json({ success: true, count: staff.length, staff });
+    return res.json(toStaffListResponse(staff));
   } catch (error) {
     console.error('Get staff list failed:', error);
     return res.status(500).json({ success: false, message: 'Kh\u00f4ng th\u1ec3 t\u1ea3i danh s\u00e1ch nh\u00e2n vi\u00ean.' });
@@ -20,7 +26,7 @@ async function getStaffDetails(req, res) {
   try {
     const staff = await staffService.get(req.params.staffId);
     if (!staff) return res.status(404).json({ success: false, message: messages.NOT_FOUND });
-    return res.json({ success: true, staff });
+    return res.json(toStaffDetailsResponse(staff));
   } catch (error) {
     console.error('Get staff details failed:', error);
     return res.status(500).json({ success: false, message: 'Kh\u00f4ng th\u1ec3 t\u1ea3i th\u00f4ng tin nh\u00e2n vi\u00ean.' });
@@ -31,8 +37,8 @@ async function updateStaffInfo(req, res) {
   const id = Number(req.params.staffId);
   if (!Number.isSafeInteger(id)) return res.status(400).json({ success: false, message: 'M\u00e3 nh\u00e2n vi\u00ean kh\u00f4ng h\u1ee3p l\u1ec7.' });
   try {
-    const staff = await staffService.updateInfo(id, req.body);
-    return res.json({ success: true, staff });
+    const staff = await staffService.updateInfo(id, toUpdateStaffInformationRequest(req.body));
+    return res.json(toUpdateStaffInformationResponse(staff));
   } catch (error) {
     if (error.code === 'INVALID_INPUT') return res.status(400).json({ success: false, message: error.message });
     if (error instanceof staffService.StaffServiceError) {
@@ -48,8 +54,9 @@ async function updateStaffStatus(req, res) {
   const id = Number(req.params.staffId);
   if (!Number.isSafeInteger(id)) return res.status(400).json({ success: false, message: 'M\u00e3 nh\u00e2n vi\u00ean kh\u00f4ng h\u1ee3p l\u1ec7.' });
   try {
-    const staff = await staffService.updateStatus(id, req.body?.status, req.user?.user_id || req.user?.id);
-    return res.json({ success: true, staff });
+    const { status } = toUpdateStaffStatusRequest(req.body);
+    const staff = await staffService.updateStatus(id, status, req.user?.user_id || req.user?.id);
+    return res.json(toUpdateStaffStatusResponse(staff));
   } catch (error) {
     if (error.code === 'INVALID_INPUT') return res.status(400).json({ success: false, message: error.message });
     if (error instanceof staffService.StaffServiceError) {

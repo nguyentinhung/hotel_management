@@ -1,6 +1,4 @@
 const { sql, getPool } = require('../config/db');
-const PaymentModel = require('../models/paymentModel');
-const InvoiceModel = require('../models/invoiceModel');
 const { expirePendingBookings } = require('./bookingDao');
 
 function paymentError(code, statusCode, message) {
@@ -354,16 +352,32 @@ async function createCustomerDepositPayment({ customerId, bookingCode, paymentCo
              WHERE br.room_type_id = @roomTypeId AND b.id <> @bookingId
                AND b.check_in_date < @checkOut AND b.check_out_date > @checkIn
                AND (b.status = 'CHECKED_IN'
-                 OR (b.status = 'PENDING_PAYMENT' AND b.created_at > DATEADD(minute, -15, SYSUTCDATETIME()))
-                 OR b.status = 'CONFIRMED')
-             ) AS reserved_count;
+                 OR (b.status = 'PENDING_PAYMENT' AND (
+                   b.created_at > DATEADD(minute, -15, DATEADD(hour, 7, SYSUTCDATETIME()))
+                   OR EXISTS (SELECT 1 FROM dbo.payments pending_payment
+                     WHERE pending_payment.booking_id = b.id
+                       AND pending_payment.payment_type = 'DEPOSIT'
+                       AND pending_payment.status = 'PENDING')
+                 ))
+                 OR (b.status = 'CONFIRMED' AND (CASE
+                   WHEN b.hold_extended = 1 AND b.expected_arrival_at IS NOT NULL AND b.hold_until IS NOT NULL THEN b.hold_until
+                   ELSE DATEADD(hour, 4, CASE WHEN b.created_at > DATEADD(hour, 14, CONVERT(datetime2, b.check_in_date))
+                     THEN b.created_at ELSE DATEADD(hour, 14, CONVERT(datetime2, b.check_in_date)) END)
+                 END > DATEADD(hour, 7, SYSUTCDATETIME())
+                   OR EXISTS (SELECT 1 FROM dbo.booking_rooms hold_br JOIN dbo.rooms hold_room ON hold_room.id = hold_br.room_id
+                      WHERE hold_br.booking_id = b.id AND hold_room.status = 'OCCUPIED')))
+             )) AS reserved_count;
         `);
       const row = inventory.recordset[0];
       if (!row || Number(row.inventory_count) - Number(row.reserved_count) < Number(selection.required_count)) { unavailable = true; break; }
     }
     if (unavailable) {
       await transaction.request().input('bookingId', sql.BigInt, booking.id).query(`
-        UPDATE dbo.bookings SET status = 'CANCELLED', cancellation_reason = 'ROOMS_UNAVAILABLE' WHERE id = @bookingId;
+        UPDATE dbo.bookings
+        SET status = 'CANCELLED', cancellation_reason = 'ROOMS_UNAVAILABLE',
+            cancellation_reason_code = N'ROOMS_UNAVAILABLE', cancellation_reason_note = NULL,
+            cancelled_at = SYSUTCDATETIME(), cancelled_by = NULL
+        WHERE id = @bookingId;
         UPDATE dbo.payments SET status = 'FAILED' WHERE booking_id = @bookingId AND payment_type = 'DEPOSIT' AND status = 'PENDING';
       `);
       await transaction.commit();
@@ -435,10 +449,9 @@ async function completeSimulatedDepositPayment({ paymentCode, customerId, succee
     await transaction.request()
       .input('paymentCode', sql.VarChar(30), paymentCode)
       .input('status', sql.VarChar(20), succeeded ? 'SUCCESS' : 'FAILED')
-      .input('paidAt', sql.DateTime2, succeeded ? new Date() : null)
       .query(`
         UPDATE dbo.payments
-        SET status = @status, paid_at = @paidAt
+        SET status = @status, paid_at = CASE WHEN @status = 'SUCCESS' THEN SYSUTCDATETIME() ELSE NULL END
         WHERE payment_code = @paymentCode;
       `);
 
@@ -449,6 +462,10 @@ async function completeSimulatedDepositPayment({ paymentCode, customerId, succee
         .query(`
           UPDATE dbo.bookings
           SET deposit_amount = COALESCE(deposit_amount, 0) + @amount,
+              hold_until = CASE WHEN status = 'PENDING_PAYMENT' AND hold_until IS NULL THEN
+                DATEADD(hour, 4, CASE WHEN created_at > DATEADD(hour, 14, CONVERT(datetime2, check_in_date))
+                  THEN created_at ELSE DATEADD(hour, 14, CONVERT(datetime2, check_in_date)) END)
+                ELSE hold_until END,
               status = CASE WHEN status = 'PENDING_PAYMENT' THEN 'CONFIRMED' ELSE status END
           WHERE id = @bookingId;
         `);
@@ -485,6 +502,11 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method, 
     if (!booking) throw paymentError('BOOKING_NOT_FOUND', 404, 'Không tìm thấy booking.');
     const bookingStatus = String(booking.status).toUpperCase();
     if (!['CHECKED_IN', 'CHECKED_OUT'].includes(bookingStatus)) throw paymentError('BOOKING_NOT_CHECKED_IN', 409, 'Booking phải đang lưu trú hoặc đã checkout còn dư nợ.');
+    const checkoutStaffResult = await transaction.request()
+      .input('createdByUserId', sql.BigInt, createdByUserId || null)
+      .query('SELECT TOP (1) id FROM dbo.staff WITH (UPDLOCK, HOLDLOCK) WHERE user_id = @createdByUserId;');
+    const checkoutStaffId = checkoutStaffResult.recordset[0]?.id ?? null;
+    if (!checkoutStaffId) throw paymentError('CHECKOUT_STAFF_NOT_FOUND', 409, 'Tài khoản lễ tân chưa có hồ sơ nhân viên.');
     let amount = null;
     const pendingPayment = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
       SELECT TOP (1) id, payment_code, amount, payment_type, method, invoice_id
@@ -500,6 +522,10 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method, 
       const invoice = await transaction.request().input('invoiceId', sql.BigInt, pending.invoice_id).query(`
         SELECT invoice_number FROM dbo.invoices WHERE id = @invoiceId;
       `);
+      await transaction.request()
+        .input('paymentId', sql.BigInt, pending.id)
+        .input('checkoutStaffId', sql.BigInt, checkoutStaffId)
+        .query('UPDATE dbo.payments SET created_by_staff_id = COALESCE(created_by_staff_id, @checkoutStaffId) WHERE id = @paymentId;');
       await transaction.commit();
       return {
         payment_code: pending.payment_code,
@@ -521,6 +547,23 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method, 
     assertNoPendingPayments(allPayments);
     let invoiceNumber = existingInvoice.recordset[0]?.invoice_number || null;
     if (existingInvoice.recordset.length) invoiceId = existingInvoice.recordset[0].id;
+    if (invoiceId && createdByUserId) {
+      await transaction.request()
+        .input('invoiceId', sql.BigInt, invoiceId)
+        .input('createdByUserId', sql.BigInt, createdByUserId)
+        .query(`
+          UPDATE dbo.invoices
+          SET created_by_user_id = COALESCE(created_by_user_id, @createdByUserId),
+              created_by_full_name = COALESCE(created_by_full_name,
+                (SELECT COALESCE(NULLIF(users.full_name, N''), roles.name)
+                 FROM dbo.users AS users LEFT JOIN dbo.roles AS roles ON roles.id = users.role_id
+                 WHERE users.id = @createdByUserId)),
+              created_by_staff_id = COALESCE(created_by_staff_id,
+                (SELECT id FROM dbo.staff WHERE user_id = @createdByUserId))
+          WHERE id = @invoiceId
+            AND (created_by_user_id IS NULL OR created_by_full_name IS NULL OR created_by_staff_id IS NULL);
+        `);
+    }
     if (bookingStatus === 'CHECKED_IN') {
       if (!invoiceId) {
         const totals = await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`
@@ -551,10 +594,15 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method, 
           .query(`
             INSERT INTO dbo.invoices
               (booking_id, invoice_number, room_amount, service_amount, discount_amount, tax_amount,
-               total_amount, deposit_paid, amount_due, status, issued_at, created_by_user_id)
+               total_amount, deposit_paid, amount_due, status, issued_at,
+               created_by_user_id, created_by_full_name, created_by_staff_id)
             OUTPUT INSERTED.id
             VALUES (@bookingId, @invoiceNumber, @roomAmount, @serviceAmount, @discountAmount, 0,
-                    @totalAmount, @depositPaid, @amountDue, @invoiceStatus, SYSUTCDATETIME(), @createdByUserId);
+                    @totalAmount, @depositPaid, @amountDue, @invoiceStatus, SYSUTCDATETIME(), @createdByUserId,
+                    (SELECT COALESCE(NULLIF(users.full_name, N''), roles.name)
+                     FROM dbo.users AS users LEFT JOIN dbo.roles AS roles ON roles.id = users.role_id
+                     WHERE users.id = @createdByUserId),
+                    (SELECT id FROM dbo.staff WHERE user_id = @createdByUserId));
           `);
         invoiceId = created.recordset[0].id;
 
@@ -614,10 +662,12 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method, 
         .input('amount', sql.Decimal(14, 2), amount)
         .input('method', sql.VarChar(20), method)
         .input('status', sql.VarChar(20), method === 'CASH' ? 'SUCCESS' : 'PENDING')
+        .input('checkoutStaffId', sql.BigInt, checkoutStaffId)
         .query(`
-          INSERT INTO dbo.payments (payment_code, booking_id, invoice_id, amount, payment_type, method, status, paid_at)
+          INSERT INTO dbo.payments (payment_code, booking_id, invoice_id, amount, payment_type, method, status, paid_at, created_by_staff_id)
           VALUES (@paymentCode, @bookingId, @invoiceId, @amount, 'FINAL', @method, @status,
-            CASE WHEN @status = 'SUCCESS' THEN SYSUTCDATETIME() ELSE NULL END);
+            CASE WHEN @status = 'SUCCESS' THEN SYSUTCDATETIME() ELSE NULL END,
+            @checkoutStaffId);
         `);
     }
     if (invoiceId && (method === 'CASH' || amount <= 0)) {
@@ -628,7 +678,15 @@ async function createReceptionCheckoutPayment({ bookingId, paymentCode, method, 
     // For VNPay, keep the guest checked in and the room occupied until IPN
     // confirms payment. That leaves the booking retryable if the payment fails.
     if (bookingStatus === 'CHECKED_IN' && (method === 'CASH' || amount <= 0)) {
-      await transaction.request().input('bookingId', sql.BigInt, bookingId).query(`UPDATE dbo.bookings SET status = 'CHECKED_OUT' WHERE id = @bookingId;`);
+      await transaction.request()
+        .input('bookingId', sql.BigInt, bookingId)
+        .input('checkoutStaffId', sql.BigInt, checkoutStaffId)
+        .query(`
+          UPDATE dbo.bookings SET status = 'CHECKED_OUT' WHERE id = @bookingId;
+          UPDATE dbo.booking_rooms
+          SET checked_out_by_staff_id = @checkoutStaffId, actual_check_out = SYSUTCDATETIME()
+          WHERE booking_id = @bookingId;
+        `);
       for (const room of rooms.recordset) {
         if (room.room_id != null) await transaction.request().input('roomId', sql.Int, room.room_id).query(`UPDATE dbo.rooms SET status = 'CLEANING' WHERE id = @roomId AND status = 'OCCUPIED';`);
       }
@@ -672,8 +730,15 @@ async function createReceptionInvoice(bookingId, createdByUserId) {
           .input('createdByUserId', sql.BigInt, createdByUserId)
           .query(`
             UPDATE dbo.invoices
-            SET created_by_user_id = @createdByUserId
-            WHERE id = @invoiceId AND created_by_user_id IS NULL;
+            SET created_by_user_id = COALESCE(created_by_user_id, @createdByUserId),
+                created_by_full_name = COALESCE(created_by_full_name,
+                  (SELECT COALESCE(NULLIF(users.full_name, N''), roles.name)
+                   FROM dbo.users AS users LEFT JOIN dbo.roles AS roles ON roles.id = users.role_id
+                   WHERE users.id = @createdByUserId)),
+                created_by_staff_id = COALESCE(created_by_staff_id,
+                  (SELECT id FROM dbo.staff WHERE user_id = @createdByUserId))
+            WHERE id = @invoiceId
+              AND (created_by_user_id IS NULL OR created_by_full_name IS NULL OR created_by_staff_id IS NULL);
           `);
       }
       // Repair older invoices or invoices missing newly added booking items.
@@ -832,10 +897,15 @@ async function createReceptionInvoice(bookingId, createdByUserId) {
       .query(`
         INSERT INTO dbo.invoices
           (booking_id, invoice_number, room_amount, service_amount, discount_amount, tax_amount,
-           total_amount, deposit_paid, amount_due, status, issued_at, created_by_user_id)
+           total_amount, deposit_paid, amount_due, status, issued_at,
+           created_by_user_id, created_by_full_name, created_by_staff_id)
         OUTPUT INSERTED.id
         VALUES (@bookingId, @invoiceNumber, @roomAmount, @serviceAmount, @discountAmount, 0,
-                @totalAmount, @depositPaid, @amountDue, @invoiceStatus, SYSUTCDATETIME(), @createdByUserId);
+                @totalAmount, @depositPaid, @amountDue, @invoiceStatus, SYSUTCDATETIME(), @createdByUserId,
+                (SELECT COALESCE(NULLIF(users.full_name, N''), roles.name)
+                 FROM dbo.users AS users LEFT JOIN dbo.roles AS roles ON roles.id = users.role_id
+                 WHERE users.id = @createdByUserId),
+                (SELECT id FROM dbo.staff WHERE user_id = @createdByUserId));
       `);
     const invoiceId = invoiceResult.recordset[0].id;
 
@@ -900,7 +970,6 @@ async function syncReceptionBookingCompensations(bookingId) {
 }
 
 async function completeVnpayPayment({ paymentCode, amountMinor, transactionNo, succeeded }) {
-  await expirePendingBookings();
   const pool = await getPool();
   const transaction = new sql.Transaction(pool);
   let transactionStarted = false;
@@ -912,9 +981,9 @@ async function completeVnpayPayment({ paymentCode, amountMinor, transactionNo, s
     const paymentResult = await transaction.request()
       .input('paymentCode', sql.VarChar(30), paymentCode)
       .query(`
-        SELECT TOP (1) p.id, p.booking_id, b.booking_code, b.status AS booking_status, p.invoice_id, p.amount, p.payment_type, p.method, p.status, p.vnpay_transaction_no
+        SELECT TOP (1) p.id, p.booking_id, b.booking_code, b.status AS booking_status, p.invoice_id, p.amount, p.payment_type, p.method, p.status, p.vnpay_transaction_no, p.created_by_staff_id
         FROM dbo.payments p WITH (UPDLOCK, HOLDLOCK)
-        JOIN dbo.bookings b ON b.id = p.booking_id
+        JOIN dbo.bookings b WITH (UPDLOCK, HOLDLOCK) ON b.id = p.booking_id
         WHERE p.payment_code = @paymentCode;
       `);
     const payment = paymentResult.recordset[0];
@@ -967,6 +1036,10 @@ async function completeVnpayPayment({ paymentCode, amountMinor, transactionNo, s
         .query(`
           UPDATE dbo.bookings
           SET deposit_amount = COALESCE(deposit_amount, 0) + @amount,
+              hold_until = CASE WHEN status = 'PENDING_PAYMENT' AND hold_until IS NULL THEN
+                DATEADD(hour, 4, CASE WHEN created_at > DATEADD(hour, 14, CONVERT(datetime2, check_in_date))
+                  THEN created_at ELSE DATEADD(hour, 14, CONVERT(datetime2, check_in_date)) END)
+                ELSE hold_until END,
               status = CASE WHEN status = 'PENDING_PAYMENT' THEN 'CONFIRMED' ELSE status END
           WHERE id = @bookingId;
         `);
@@ -978,7 +1051,13 @@ async function completeVnpayPayment({ paymentCode, amountMinor, transactionNo, s
       && String(payment.booking_status).toUpperCase() === 'CHECKED_IN') {
       await transaction.request()
         .input('bookingId', sql.BigInt, payment.booking_id)
-        .query(`UPDATE dbo.bookings SET status = 'CHECKED_OUT' WHERE id = @bookingId;`);
+        .input('checkoutStaffId', sql.BigInt, payment.created_by_staff_id)
+        .query(`
+          UPDATE dbo.bookings SET status = 'CHECKED_OUT' WHERE id = @bookingId;
+          UPDATE dbo.booking_rooms
+          SET checked_out_by_staff_id = @checkoutStaffId, actual_check_out = SYSUTCDATETIME()
+          WHERE booking_id = @bookingId;
+        `);
       await transaction.request()
         .input('bookingId', sql.BigInt, payment.booking_id)
         .query(`
@@ -1115,99 +1194,11 @@ async function getPaymentList(customerId = null, successOnly = false) {
     ORDER BY p.id DESC;
   `);
 
-  return PaymentModel.fromRows(result.recordset);
+  return result.recordset;
 }
 
 async function getCustomerPaymentList(customerId) {
   return getPaymentList(customerId);
-}
-
-async function getInvoiceList(customerId = null) {
-  const pool = await getPool();
-  const request = pool.request();
-  const customerFilter = customerId == null ? '' : 'AND b.customer_id = @customerId';
-  if (customerId != null) request.input('customerId', sql.BigInt, customerId);
-  const result = await request.query(`
-    SELECT i.id, i.invoice_number, i.room_amount, i.service_amount, i.discount_amount,
-      i.tax_amount, i.total_amount, i.deposit_paid, i.amount_due, i.status, i.issued_at,
-      b.booking_code, b.check_in_date, b.check_out_date, b.guest_full_name, b.guest_phone,
-      b.guest_email, u.full_name AS customer_full_name, u.email AS customer_email,
-      u.phone AS customer_phone,
-      JSON_QUERY((SELECT ii.item_type, ii.description, ii.quantity, ii.unit_price, ii.amount
-        FROM dbo.invoice_items ii WHERE ii.invoice_id = i.id ORDER BY ii.id FOR JSON PATH)) AS items
-    FROM dbo.invoices i
-    JOIN dbo.bookings b ON b.id = i.booking_id
-    LEFT JOIN dbo.users u ON u.id = b.customer_id
-    WHERE 1 = 1 ${customerFilter}
-    ORDER BY i.issued_at DESC, i.id DESC;
-  `);
-  return InvoiceModel.fromRows(result.recordset);
-}
-
-async function getInvoiceDetails(invoiceId, customerId = null) {
-  const pool = await getPool();
-  const request = pool.request().input('invoiceId', sql.BigInt, invoiceId);
-  const customerFilter = customerId == null ? '' : 'AND b.customer_id = @customerId';
-  if (customerId != null) request.input('customerId', sql.BigInt, customerId);
-  const result = await request.query(`
-    SELECT i.id, i.invoice_number, i.room_amount, i.service_amount, i.discount_amount,
-      i.tax_amount, i.total_amount, i.deposit_paid, i.amount_due, i.status, i.issued_at,
-      b.booking_code, b.status AS booking_status, b.check_in_date, b.check_out_date,
-      b.guest_full_name, b.guest_phone, b.guest_email, b.adults, b.children,
-      b.special_request,
-      creator.full_name AS created_by_full_name,
-      (SELECT TOP (1) bg.id_card_number FROM dbo.booking_guests bg
-        WHERE bg.booking_id = b.id ORDER BY bg.id) AS guest_id_card_number,
-      u.full_name AS customer_full_name, u.email AS customer_email, u.phone AS customer_phone,
-      JSON_QUERY((SELECT ii.item_type,
-        ii.description,
-        CASE WHEN ii.item_type = 'SERVICE' THEN (
-          SELECT matched.room_number
-          FROM (
-            SELECT s.name AS description, bs.quantity, bs.unit_price, r.room_number,
-              ROW_NUMBER() OVER (
-                PARTITION BY s.name, bs.quantity, bs.unit_price
-                ORDER BY bs.id
-              ) AS occurrence
-            FROM dbo.booking_services bs
-            JOIN dbo.booking_rooms br ON br.id = bs.booking_room_id
-            JOIN dbo.services s ON s.id = bs.service_id
-            LEFT JOIN dbo.rooms r ON r.id = br.room_id
-            WHERE br.booking_id = b.id
-          ) matched
-          WHERE matched.description = ii.description
-            AND matched.quantity = ii.quantity
-            AND matched.unit_price = ii.unit_price
-            AND matched.occurrence = (
-              SELECT COUNT(*) FROM dbo.invoice_items previous
-              WHERE previous.invoice_id = ii.invoice_id
-                AND previous.item_type = 'SERVICE'
-                AND previous.description = ii.description
-                AND previous.quantity = ii.quantity
-                AND previous.unit_price = ii.unit_price
-                AND previous.id <= ii.id
-            )
-        ) END AS room_number,
-        ii.quantity, ii.unit_price, ii.amount
-        FROM dbo.invoice_items ii WHERE ii.invoice_id = i.id ORDER BY ii.id FOR JSON PATH)) AS items,
-      JSON_QUERY((SELECT p.payment_code, p.payment_type, p.method, p.amount, p.status,
-        p.paid_at, p.vnpay_transaction_no
-        FROM dbo.payments p
-        WHERE p.invoice_id = i.id
-          OR (p.invoice_id IS NULL AND p.booking_id = b.id)
-        ORDER BY p.paid_at DESC, p.id DESC FOR JSON PATH)) AS payments,
-      JSON_QUERY((SELECT r.room_number, r.floor, r.status AS room_status, rt.name AS room_type_name
-        FROM dbo.booking_rooms br
-        JOIN dbo.room_types rt ON rt.id = br.room_type_id
-        LEFT JOIN dbo.rooms r ON r.id = br.room_id
-        WHERE br.booking_id = b.id ORDER BY br.id FOR JSON PATH)) AS rooms
-    FROM dbo.invoices i
-    JOIN dbo.bookings b ON b.id = i.booking_id
-    LEFT JOIN dbo.users u ON u.id = b.customer_id
-    LEFT JOIN dbo.users creator ON creator.id = i.created_by_user_id
-    WHERE i.id = @invoiceId ${customerFilter};
-  `);
-  return result.recordset[0] || null;
 }
 
 async function getPaymentStatus({ paymentCode, customerId = null }) {
@@ -1227,7 +1218,7 @@ async function getPaymentStatus({ paymentCode, customerId = null }) {
     JOIN dbo.bookings b ON b.id = p.booking_id
     WHERE p.payment_code = @paymentCode ${ownerFilter};
   `);
-  return PaymentModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function getPaymentDetails({ paymentCode, customerId = null }) {
@@ -1255,7 +1246,7 @@ async function getPaymentDetails({ paymentCode, customerId = null }) {
     LEFT JOIN dbo.invoices i ON i.id = p.invoice_id
     WHERE p.payment_code = @paymentCode ${ownerFilter};
   `);
-  return PaymentModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function confirmPaymentByCode(paymentCode) {
@@ -1307,10 +1298,9 @@ async function confirmPaymentByCode(paymentCode) {
 
     await transaction.request()
       .input('paymentCode', sql.VarChar(30), paymentCode)
-      .input('paidAt', sql.DateTime2, new Date())
       .query(`
         UPDATE dbo.payments
-        SET status = 'SUCCESS', paid_at = @paidAt
+        SET status = 'SUCCESS', paid_at = SYSUTCDATETIME()
         WHERE payment_code = @paymentCode;
       `);
 
@@ -1345,6 +1335,10 @@ async function confirmPaymentByCode(paymentCode) {
         .query(`
           UPDATE dbo.bookings
           SET deposit_amount = COALESCE(deposit_amount, 0) + @amount,
+              hold_until = CASE WHEN status = 'PENDING_PAYMENT' AND hold_until IS NULL THEN
+                DATEADD(hour, 4, CASE WHEN created_at > DATEADD(hour, 14, CONVERT(datetime2, check_in_date))
+                  THEN created_at ELSE DATEADD(hour, 14, CONVERT(datetime2, check_in_date)) END)
+                ELSE hold_until END,
               status = CASE WHEN status = 'PENDING_PAYMENT' THEN 'CONFIRMED' ELSE status END
           WHERE id = @bookingId;
         `);
@@ -1361,4 +1355,4 @@ async function confirmPaymentByCode(paymentCode) {
   }
 }
 
-module.exports = { createFinalPayment, createCustomerDepositPayment, completeSimulatedDepositPayment, createReceptionCheckoutPayment, createReceptionInvoice, syncReceptionBookingCompensations, completeVnpayPayment, getVnpayPaymentContext, getPaymentList, getCustomerPaymentList, getInvoiceList, getInvoiceDetails, getPaymentStatus, getPaymentDetails, confirmPaymentByCode };
+module.exports = { createFinalPayment, createCustomerDepositPayment, completeSimulatedDepositPayment, createReceptionCheckoutPayment, createReceptionInvoice, syncReceptionBookingCompensations, completeVnpayPayment, getVnpayPaymentContext, getPaymentList, getCustomerPaymentList, getPaymentStatus, getPaymentDetails, confirmPaymentByCode };

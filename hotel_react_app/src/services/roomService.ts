@@ -32,11 +32,13 @@ export const checkRoomAvailability = async (
 
 export const createWalkInBooking = async (
   payload: WalkInBookingPayload,
-  idCardImage: File,
+  idCardFrontImage: File,
+  idCardBackImage: File,
 ): Promise<{ success: boolean; message: string; booking: WalkInBookingResponse }> => {
   const formData = new FormData();
   formData.append('payload', JSON.stringify(payload));
-  formData.append('id_card_image', idCardImage);
+  formData.append('id_card_front_image', idCardFrontImage);
+  formData.append('id_card_back_image', idCardBackImage);
   return api.postFormWithAuth<{ success: boolean; message: string; booking: WalkInBookingResponse }>(
     '/api/bookings/walk-in', formData, localStorage.getItem('accessToken') || undefined,
   );
@@ -56,10 +58,14 @@ export const createCustomerBooking = async (
 export const checkInBooking = async (
   bookingId: string | number,
   accessToken: string,
-  idCardImage?: File,
+  roomAssignments: { booking_room_id: number; room_id: number }[],
+  idCardFrontImage?: File,
+  idCardBackImage?: File,
 ): Promise<{ success: boolean; message: string }> => {
   const formData = new FormData();
-  if (idCardImage) formData.append('id_card_image', idCardImage);
+  formData.append('room_assignments', JSON.stringify(roomAssignments));
+  if (idCardFrontImage) formData.append('id_card_front_image', idCardFrontImage);
+  if (idCardBackImage) formData.append('id_card_back_image', idCardBackImage);
   return api.postFormWithAuth<{ success: boolean; message: string }>(`/api/bookings/${bookingId}/check-in`, formData, accessToken);
 };
 
@@ -174,8 +180,74 @@ export const updateBooking = (bookingId: string | number, payload: UpdateBooking
     booking: { booking_id: string | number; check_in_date: string; check_out_date: string; total_amount: number; deposit_amount: number };
   }>(`/api/bookings/${bookingId}`, payload, accessToken);
 
-export const cancelBooking = (bookingId: string | number, accessToken: string) =>
-  api.post<{ success: boolean; message: string }>(`/api/bookings/${bookingId}/cancel`, {}, accessToken);
+export const extendCheckedInBooking = (bookingId: string | number, expectedCheckOutDate: string, newCheckOutDate: string, note: string, accessToken: string) =>
+  api.post<{
+    success: boolean;
+    message: string;
+    extension: {
+      booking_id: string | number;
+      booking_code: string;
+      check_out_date: string;
+      status: string;
+      nights_added: number;
+      price_per_night: number;
+      extension_amount: number;
+      total_amount: number;
+      paid_amount: number;
+      balance_due: number;
+    };
+  }>(`/api/bookings/${bookingId}/extend`, { expected_check_out_date: expectedCheckOutDate, new_check_out_date: newCheckOutDate, note }, accessToken);
+
+export const extendBookingHold = (bookingId: string | number, expectedArrivalAt: string, reason: string, accessToken: string) =>
+  api.post<{
+    success: boolean;
+    message: string;
+    hold: { booking_id: string | number; hold_until: string; expected_arrival_at: string; hold_extended: boolean; hold_extension_count: number };
+  }>(`/api/bookings/${bookingId}/hold-extension`, { expected_arrival_at: expectedArrivalAt, reason }, accessToken);
+
+export interface StayExtensionBillingItem {
+  item_type: 'ROOM' | 'SERVICE' | 'OTHER';
+  description: string;
+  quantity: number;
+  unit_price: number;
+  amount: number;
+}
+
+export interface StayExtensionBilling {
+  billing_type: 'INVOICE' | 'ESTIMATE';
+  invoice: null | {
+    id: number;
+    invoice_number: string;
+    room_amount: number;
+    service_amount: number;
+    discount_amount: number;
+    tax_amount: number;
+    total_amount: number;
+    deposit_paid: number;
+    amount_due: number;
+    status: string;
+    issued_at: string;
+    items: StayExtensionBillingItem[];
+  };
+  estimate: null | {
+    check_in_date: string;
+    check_out_date: string;
+    room_amount: number;
+    service_amount: number;
+    discount_amount: number;
+    tax_amount: number;
+    total_amount: number;
+    paid_amount: number;
+    amount_due: number;
+  };
+  items: StayExtensionBillingItem[];
+}
+
+export const getStayExtensionBilling = (bookingId: string | number, accessToken: string) =>
+  api.get<{ success: boolean; billing: StayExtensionBilling }>(`/api/bookings/${bookingId}/extension-billing`, accessToken);
+
+export const cancelBooking = (bookingId: string | number, accessToken: string, cancellationReasonNote?: string) =>
+  api.post<{ success: boolean; message: string }>(`/api/bookings/${bookingId}/cancel`, { cancellation_reason_note: cancellationReasonNote || null }, accessToken);
 
 export const getActiveBookings = (accessToken: string) =>
   api.get<{ success: boolean; count: number; bookings: RecentBooking[] }>('/api/bookings/active', accessToken);

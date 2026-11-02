@@ -4,7 +4,7 @@ function compensationError(code, statusCode, message) {
   return Object.assign(new Error(message), { code, statusCode });
 }
 
-async function saveInspectionItemCompensation({ taskId, inspectionItemId, decision, amount, decidedByUserId }) {
+async function saveInspectionItemCompensation({ taskId, inspectionItemId, decision, decidedByUserId }) {
   const pool = await getPool();
 
   // Discover the booking key first. The transaction then locks the booking as
@@ -72,7 +72,8 @@ async function saveInspectionItemCompensation({ taskId, inspectionItemId, decisi
         SELECT task.id AS task_id, task.task_type, task.booking_room_id, task.room_id AS task_room_id,
           booking_room.booking_id, booking_room.room_id AS booking_room_room_id,
           report.id AS inspection_id, report.room_id AS inspection_room_id,
-          item.id AS inspection_item_id, item.status AS inspection_status
+          item.id AS inspection_item_id, item.status AS inspection_status,
+          equipment.unit_price
         FROM dbo.cleaning_tasks AS task WITH (UPDLOCK, HOLDLOCK)
         LEFT JOIN dbo.booking_rooms AS booking_room WITH (UPDLOCK, HOLDLOCK)
           ON booking_room.id = task.booking_room_id
@@ -80,6 +81,10 @@ async function saveInspectionItemCompensation({ taskId, inspectionItemId, decisi
           ON report.cleaning_task_id = task.id
         LEFT JOIN dbo.cleaning_task_inspection_items AS item WITH (UPDLOCK, HOLDLOCK)
           ON item.inspection_id = report.id AND item.id = @inspectionItemId
+        LEFT JOIN dbo.equipment_assets AS asset WITH (UPDLOCK, HOLDLOCK)
+          ON asset.id = item.equipment_asset_id
+        LEFT JOIN dbo.equipment_items AS equipment WITH (UPDLOCK, HOLDLOCK)
+          ON equipment.id = asset.equipment_item_id
         WHERE task.id = @taskId;
       `);
     const item = itemResult.recordset[0];
@@ -101,6 +106,11 @@ async function saveInspectionItemCompensation({ taskId, inspectionItemId, decisi
     if (!['DAMAGED', 'MISSING'].includes(String(item.inspection_status).toUpperCase())) {
       throw compensationError('INSPECTION_STATUS_INVALID', 409, 'Compensation is only available for damaged or missing equipment.');
     }
+    const unitPrice = Number(item.unit_price);
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+      throw compensationError('EQUIPMENT_PRICE_INVALID', 409, 'A valid equipment price is required to calculate compensation.');
+    }
+    const calculatedAmount = decision === 'COMPENSATION' ? Math.round(unitPrice * 80) / 100 : 0;
 
     const existingResult = await transaction.request()
       .input('inspectionItemId', sql.BigInt, inspectionItemId)
@@ -113,7 +123,7 @@ async function saveInspectionItemCompensation({ taskId, inspectionItemId, decisi
     const saveRequest = transaction.request()
       .input('inspectionItemId', sql.BigInt, inspectionItemId)
       .input('decision', sql.VarChar(20), decision)
-      .input('amount', sql.Decimal(14, 2), amount)
+      .input('amount', sql.Decimal(14, 2), calculatedAmount)
       .input('decidedByUserId', sql.BigInt, decidedByUserId);
     if (existing) saveRequest.input('compensationId', sql.BigInt, existing.id);
     const savedResult = await saveRequest.query(existing

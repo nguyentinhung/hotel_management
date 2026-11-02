@@ -59,10 +59,14 @@ async function assignToRoom(roomId, equipmentAssetId, expectedEquipmentItemId) {
   try {
     const room = await new sql.Request(transaction)
       .input('roomId', sql.Int, roomId)
-      .query('SELECT id FROM dbo.rooms WITH (UPDLOCK, HOLDLOCK) WHERE id = @roomId;');
+      .query('SELECT id, status FROM dbo.rooms WITH (UPDLOCK, HOLDLOCK) WHERE id = @roomId;');
     if (!room.recordset.length) {
       await transaction.rollback();
       return { reason: 'room_not_found' };
+    }
+    if (String(room.recordset[0].status || '').toUpperCase() !== 'AVAILABLE') {
+      await transaction.rollback();
+      return { reason: 'room_not_available' };
     }
 
     const asset = await new sql.Request(transaction)

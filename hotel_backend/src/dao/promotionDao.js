@@ -1,5 +1,4 @@
 ﻿const { sql, getPool } = require('../config/db');
-const PromotionModel = require('../models/promotionModel');
 
 const selectColumns = `
   id,
@@ -34,7 +33,7 @@ async function findAll() {
     FROM promotions
     ORDER BY id;
   `);
-  return PromotionModel.fromRows(result.recordset);
+  return result.recordset;
 }
 
 async function findActive() {
@@ -42,15 +41,15 @@ async function findActive() {
   const result = await pool.request().query(`
     SELECT ${selectColumns}
     FROM promotions
-    WHERE is_active = 1 AND GETDATE() BETWEEN valid_from AND valid_to
+    WHERE is_active = 1 AND CONVERT(date, DATEADD(hour, 7, SYSUTCDATETIME())) BETWEEN valid_from AND valid_to
     ORDER BY id;
   `);
-  return PromotionModel.fromRows(result.recordset);
+  return result.recordset;
 }
 
 async function findById(id, activeOnly = false) {
   const pool = await getPool();
-  const activeClause = activeOnly ? 'AND is_active = 1 AND GETDATE() BETWEEN valid_from AND valid_to' : '';
+  const activeClause = activeOnly ? 'AND is_active = 1 AND CONVERT(date, DATEADD(hour, 7, SYSUTCDATETIME())) BETWEEN valid_from AND valid_to' : '';
   const result = await pool.request()
     .input('id', sql.Int, id)
     .query(`
@@ -58,7 +57,7 @@ async function findById(id, activeOnly = false) {
       FROM promotions
       WHERE id = @id ${activeClause};
     `);
-  return PromotionModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function findByCode(code, excludedId = null) {
@@ -81,9 +80,9 @@ async function findActiveByCode(code) {
   const result = await pool.request().input('code', sql.VarChar(50), code).query(`
     SELECT ${selectColumns} FROM promotions
     WHERE UPPER(LTRIM(RTRIM(code))) = UPPER(@code)
-      AND is_active = 1 AND CAST(GETDATE() AS date) BETWEEN valid_from AND valid_to;
+      AND is_active = 1 AND CONVERT(date, DATEADD(hour, 7, SYSUTCDATETIME())) BETWEEN valid_from AND valid_to;
   `);
-  return PromotionModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function create(promotion) {
@@ -130,7 +129,7 @@ async function create(promotion) {
         @is_active
       );
     `);
-  return PromotionModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function update(id, promotion) {
@@ -166,7 +165,7 @@ async function update(id, promotion) {
       OUTPUT ${outputColumns}
       WHERE id = @id;
     `);
-  return PromotionModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function remove(id) {

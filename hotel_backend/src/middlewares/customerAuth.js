@@ -60,7 +60,7 @@ const requirePaymentActor = requireRoles(
 );
 
 const requireBookingReadAccess = requireRoles(
-  ['CUSTOMER', 'RECEPTIONIST'],
+  ['CUSTOMER', 'RECEPTIONIST', 'ADMIN'],
   'Booking access denied.',
 );
 

@@ -4,6 +4,7 @@ import {
     createUser,
     type CreateUserInput,
 } from '../services/userService';
+import PasswordToggle from './PasswordToggle';
 
 type Props = {
     token: string;
@@ -19,6 +20,25 @@ const initialForm: CreateUserInput = {
     role_code: 'CUSTOMER',
 };
 
+const generateStaffPassword = () => {
+    const groups = ['ABCDEFGHJKLMNPQRSTUVWXYZ', 'abcdefghijkmnopqrstuvwxyz', '23456789', '!@#$%&*?'];
+    const pick = (characters: string) => {
+        const value = new Uint32Array(1);
+        window.crypto.getRandomValues(value);
+        return characters[value[0] % characters.length];
+    };
+    const characters = groups.map(pick);
+    const allCharacters = groups.join('');
+    while (characters.length < 14) characters.push(pick(allCharacters));
+    for (let index = characters.length - 1; index > 0; index -= 1) {
+        const value = new Uint32Array(1);
+        window.crypto.getRandomValues(value);
+        const swapIndex = value[0] % (index + 1);
+        [characters[index], characters[swapIndex]] = [characters[swapIndex], characters[index]];
+    }
+    return characters.join('');
+};
+
 export default function CreateUserModal({
     token,
     onClose,
@@ -27,12 +47,23 @@ export default function CreateUserModal({
     const [form, setForm] = useState<CreateUserInput>(initialForm);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
 
     const updateField = (
         field: keyof CreateUserInput,
         value: string,
     ) => {
         setForm((current) => ({ ...current, [field]: value }));
+    };
+
+    const updateRole = (roleCode: string) => {
+        const isStaffRole = roleCode === 'RECEPTIONIST' || roleCode === 'HOUSEKEEPER';
+        setForm((current) => ({
+            ...current,
+            role_code: roleCode,
+            password: isStaffRole ? generateStaffPassword() : '',
+        }));
+        setShowPassword(isStaffRole);
     };
 
     const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -156,19 +187,43 @@ export default function CreateUserModal({
                     </div>
 
                     <div style={fieldStyle}>
-                        <label htmlFor="create-password">Mật khẩu</label>
-                        <input
-                            id="create-password"
-                            type="password"
-                            style={inputStyle}
-                            value={form.password}
-                            onChange={(e) => updateField('password', e.target.value)}
-                            minLength={8}
-                            pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9\s])\S{8,}"
-                            title="Mật khẩu cần ít nhất 8 ký tự, gồm chữ hoa, chữ thường, số và ký tự đặc biệt, không có khoảng trắng."
-                            autoComplete="new-password"
-                            required
-                        />
+                        <label htmlFor="create-password">
+                            {form.role_code === 'RECEPTIONIST' || form.role_code === 'HOUSEKEEPER'
+                                ? 'Mật khẩu khởi tạo (tự sinh)'
+                                : 'Mật khẩu'}
+                        </label>
+                        <div style={{ display: 'flex', alignItems: 'center', border: '1px solid #d1d5db', borderRadius: 8, paddingRight: 8 }}>
+                            <input
+                                id="create-password"
+                                type={showPassword ? 'text' : 'password'}
+                                style={{ ...inputStyle, border: 0, flex: 1 }}
+                                value={form.password}
+                                onChange={(e) => updateField('password', e.target.value)}
+                                minLength={8}
+                                pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[^A-Za-z0-9\s])\S{8,}"
+                                title="Mật khẩu cần ít nhất 8 ký tự, gồm chữ hoa, chữ thường, số và ký tự đặc biệt, không có khoảng trắng."
+                                autoComplete="new-password"
+                                required
+                            />
+                            {(form.role_code === 'RECEPTIONIST' || form.role_code === 'HOUSEKEEPER') && (
+                                <button
+                                    type="button"
+                                    className="btn btn-outline"
+                                    style={{ whiteSpace: 'nowrap', padding: '6px 10px', marginRight: 6 }}
+                                    onClick={() => {
+                                        setForm((current) => ({ ...current, password: generateStaffPassword() }));
+                                        setShowPassword(true);
+                                    }}
+                                    aria-label="Tạo lại mật khẩu"
+                                >
+                                    Tạo lại
+                                </button>
+                            )}
+                            <PasswordToggle visible={showPassword} onClick={() => setShowPassword((visible) => !visible)} label="password" />
+                        </div>
+                        {(form.role_code === 'RECEPTIONIST' || form.role_code === 'HOUSEKEEPER') && (
+                            <small>Mật khẩu được tạo ngẫu nhiên; hãy lưu lại để gửi cho nhân viên. Cơ sở dữ liệu chỉ lưu mật khẩu đã mã hóa.</small>
+                        )}
                     </div>
 
                     <div style={fieldStyle}>
@@ -177,9 +232,7 @@ export default function CreateUserModal({
                             id="create-role"
                             style={inputStyle}
                             value={form.role_code}
-                            onChange={(e) =>
-                                updateField('role_code', e.target.value)
-                            }
+                            onChange={(e) => updateRole(e.target.value)}
                             required
                         >
                             <option value="CUSTOMER">Khách hàng</option>

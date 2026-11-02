@@ -25,6 +25,26 @@ function showDate(value: string | null): string {
   return new Intl.DateTimeFormat('vi-VN', { dateStyle: 'medium' }).format(new Date(year, month - 1, day));
 }
 
+function dateForInput(value: string | null): string {
+  if (!value) return '';
+  const [year, month, day] = value.slice(0, 10).split('-');
+  return year && month && day ? `${month}/${day}/${year}` : '';
+}
+
+function dateForApi(value: string): string | null {
+  const normalized = value.trim();
+  if (!normalized) return null;
+  const match = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(normalized);
+  if (!match) return null;
+  const [, monthText, dayText, yearText] = match;
+  const month = Number(monthText);
+  const day = Number(dayText);
+  const year = Number(yearText);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return `${yearText}-${monthText.padStart(2, '0')}-${dayText.padStart(2, '0')}`;
+}
+
 function statusLabel(status: EquipmentAssetStatus): string {
   return status === 'AVAILABLE' ? 'Available' : status === 'MAINTENANCE' ? 'Maintenance' : 'Retired';
 }
@@ -81,6 +101,7 @@ export default function EquipmentAssetManager({ equipmentItem }: Props) {
   const [formError, setFormError] = useState('');
   const [formLoadError, setFormLoadError] = useState('');
   const formRequest = useRef(0);
+  const purchaseDatePickerRef = useRef<HTMLInputElement | null>(null);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const [deleteAsset, setDeleteAsset] = useState<EquipmentAsset | null>(null);
@@ -142,7 +163,7 @@ export default function EquipmentAssetManager({ equipmentItem }: Props) {
         asset_code: asset.asset_code,
         serial_number: asset.serial_number ?? '',
         status: asset.status,
-        purchase_date: asset.purchase_date?.slice(0, 10) ?? '',
+        purchase_date: dateForInput(asset.purchase_date),
         notes: asset.notes ?? '',
       });
     } catch (error) {
@@ -159,11 +180,17 @@ export default function EquipmentAssetManager({ equipmentItem }: Props) {
     setFormError('');
     setFormLoadError('');
     try {
+      const purchaseDate = dateForApi(form.purchase_date);
+      if (form.purchase_date.trim() && !purchaseDate) {
+        setFormError('Nhập ngày mua theo định dạng MM/DD/YYYY, ví dụ 01/07/2026.');
+        return;
+      }
+      const payload = { ...form, purchase_date: purchaseDate ?? '' };
       if (formAssetId === null) {
-        await createEquipmentAsset(equipmentItem.id, form);
+        await createEquipmentAsset(equipmentItem.id, payload);
         showToast('Physical equipment added successfully.', 'success');
       } else {
-        await updateEquipmentAsset(equipmentItem.id, formAssetId, form);
+        await updateEquipmentAsset(equipmentItem.id, formAssetId, payload);
         showToast('Physical equipment updated successfully.', 'success');
       }
       setFormAssetId(null);
@@ -294,12 +321,24 @@ export default function EquipmentAssetManager({ equipmentItem }: Props) {
                   <option value="AVAILABLE">Available</option><option value="MAINTENANCE">Maintenance</option><option value="RETIRED">Retired</option>
                 </select></label>
               <label className="room-type-field" htmlFor="equipment-asset-purchase-date"><span>Ngày mua</span>
-                <input id="equipment-asset-purchase-date" type="date" value={form.purchase_date} onChange={(event) => setForm({ ...form, purchase_date: event.target.value })} /></label>
+                <span className="equipment-purchase-date-control">
+                  <input id="equipment-asset-purchase-date" type="text" inputMode="numeric" maxLength={10} placeholder="MM/DD/YYYY" value={form.purchase_date} onChange={(event) => setForm({ ...form, purchase_date: event.target.value })} />
+                  <input ref={purchaseDatePickerRef} className="equipment-purchase-date-native" type="date" aria-hidden="true" tabIndex={-1} value={dateForApi(form.purchase_date) ?? ''} onChange={(event) => setForm({ ...form, purchase_date: dateForInput(event.target.value) })} />
+                  <button className="equipment-purchase-date-button" type="button" aria-label="Chọn ngày mua" onClick={() => {
+                    const picker = purchaseDatePickerRef.current;
+                    if (!picker) return;
+                    if (typeof picker.showPicker === 'function') picker.showPicker();
+                    else picker.click();
+                  }}>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>
+                  </button>
+                </span>
+              </label>
               <label className="room-type-field room-type-field-wide" htmlFor="equipment-asset-notes"><span>Notes</span>
                 <textarea id="equipment-asset-notes" rows={3} maxLength={500} value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></label>
             </div>
             <div className="room-type-form-actions"><button className="btn btn-outline" type="button" onClick={closeForm} disabled={saving}>Hủy</button>
-              <button className="btn btn-primary" type="submit" disabled={saving || formLoading}>{saving ? 'Đang lưu...' : 'Lưu thiết bị'}</button></div>
+              <button className="btn btn-primary equipment-asset-save" type="submit" disabled={saving || formLoading}>{saving ? 'Đang lưu...' : 'Lưu thiết bị!'}</button></div>
           </form>}
       </section>
     </div>, document.body)}

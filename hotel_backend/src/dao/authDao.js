@@ -1,27 +1,23 @@
 const { sql, getPool } = require('../config/db');
-const UserModel = require('../models/userModel');
-const RoleModel = require('../models/roleModel');
-const EmailVerificationModel = require('../models/emailVerificationModel');
-const PasswordResetModel = require('../models/passwordResetModel');
 
 async function findUserIdByEmail(email) {
   const pool = await getPool();
   const result = await pool.request().input('email', sql.VarChar(150), email)
     .query('SELECT TOP 1 id FROM users WHERE LOWER(email) = LOWER(@email);');
-  return UserModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function findUserIdByPhone(phone) {
   const pool = await getPool();
   const result = await pool.request().input('phone', sql.VarChar(20), phone)
     .query('SELECT TOP 1 id FROM users WHERE phone = @phone;');
-  return UserModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function getCustomerRole() {
   const pool = await getPool();
   const result = await pool.request().query("SELECT TOP 1 id, code, name FROM roles WHERE code = 'CUSTOMER';");
-  return RoleModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function createUser({ roleId, email, passwordHash, fullName, phone }) {
@@ -38,7 +34,7 @@ async function createUser({ roleId, email, passwordHash, fullName, phone }) {
       OUTPUT INSERTED.*
       VALUES (@role_id, @email, @password_hash, @full_name, @phone, @status);
     `);
-  return UserModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function createEmailVerification(userId, token, expiresAt) {
@@ -66,7 +62,7 @@ async function getValidEmailVerification(token) {
     SELECT TOP 1 * FROM email_verifications
     WHERE token = @token AND used_at IS NULL AND expires_at > SYSUTCDATETIME();
   `);
-  return EmailVerificationModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function activateVerifiedUser(userId, token) {
@@ -85,7 +81,7 @@ async function getUserByEmail(email) {
     FROM users u LEFT JOIN roles r ON r.id = u.role_id
     WHERE LOWER(u.email) = LOWER(@email);
   `);
-  return UserModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function createRefreshToken(userId, token, expiresAt) {
@@ -108,7 +104,7 @@ async function getActiveUserByEmail(email) {
     SELECT TOP 1 id, email, full_name, status FROM users
     WHERE email = @email AND status = 'ACTIVE';
   `);
-  return UserModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function invalidateUnusedPasswordResets(userId) {
@@ -126,7 +122,7 @@ async function createPasswordResetOtp(userId, otpCode) {
     .query(`
       INSERT INTO password_resets (user_id, otp_code, token, expires_at, is_used, created_at)
       OUTPUT INSERTED.id
-      VALUES (@userId, @otpCode, NULL, DATEADD(MINUTE, 10, SYSDATETIME()), 0, SYSDATETIME());
+      VALUES (@userId, @otpCode, NULL, DATEADD(MINUTE, 10, SYSUTCDATETIME()), 0, SYSUTCDATETIME());
     `);
   return result.recordset[0]?.id;
 }
@@ -152,10 +148,10 @@ async function getLatestValidPasswordReset(userId, otp) {
     .input('otp', sql.VarChar(10), otp)
     .query(`
       SELECT TOP 1 id, expires_at, is_used FROM password_resets
-      WHERE user_id = @userId AND otp_code = @otp AND is_used = 0 AND expires_at > SYSDATETIME()
+      WHERE user_id = @userId AND otp_code = @otp AND is_used = 0 AND expires_at > SYSUTCDATETIME()
       ORDER BY created_at DESC;
     `);
-  return PasswordResetModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function updatePassword(userId, passwordHash) {
@@ -169,7 +165,7 @@ async function getPasswordState(userId) {
   const pool = await getPool();
   const result = await pool.request().input('userId', sql.BigInt, userId)
     .query('SELECT password_hash, status FROM users WHERE id = @userId;');
-  return UserModel.fromRow(result.recordset[0]);
+  return (result.recordset[0] ?? null);
 }
 
 async function markPasswordResetsUsedForUser(userId) {

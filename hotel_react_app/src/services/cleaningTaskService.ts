@@ -48,6 +48,7 @@ export interface InspectionEquipment {
 
 export interface CleaningTaskInspectionItem extends InspectionEquipment {
   inspection_item_id: string;
+  unit_price: number;
   status: EquipmentInspectionStatus;
   notes: string | null;
   compensation_decision: 'COMPENSATION' | 'NO_COMPENSATION' | null;
@@ -114,6 +115,7 @@ export interface CheckoutCleaningRoom {
   assigned_to: string | null;
   assigned_to_name: string | null;
   inspection_submitted: boolean;
+  report_requires_compensation_decision?: boolean;
   inspection_report?: CleaningTaskInspectionReport | null;
 }
 

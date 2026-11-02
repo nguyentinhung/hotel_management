@@ -27,6 +27,7 @@ function parseBigIntId(value, label) {
 function assignmentError(reason, status) {
   const errors = {
     room_not_found: [404, 'Room not found.'],
+    room_not_available: [409, 'Chỉ có thể thêm thiết bị khi phòng đang trống.'],
     asset_not_found: [404, 'Equipment asset not found.'],
     asset_type_mismatch: [409, 'The selected equipment asset does not belong to the selected equipment type.'],
     equipment_type_inactive: [409, 'The equipment type is inactive and cannot be assigned to a room.'],

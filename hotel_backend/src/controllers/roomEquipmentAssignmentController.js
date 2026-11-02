@@ -1,4 +1,7 @@
 const roomEquipmentAssignmentService = require('../services/roomEquipmentAssignmentService');
+const { toAssignEquipmentToRoomRequest } = require('../dto/equipment/assign-equipment-to-room/assign-equipment-to-room-request.dto');
+const { toAssignEquipmentToRoomResponse } = require('../dto/equipment/assign-equipment-to-room/assign-equipment-to-room-response.dto');
+const { toViewRoomEquipmentResponse } = require('../dto/equipment/view-room-equipment/view-room-equipment-response.dto');
 
 function sendError(res, error, genericMessage) {
   if ([400, 404, 409].includes(error.statusCode)) {
@@ -12,7 +15,7 @@ async function getRoomEquipment(req, res) {
   try {
     const assignments = await roomEquipmentAssignmentService.getRoomAssignments(req.params.roomId);
     if (assignments === null) return res.status(404).json({ success: false, message: 'Room not found.' });
-    return res.json({ success: true, assignments });
+    return res.json(toViewRoomEquipmentResponse(assignments));
   } catch (error) {
     return sendError(res, error, 'Unable to load equipment assigned to this room.');
   }
@@ -30,16 +33,13 @@ async function getAssignableAssets(req, res) {
 
 async function assignEquipmentToRoom(req, res) {
   try {
+    const { equipment_asset_id: assetId, equipment_item_id: itemId } = toAssignEquipmentToRoomRequest(req.body);
     const assignment = await roomEquipmentAssignmentService.assignEquipmentToRoom(
       req.params.roomId,
-      req.body?.equipment_asset_id,
-      req.body?.equipment_item_id,
+      assetId,
+      itemId,
     );
-    return res.status(201).json({
-      success: true,
-      message: 'Equipment assigned to room successfully.',
-      assignment,
-    });
+    return res.status(201).json(toAssignEquipmentToRoomResponse(assignment));
   } catch (error) {
     return sendError(res, error, 'Unable to assign equipment to this room.');
   }

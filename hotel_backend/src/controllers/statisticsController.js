@@ -1,4 +1,6 @@
 const { getAdminStatistics: fetchAdminStatisticsData, getPreviousBookingCount } = require('../services/statisticsService');
+const { toStatisticsRequest } = require('../dto/statistics/view-statistics/statistics-request.dto');
+const { toStatisticsResponse } = require('../dto/statistics/view-statistics/statistics-response.dto');
 
 const number = (value) => Number(value || 0);
 const dateValue = (value) => value instanceof Date ? value.toISOString().slice(0, 10) : String(value).slice(0, 10);
@@ -11,9 +13,10 @@ function shiftDate(value, days) {
 }
 
 async function getAdminStatistics(req, res) {
-  const start = typeof req.query.start === 'string' ? req.query.start : '';
-  const end = typeof req.query.end === 'string' ? req.query.end : '';
-  const periodType = String(req.query.periodType || 'DAY').toUpperCase();
+  const query = toStatisticsRequest(req.query);
+  const start = typeof query.start === 'string' ? query.start : '';
+  const end = typeof query.end === 'string' ? query.end : '';
+  const periodType = String(query.periodType || 'DAY').toUpperCase();
   const validDate = (value) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
     const parsed = new Date(`${value}T00:00:00Z`);
@@ -61,7 +64,7 @@ async function getAdminStatistics(req, res) {
     const bookingTrend = normalizeRows(bookingTrendResult.recordset);
     const serviceTrend = normalizeRows(serviceTrendResult.recordset);
 
-    return res.json({
+    return res.json(toStatisticsResponse({
       range: { start, end, previousStart, previousEnd, periodType },
       overview: {
         revenue: revenueTotal, invoiceCount: sumField(currentRevenue, 'invoice_count'), bookingCount,
@@ -87,7 +90,7 @@ async function getAdminStatistics(req, res) {
       cleaningStatistics: cleaningResult.recordset.map((row) => ({ status: row.status, count: number(row.count) })),
       equipmentStatistics: equipmentResult.recordset.map((row) => ({ category: row.category, status: row.status, count: number(row.count) })),
       limitations: ['Revenue follows dbo.usp_stat_revenue: PAID invoices grouped by issued_at. Successful cash collection is separate and follows dbo.usp_stat_payment_collection.', 'Current room snapshot is not time filtered. Room occupancy follows dbo.usp_stat_room_occupancy, which uses total physical rooms as capacity per the database business rule.', 'Payment status counts are lifetime totals because payments has no created_at column.'],
-    });
+    }));
   } catch (error) {
     console.error('Admin statistics error:', error);
     return res.status(500).json({ message: 'Không thể tải báo cáo thống kê. Vui lòng kiểm tra kết nối cơ sở dữ liệu.' });

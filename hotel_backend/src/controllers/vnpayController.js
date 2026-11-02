@@ -16,6 +16,13 @@ async function handleVnpayReturn(req, res) {
     // Apply the same idempotent verified update here so a canceled attempt is
     // released immediately and a successful deposit can be shown as confirmed.
     const result = await handleVnpayCallback(req.query);
+    if (!result.succeeded && String(result.paymentType).toUpperCase() === 'DEPOSIT') {
+      const baseUrl = String(process.env.APP_BASE_URL || 'http://localhost:4173').replace(/\/$/, '');
+      const url = new URL('/my-bookings', baseUrl);
+      url.searchParams.set('paymentResult', 'failed');
+      if (result.bookingCode) url.searchParams.set('bookingCode', result.bookingCode);
+      return res.redirect(303, url.toString());
+    }
     return res.redirect(303, getFrontendResultUrl(result.succeeded ? 'success' : 'failed', result.paymentCode, result.paymentType, result.bookingCode));
   } catch (error) {
     console.error('VNPay return validation failed:', error.message);

@@ -6,7 +6,7 @@ require('dotenv').config({ path: fs.existsSync(envPath) ? envPath : exampleEnvPa
 
 const express = require('express');
 const cors = require('cors');
-const { ensureAuthTables, ensureBookingStatusConstraint, ensureGuestIdCardOptional, ensureGuestIdCardImageColumns, ensureInvoiceCreatorColumn, ensureBookingPromotionColumns, ensureBookingCancellationReason, ensureReviewBookingColumn, ensurePaymentMethodConstraint } = require('./config/db');
+const { ensureAuthTables, ensureBookingStatusConstraint, ensureGuestIdCardOptional, ensureGuestIdCardImageColumns, ensureInvoiceCreatorColumn, ensureBookingPromotionColumns, ensureBookingCancellationReason, ensureBookingCancellationMetadata, ensureReviewBookingColumn, ensurePaymentMethodConstraint } = require('./config/db');
 const bookingService = require('./services/bookingService');
 const { prepareRuntimeDatabase } = require('./services/startupService');
 
@@ -27,10 +27,11 @@ async function bootstrap() {
   await ensureInvoiceCreatorColumn();
   await ensureBookingPromotionColumns();
   await ensureBookingCancellationReason();
+  await ensureBookingCancellationMetadata();
   await ensureReviewBookingColumn();
   await ensurePaymentMethodConstraint();
-  await bookingService.expireStaleBookings();
   await prepareRuntimeDatabase(uploadsDir, PORT);
+  await bookingService.expireStaleBookings();
 
   app.listen(PORT, () => console.log('Hotel backend is running on http://localhost:' + PORT));
   const pendingBookingExpiryTimer = setInterval(() => {

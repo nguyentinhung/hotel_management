@@ -71,30 +71,30 @@ async function ensureAuthTables() {
         token VARCHAR(255) NULL,
         expires_at DATETIME2 NOT NULL,
         is_used BIT NOT NULL CONSTRAINT DF_password_resets_is_used DEFAULT (0),
-        created_at DATETIME2 NOT NULL CONSTRAINT DF_password_resets_created_at DEFAULT SYSDATETIME(),
+        created_at DATETIME2 NOT NULL CONSTRAINT DF_password_resets_created_at DEFAULT SYSUTCDATETIME(),
         CONSTRAINT FK_password_resets_users FOREIGN KEY (user_id) REFERENCES dbo.users(id)
       );
     END;
   `);
 
   await currentPool.request().query(`
-    IF EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'CUSTOMER' AND id <> 1)
+    IF EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'ADMIN' AND id <> 1)
        OR EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'RECEPTIONIST' AND id <> 2)
        OR EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'HOUSEKEEPER' AND id <> 3)
-       OR EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'ADMIN' AND id <> 4)
-      THROW 50003, 'Built-in role IDs must be CUSTOMER=1, RECEPTIONIST=2, HOUSEKEEPER=3, ADMIN=4.', 1;
+       OR EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'CUSTOMER' AND id <> 4)
+      THROW 50003, 'Built-in role IDs must be ADMIN=1, RECEPTIONIST=2, HOUSEKEEPER=3, CUSTOMER=4.', 1;
     IF EXISTS (SELECT 1 FROM dbo.roles WHERE id BETWEEN 1 AND 4 AND code NOT IN ('CUSTOMER','RECEPTIONIST','HOUSEKEEPER','ADMIN'))
       THROW 50004, 'Role IDs 1-4 are reserved for built-in roles.', 1;
 
     SET IDENTITY_INSERT dbo.roles ON;
     IF NOT EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'CUSTOMER')
-      INSERT INTO dbo.roles (id, code, name) VALUES (1, 'CUSTOMER', N'Khách hàng');
+      INSERT INTO dbo.roles (id, code, name) VALUES (4, 'CUSTOMER', N'Khách hàng');
     IF NOT EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'RECEPTIONIST')
       INSERT INTO dbo.roles (id, code, name) VALUES (2, 'RECEPTIONIST', N'Lễ tân');
     IF NOT EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'HOUSEKEEPER')
       INSERT INTO dbo.roles (id, code, name) VALUES (3, 'HOUSEKEEPER', N'Buồng phòng');
     IF NOT EXISTS (SELECT 1 FROM dbo.roles WHERE code = 'ADMIN')
-      INSERT INTO dbo.roles (id, code, name) VALUES (4, 'ADMIN', N'Quản trị viên');
+      INSERT INTO dbo.roles (id, code, name) VALUES (1, 'ADMIN', N'Quản trị viên');
     SET IDENTITY_INSERT dbo.roles OFF;
     DECLARE @roleIdentitySeed INT = ISNULL((SELECT MAX(id) FROM dbo.roles), 0);
     DBCC CHECKIDENT ('dbo.roles', RESEED, @roleIdentitySeed);
@@ -213,6 +213,12 @@ async function ensureGuestIdCardImageColumns() {
 
     IF COL_LENGTH(N'dbo.booking_guests', N'id_card_image_mime_type') IS NULL
       ALTER TABLE dbo.booking_guests ADD id_card_image_mime_type VARCHAR(50) NULL;
+
+    IF COL_LENGTH(N'dbo.booking_guests', N'id_card_back_image') IS NULL
+      ALTER TABLE dbo.booking_guests ADD id_card_back_image VARBINARY(MAX) NULL;
+
+    IF COL_LENGTH(N'dbo.booking_guests', N'id_card_back_image_mime_type') IS NULL
+      ALTER TABLE dbo.booking_guests ADD id_card_back_image_mime_type VARCHAR(50) NULL;
   `);
 }
 
@@ -221,6 +227,10 @@ async function ensureInvoiceCreatorColumn() {
   await currentPool.request().query(`
     IF COL_LENGTH('dbo.invoices', 'created_by_user_id') IS NULL
       ALTER TABLE dbo.invoices ADD created_by_user_id BIGINT NULL;
+    IF COL_LENGTH('dbo.invoices', 'created_by_full_name') IS NULL
+      ALTER TABLE dbo.invoices ADD created_by_full_name NVARCHAR(255) NULL;
+    IF COL_LENGTH('dbo.invoices', 'created_by_staff_id') IS NULL
+      ALTER TABLE dbo.invoices ADD created_by_staff_id BIGINT NULL;
 
     IF NOT EXISTS (
       SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_invoices_created_by_user'
@@ -228,6 +238,26 @@ async function ensureInvoiceCreatorColumn() {
       ALTER TABLE dbo.invoices WITH CHECK
         ADD CONSTRAINT FK_invoices_created_by_user
         FOREIGN KEY (created_by_user_id) REFERENCES dbo.users(id);
+
+    IF NOT EXISTS (
+      SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_invoices_created_by_staff'
+    )
+      ALTER TABLE dbo.invoices WITH CHECK
+        ADD CONSTRAINT FK_invoices_created_by_staff
+        FOREIGN KEY (created_by_staff_id) REFERENCES dbo.staff(id);
+
+    UPDATE invoice
+    SET created_by_user_id = COALESCE(invoice.created_by_user_id, creator_staff.user_id),
+        created_by_full_name = COALESCE(NULLIF(invoice.created_by_full_name, N''), NULLIF(creator.full_name, N''), creator_role.name),
+        created_by_staff_id = COALESCE(invoice.created_by_staff_id, creator_staff.id)
+    FROM dbo.invoices AS invoice
+    LEFT JOIN dbo.staff AS creator_staff
+      ON creator_staff.id = invoice.created_by_staff_id
+      OR creator_staff.user_id = invoice.created_by_user_id
+    LEFT JOIN dbo.users AS creator
+      ON creator.id = COALESCE(invoice.created_by_user_id, creator_staff.user_id)
+    LEFT JOIN dbo.roles AS creator_role ON creator_role.id = creator.role_id
+    WHERE invoice.created_by_user_id IS NOT NULL OR invoice.created_by_staff_id IS NOT NULL;
   `);
 }
 
@@ -258,6 +288,26 @@ async function ensureBookingCancellationReason() {
   await currentPool.request().query(`
     IF COL_LENGTH(N'dbo.bookings', 'cancellation_reason') IS NULL
       ALTER TABLE dbo.bookings ADD cancellation_reason VARCHAR(30) NULL;
+  `);
+}
+
+async function ensureBookingCancellationMetadata() {
+  const currentPool = await getPool();
+  await currentPool.request().query(`
+    IF COL_LENGTH(N'dbo.bookings', 'cancellation_reason_code') IS NULL
+      ALTER TABLE dbo.bookings ADD cancellation_reason_code NVARCHAR(50) NULL;
+    IF COL_LENGTH(N'dbo.bookings', 'cancellation_reason_note') IS NULL
+      ALTER TABLE dbo.bookings ADD cancellation_reason_note NVARCHAR(500) NULL;
+    IF COL_LENGTH(N'dbo.bookings', 'cancelled_at') IS NULL
+      ALTER TABLE dbo.bookings ADD cancelled_at DATETIME2 NULL;
+    IF COL_LENGTH(N'dbo.bookings', 'cancelled_by') IS NULL
+      ALTER TABLE dbo.bookings ADD cancelled_by BIGINT NULL;
+    IF NOT EXISTS (
+      SELECT 1 FROM sys.foreign_keys WHERE name = N'FK_bookings_cancelled_by_user'
+    )
+      ALTER TABLE dbo.bookings WITH CHECK
+        ADD CONSTRAINT FK_bookings_cancelled_by_user
+        FOREIGN KEY (cancelled_by) REFERENCES dbo.users(id);
   `);
 }
 
@@ -306,6 +356,7 @@ module.exports = {
   ensureInvoiceCreatorColumn,
   ensureBookingPromotionColumns,
   ensureBookingCancellationReason,
+  ensureBookingCancellationMetadata,
   ensureReviewBookingColumn,
   ensurePaymentMethodConstraint,
 };

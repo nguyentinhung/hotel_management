@@ -77,6 +77,7 @@ async function getInspectionReport(taskId) {
         CONVERT(varchar(20), item.id) AS inspection_item_id,
         CONVERT(varchar(20), item.equipment_asset_id) AS equipment_asset_id,
         item.equipment_name, item.asset_code, item.status AS inspection_status, item.notes,
+        equipment.unit_price,
         compensation.decision AS compensation_decision, compensation.amount AS compensation_amount
       FROM dbo.cleaning_task_inspections AS report
       JOIN dbo.rooms AS room ON room.id = report.room_id
@@ -86,6 +87,8 @@ async function getInspectionReport(taskId) {
         ON booking_room.id = task.booking_room_id AND booking_room.room_id = task.room_id
       LEFT JOIN dbo.bookings AS booking ON booking.id = booking_room.booking_id
       LEFT JOIN dbo.cleaning_task_inspection_items AS item ON item.inspection_id = report.id
+      LEFT JOIN dbo.equipment_assets AS asset ON asset.id = item.equipment_asset_id
+      LEFT JOIN dbo.equipment_items AS equipment ON equipment.id = asset.equipment_item_id
       LEFT JOIN dbo.cleaning_task_equipment_compensations AS compensation
         ON compensation.inspection_item_id = item.id
       WHERE report.cleaning_task_id = @taskId
@@ -108,6 +111,7 @@ async function getInspectionReport(taskId) {
       equipment_asset_id: row.equipment_asset_id,
       equipment_name: row.equipment_name,
       asset_code: row.asset_code,
+      unit_price: row.unit_price == null ? 0 : Number(row.unit_price),
       status: row.inspection_status,
       notes: row.notes,
       compensation_decision: row.compensation_decision || null,

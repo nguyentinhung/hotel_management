@@ -1,5 +1,6 @@
 import { promotions, reviews, roomTypes, services } from './mockData';
 import type { Promotion, Review, RoomType, ServiceItem, Role } from '../types';
+import { getHotelDate } from '../utils/checkInCountdown';
 
 export const USE_MOCK = false;
 
@@ -17,12 +18,10 @@ export async function getRoomTypes(): Promise<RoomType[]> {
 
 export async function getActivePromotions(): Promise<Promotion[]> {
   if (USE_MOCK) {
-    const now = new Date();
-    return promotions.filter((promotion) => {
-      const from = new Date(promotion.valid_from);
-      const to = new Date(promotion.valid_to);
-      return promotion.is_active && now >= from && now <= to;
-    });
+    const today = getHotelDate(new Date());
+    return promotions.filter((promotion) => promotion.is_active
+      && promotion.valid_from.slice(0, 10) <= today
+      && promotion.valid_to.slice(0, 10) >= today);
   }
 
   const response = await fetch('/api/promotions/active');

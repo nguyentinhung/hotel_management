@@ -1,6 +1,5 @@
 const sql = require('mssql');
 const { getPool } = require('../config/db');
-const UserModel = require('../models/userModel');
 
 const USER_COLUMNS = `u.id, u.full_name, u.email, u.phone, u.status,
   r.code AS role_code, r.name AS role_name`;
@@ -14,7 +13,7 @@ async function getUserList(search = '') {
     WHERE @search = '%%' OR u.full_name LIKE @search OR u.email LIKE @search OR u.phone LIKE @search
     ORDER BY u.id DESC;
   `);
-  return UserModel.fromRows(result.recordset);
+  return result.recordset;
 }
 
 async function getUserById(id) {
@@ -24,7 +23,7 @@ async function getUserById(id) {
     FROM dbo.users u LEFT JOIN dbo.roles r ON r.id = u.role_id
     WHERE u.id = @id;
   `);
-  return UserModel.fromRow(result.recordset[0] ?? null);
+  return result.recordset[0] ?? null;
 }
 
 async function findDuplicate(field, value, exceptId) {
@@ -53,14 +52,54 @@ async function createUser({ fullName, email, phone, passwordHash, roleCode }) {
     .query(`
       DECLARE @roleId TINYINT = (SELECT TOP 1 id FROM dbo.roles WHERE UPPER(code) = @roleCode);
       IF @roleId IS NULL THROW 50011, 'Vai trò không tồn tại.', 1;
-      INSERT INTO dbo.users (role_id, email, password_hash, full_name, phone, status)
-      VALUES (@roleId, @email, @passwordHash, @fullName, @phone, 'ACTIVE');
-      DECLARE @userId BIGINT = SCOPE_IDENTITY();
-      SELECT ${USER_COLUMNS}
-      FROM dbo.users u LEFT JOIN dbo.roles r ON r.id = u.role_id
+      BEGIN TRY
+        BEGIN TRANSACTION;
+
+        INSERT INTO dbo.users (role_id, email, password_hash, full_name, phone, status)
+        VALUES (@roleId, @email, @passwordHash, @fullName, @phone, 'ACTIVE');
+        DECLARE @userId BIGINT = SCOPE_IDENTITY();
+
+        DECLARE @staffPrefix VARCHAR(20) = CASE UPPER(@roleCode)
+          WHEN 'RECEPTIONIST' THEN 'DS-reception'
+          WHEN 'HOUSEKEEPER' THEN 'DS-housekeeper'
+          ELSE NULL
+        END;
+
+        IF @staffPrefix IS NOT NULL
+        BEGIN
+          DECLARE @nextStaffNumber INT;
+          DECLARE @staffCode VARCHAR(30);
+
+          SELECT @nextStaffNumber = ISNULL(MAX(TRY_CONVERT(INT, SUBSTRING(staff_code, LEN(@staffPrefix) + 1, 20))), 0) + 1
+          FROM dbo.staff WITH (UPDLOCK, HOLDLOCK)
+          WHERE staff_code LIKE @staffPrefix + '%';
+
+          SET @staffCode = CONCAT(@staffPrefix, RIGHT(CONCAT('00', @nextStaffNumber), 2));
+          WHILE EXISTS (SELECT 1 FROM dbo.staff WHERE staff_code = @staffCode)
+          BEGIN
+            SET @nextStaffNumber += 1;
+            SET @staffCode = CONCAT(@staffPrefix, RIGHT(CONCAT('00', @nextStaffNumber), 2));
+          END;
+
+          INSERT INTO dbo.staff (user_id, staff_code, position, employment_status)
+          SELECT @userId, @staffCode, r.name, 'ACTIVE'
+          FROM dbo.roles AS r
+          WHERE r.id = @roleId;
+        END;
+
+        COMMIT TRANSACTION;
+      END TRY
+      BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        THROW;
+      END CATCH;
+      SELECT ${USER_COLUMNS}, s.staff_code
+      FROM dbo.users u
+      LEFT JOIN dbo.roles r ON r.id = u.role_id
+      LEFT JOIN dbo.staff s ON s.user_id = u.id
       WHERE u.id = @userId;
     `);
-  return UserModel.fromRow(result.recordset[0] ?? null);
+  return result.recordset[0] ?? null;
 }
 
 async function updateUser(id, { fullName, email, phone }) {
@@ -74,7 +113,7 @@ async function updateUser(id, { fullName, email, phone }) {
       UPDATE dbo.users SET full_name = @fullName, email = @email, phone = @phone WHERE id = @id;
       SELECT ${USER_COLUMNS} FROM dbo.users u LEFT JOIN dbo.roles r ON r.id = u.role_id WHERE u.id = @id;
     `);
-  return UserModel.fromRow(result.recordset[0] ?? null);
+  return result.recordset[0] ?? null;
 }
 
 async function setStatus(id, status) {

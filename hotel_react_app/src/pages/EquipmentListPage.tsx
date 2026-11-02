@@ -2,7 +2,8 @@
 import { createEquipmentItem, deleteEquipmentItem, EquipmentApiError, getEquipmentItemById, getEquipmentItems, updateEquipmentItem, type EquipmentItem } from '../services/equipmentItemService';
 import { useToast } from '../components/ToastProvider';
 import DataTable from '../components/DataTable';
-import AssignEquipmentRoomsModal from '../components/AssignEquipmentRoomsModal';
+import EquipmentAssetManager from '../components/EquipmentAssetManager';
+import { retryOrGoToLogin } from '../utils/sessionRetry';
 
 const EQUIPMENT_PAGE_SIZE = 5;
 
@@ -29,6 +30,7 @@ export default function EquipmentListPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState('');
+  const [unitPrice, setUnitPrice] = useState('0');
   const [activeStatus, setActiveStatus] = useState('');
   const [nameError, setNameError] = useState('');
   const [statusError, setStatusError] = useState('');
@@ -43,6 +45,7 @@ export default function EquipmentListPage() {
   const [editLoading, setEditLoading] = useState(false);
   const [editLoadError, setEditLoadError] = useState('');
   const [editName, setEditName] = useState('');
+  const [editUnitPrice, setEditUnitPrice] = useState('0');
   const [editActiveStatus, setEditActiveStatus] = useState('');
   const [editNameError, setEditNameError] = useState('');
   const [editStatusError, setEditStatusError] = useState('');
@@ -52,7 +55,6 @@ export default function EquipmentListPage() {
   const updateInFlight = useRef(false);
   const [deleting, setDeleting] = useState(false);
   const deleteInFlight = useRef(false);
-  const [assigningItem, setAssigningItem] = useState<EquipmentItem | null>(null);
 
   const loadItems = async () => {
     setLoading(true);
@@ -94,6 +96,7 @@ export default function EquipmentListPage() {
     if (saving) return;
     setShowForm(false);
     setName('');
+    setUnitPrice('0');
     setActiveStatus('');
     setNameError('');
     setStatusError('');
@@ -112,16 +115,19 @@ export default function EquipmentListPage() {
     const nextNameError = !normalizedName || normalizedName.length > 100
       ? 'Equipment name is required and must not exceed 100 characters.' : '';
     const nextStatusError = activeStatus === '' ? 'Active status is required.' : '';
+    const parsedUnitPrice = Number(unitPrice);
+    const unitPriceError = !Number.isFinite(parsedUnitPrice) || parsedUnitPrice < 0 ? 'Enter a valid non-negative equipment price.' : '';
     setNameError(nextNameError);
     setStatusError(nextStatusError);
-    if (nextNameError || nextStatusError) return;
+    if (nextNameError || nextStatusError || unitPriceError) return;
 
     setSaving(true);
     try {
-      await createEquipmentItem({ name: normalizedName, is_active: activeStatus === 'true' });
+      await createEquipmentItem({ name: normalizedName, is_active: activeStatus === 'true', unit_price: parsedUnitPrice });
       showToast('Equipment added successfully.', 'success');
       setShowForm(false);
       setName('');
+      setUnitPrice('0');
       setActiveStatus('');
       await loadItems();
     } catch (error) {
@@ -197,6 +203,7 @@ export default function EquipmentListPage() {
       if (item.id !== id) throw new Error('Equipment details did not match the selected record.');
       setEditingItem(item);
       setEditName(item.name);
+      setEditUnitPrice(String(item.unit_price ?? 0));
       setEditActiveStatus(item.is_active === true || item.is_active === 1 ? 'true' : 'false');
     } catch (error) {
       if (requestSequence !== editRequestSequence.current) return;
@@ -219,10 +226,12 @@ export default function EquipmentListPage() {
     const nextNameError = !normalizedName || normalizedName.length > 100
       ? 'Equipment name is required and must not exceed 100 characters.' : '';
     const nextStatusError = editActiveStatus === '' ? 'Active status is required.' : '';
+    const parsedUnitPrice = Number(editUnitPrice);
+    const unitPriceError = !Number.isFinite(parsedUnitPrice) || parsedUnitPrice < 0 ? 'Enter a valid non-negative equipment price.' : '';
     setEditNameError(nextNameError);
     setEditStatusError(nextStatusError);
     setEditSaveError('');
-    if (nextNameError || nextStatusError) return;
+    if (nextNameError || nextStatusError || unitPriceError) return;
 
     updateInFlight.current = true;
     setUpdating(true);
@@ -230,6 +239,7 @@ export default function EquipmentListPage() {
       const result = await updateEquipmentItem(editingEquipmentId, {
         name: normalizedName,
         is_active: editActiveStatus === 'true',
+        unit_price: parsedUnitPrice,
       });
       if (result.equipmentItem.id !== editingEquipmentId) throw new Error('Updated equipment ID did not match the selected record.');
       showToast(result.message || 'Equipment updated successfully.', 'success');
@@ -308,6 +318,7 @@ export default function EquipmentListPage() {
   };
 
   const isActive = (item: EquipmentItem) => item.is_active === true || item.is_active === 1;
+  const formatVnd = (value: number) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(value || 0);
 
   return <section className="service-page service-list-view" aria-labelledby="equipment-page-title">
     <div className="service-list-card">
@@ -335,7 +346,7 @@ export default function EquipmentListPage() {
       </div>
 
       {loading ? <p className="service-list-message" role="status">Loading equipment...</p>
-        : loadError ? <div className="service-list-message error-text" role="alert"><p>{loadError}</p><button className="btn btn-outline btn-sm" type="button" onClick={() => void loadItems()}>Retry</button></div>
+        : loadError ? <div className="service-list-message error-text" role="alert"><p>{loadError}</p><button className="btn btn-outline btn-sm" type="button" onClick={() => retryOrGoToLogin(loadError, loadItems)}>Retry</button></div>
           : filteredItems.length === 0 ? <div className="service-list-message">{items.length === 0 ? 'No equipment has been added yet.' : 'No equipment matches the selected filters.'}</div>
             : <>
               <DataTable className="service-table-scroll">
@@ -361,9 +372,6 @@ export default function EquipmentListPage() {
                     <button className="service-edit-action" type="button" aria-label={`Update ${item.name}`} title={`Update ${item.name}`} onClick={(event) => { event.stopPropagation(); void openUpdate(item.id); }}>
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m15 5 4 4M4 20l4-.8L19 8a2.1 2.1 0 0 0-3-3L5 16z"/><path d="M13 7 17 11"/></svg>
                     </button>
-                      <button className="service-assign-action" type="button" aria-label={`Assign ${item.name} to rooms`} title={`Assign ${item.name} to rooms`} onClick={(event) => { event.stopPropagation(); closeDetails(); clearEdit(); setShowForm(false); setAssigningItem(item); }}>
-                        <span aria-hidden="true">⌂</span>
-                      </button>
                       <button className="service-delete-action" type="button" aria-label={`Delete ${item.name}`} title={`Delete ${item.name}`} onClick={(event) => { event.stopPropagation(); closeDetails(); clearEdit(); setShowForm(false); void confirmDelete(item); }}>
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m4 4v6m6-6v6"/></svg>
                     </button>
@@ -397,6 +405,11 @@ export default function EquipmentListPage() {
                 onChange={(event) => { setName(event.target.value); if (nameError) setNameError(''); }} />
               {nameError && <small id="equipment-name-error" role="alert">{nameError}</small>}
             </label>
+            <label className="room-type-field room-type-field-wide" htmlFor="equipment-unit-price">
+              <span>Equipment Price (VND) <b>*</b></span>
+              <input id="equipment-unit-price" name="unit_price" type="number" min="0" max="9999999999.99" step="50000" required value={unitPrice}
+                onChange={(event) => setUnitPrice(event.target.value)} />
+            </label>
             <label className="room-type-field room-type-field-wide" htmlFor="equipment-active">
               <span>Active Status <b>*</b></span>
               <select id="equipment-active" name="is_active" value={activeStatus} aria-invalid={Boolean(statusError)}
@@ -428,7 +441,7 @@ export default function EquipmentListPage() {
             <p>{editLoadError}</p>
             <div className="room-type-form-actions">
               <button className="room-type-search-refresh" type="button" onClick={clearEdit}>Cancel</button>
-              <button className="room-type-search-add btn btn-primary" type="button" onClick={() => void openUpdate(editingEquipmentId)}>Retry</button>
+              <button className="room-type-search-add btn btn-primary" type="button" onClick={() => retryOrGoToLogin(editLoadError, () => openUpdate(editingEquipmentId))}>Retry</button>
             </div>
           </div>
             : editingItem && <form onSubmit={(event) => void saveUpdate(event)} noValidate>
@@ -444,6 +457,11 @@ export default function EquipmentListPage() {
                     aria-invalid={Boolean(editNameError)} aria-describedby={editNameError ? 'equipment-update-name-error' : undefined}
                     onChange={(event) => { setEditName(event.target.value); if (editNameError) setEditNameError(''); }} />
                   {editNameError && <small id="equipment-update-name-error" role="alert">{editNameError}</small>}
+                </label>
+                <label className="room-type-field room-type-field-wide" htmlFor="equipment-update-unit-price">
+                  <span>Equipment Price (VND) <b>*</b></span>
+                  <input id="equipment-update-unit-price" name="unit_price" type="number" min="0" max="9999999999.99" step="50000" required value={editUnitPrice}
+                    onChange={(event) => setEditUnitPrice(event.target.value)} />
                 </label>
                 <label className="room-type-field room-type-field-wide" htmlFor="equipment-update-active">
                   <span>Active Status <b>*</b></span>
@@ -475,7 +493,7 @@ export default function EquipmentListPage() {
           : detailError ? <div className="service-list-message error-text" role="alert"><p>{detailError}</p>
             <div className="room-type-form-actions">
               <button className="btn btn-outline" type="button" onClick={closeDetails}>Return to List</button>
-              <button className="room-type-search-add btn btn-primary" type="button" onClick={() => void showDetails(selectedEquipmentId)}>Retry</button>
+              <button className="room-type-search-add btn btn-primary" type="button" onClick={() => retryOrGoToLogin(detailError, () => showDetails(selectedEquipmentId))}>Retry</button>
             </div>
           </div>
             : selectedItem && <>
@@ -485,15 +503,21 @@ export default function EquipmentListPage() {
                   <div className="equipment-details-status"><span className="muted-label">Active Status</span><span className={`status-badge ${isActive(selectedItem) ? 'active' : 'inactive'}`}>{isActive(selectedItem) ? 'Active' : 'Inactive'}</span></div>
                 </div>
                 <div className="room-type-details-facts equipment-details-facts">
-                  <div><span>Equipment ID</span><strong>{selectedItem.id}</strong></div>
+                  <div className="equipment-details-id"><span>Equipment ID</span><strong>{selectedItem.id}</strong></div>
+                  <div><span>Unit price</span><strong>{formatVnd(selectedItem.unit_price)}</strong></div>
+                  <div><span>Number of equipment</span><strong>{selectedItem.asset_count ?? 0}</strong></div>
                 </div>
+                <section className="equipment-details-description">
+                  <h4>Description</h4>
+                  <p>{selectedItem.description?.trim() || '—'}</p>
+                </section>
               </div>
+              <EquipmentAssetManager equipmentItem={selectedItem} />
               <div className="room-type-form-actions equipment-details-actions">
                 <button className="btn btn-outline" type="button" onClick={closeDetails}>Return to List</button>
               </div>
             </>}
       </section>
     </div>}
-    {assigningItem && <AssignEquipmentRoomsModal equipment={assigningItem} onClose={() => setAssigningItem(null)} onAssigned={() => setAssigningItem(null)} />}
   </section>;
 }

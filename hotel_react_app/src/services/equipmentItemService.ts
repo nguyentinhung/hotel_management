@@ -5,12 +5,15 @@ export interface EquipmentItem {
   name: string;
   description: string | null;
   is_active: boolean | 0 | 1;
+  unit_price: number;
+  asset_count?: number;
 }
 
 export interface EquipmentItemInput {
   name: string;
   is_active: boolean;
   description?: string | null;
+  unit_price: number;
 }
 
 export interface EquipmentRoom {

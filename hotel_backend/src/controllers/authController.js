@@ -1,20 +1,23 @@
 const authService = require('../services/authService');
 const emailService = require('../services/emailService');
+const { toRegisterRequest } = require('../dto/auth/register/register-request.dto');
+const { toRegisterResponse } = require('../dto/auth/register/register-response.dto');
+const { toLoginRequest } = require('../dto/auth/login/login-request.dto');
+const { toLoginResponse } = require('../dto/auth/login/login-response.dto');
+const { toLogoutRequest } = require('../dto/auth/logout/logout-request.dto');
+const { toLogoutResponse } = require('../dto/auth/logout/logout-response.dto');
+const { toForgotPasswordRequest } = require('../dto/auth/forgot-password/forgot-password-request.dto');
+const { toForgotPasswordResponse } = require('../dto/auth/forgot-password/forgot-password-response.dto');
+const { toResetPasswordRequest } = require('../dto/auth/reset-password/reset-password-request.dto');
+const { toResetPasswordResponse } = require('../dto/auth/reset-password/reset-password-response.dto');
+const { toVerifyEmailRequest } = require('../dto/auth/verify-email/verify-email-request.dto');
+const { toVerifyEmailResponse } = require('../dto/auth/verify-email/verify-email-response.dto');
+const { toChangePasswordRequest } = require('../dto/profile/change-password/change-password-request.dto');
+const { toChangePasswordResponse } = require('../dto/profile/change-password/change-password-response.dto');
 
 
 
 
-
-const buildUserResponse = (user) => ({
-  id: user.id,
-  email: user.email,
-  full_name: user.full_name,
-  phone: user.phone,
-  status: String(user.status || '').toUpperCase(),
-  role_id: user.role_id,
-  role_code: user.role_code,
-  role_name: user.role_name || 'Khách hàng',
-});
 
 async function sendVerificationEmail(user, token, transporter) {
   const baseUrl = process.env.APP_BASE_URL || 'http://localhost:4173';
@@ -64,10 +67,14 @@ async function sendVerificationEmail(user, token, transporter) {
 // Đăng ký tài khoản mới, hash mật khẩu, tạo token xác thực email
 async function register(req, res) {
   try {
-    const { email, password, full_name, phone_number } = req.body || {};
+    const { email, password, full_name, phone_number } = toRegisterRequest(req.body);
 
     if (!email || !password || !full_name || !phone_number) {
       return res.status(400).json({ message: 'Vui lòng nhập đầy đủ email, mật khẩu, họ tên và số điện thoại.' });
+    }
+
+    if (!authService.isValidPassword(password)) {
+      return res.status(400).json({ message: 'Password must be at least 8 characters and include uppercase, lowercase, a number, and a special character, with no spaces.' });
     }
 
     const normalizedEmail = authService.normalizeEmail(email);
@@ -108,10 +115,7 @@ async function register(req, res) {
       throw emailError;
     }
 
-    return res.status(201).json({
-      message: 'Đăng ký tài khoản thành công. Vui lòng kiểm tra email để xác thực tài khoản.',
-      user: buildUserResponse(user),
-    });
+    return res.status(201).json(toRegisterResponse('Đăng ký tài khoản thành công. Vui lòng kiểm tra email để xác thực tài khoản.', user));
   } catch (error) {
     console.error('Register error:', error);
     return res.status(500).json({
@@ -125,7 +129,7 @@ async function register(req, res) {
 // Xác thực email người dùng bằng token đã gửi qua mail
 async function verifyEmail(req, res) {
   try {
-    const { token } = req.query || {};
+    const { token } = toVerifyEmailRequest(req.query);
 
     if (!token) {
       return res.status(400).json({ message: 'Thiếu token xác thực.' });
@@ -141,7 +145,7 @@ async function verifyEmail(req, res) {
 
     await authService.activateVerifiedUser(record.user_id, String(token));
 
-    return res.json({ message: 'Xác thực email thành công.' });
+    return res.json(toVerifyEmailResponse('Xác thực email thành công.'));
   } catch (error) {
     console.error('Verify email error:', error);
     return res.status(500).json({
@@ -154,7 +158,7 @@ async function verifyEmail(req, res) {
 // Đăng nhập hệ thống: kiểm tra email, mật khẩu, trạng thái và tạo JWT
 async function login(req, res) {
   try {
-    const { email, password } = req.body || {};
+    const { email, password } = toLoginRequest(req.body);
 
     if (!email || !password) {
       return res.status(400).json({ message: 'Vui lòng nhập email và mật khẩu.' });
@@ -182,11 +186,7 @@ async function login(req, res) {
 
     await authService.createRefreshToken(user.id, refreshToken, refreshExpiresAt);
 
-    return res.json({
-      accessToken,
-      refreshToken,
-      user: buildUserResponse(user),
-    });
+    return res.json(toLoginResponse(accessToken, refreshToken, user));
   } catch (error) {
     console.error('Login error:', error);
     return res.status(500).json({
@@ -199,15 +199,16 @@ async function login(req, res) {
 // Đăng xuất: vô hiệu hóa refresh token đang sử dụng để khóa session hiện tại
 async function logout(req, res) {
   try {
-    const token = req.body?.refreshToken || req.headers['x-refresh-token'];
+    const { refreshToken } = toLogoutRequest(req.body);
+    const token = refreshToken || req.headers['x-refresh-token'];
 
     if (!token) {
-      return res.json({ message: 'Đăng xuất thành công.' });
+      return res.json(toLogoutResponse('Đăng xuất thành công.'));
     }
 
     await authService.revokeRefreshToken(String(token));
 
-    return res.json({ message: 'Đăng xuất thành công.' });
+    return res.json(toLogoutResponse('Đăng xuất thành công.'));
   } catch (error) {
     console.error('Logout error:', error);
     return res.status(500).json({
@@ -228,7 +229,8 @@ module.exports = {
 };
 async function forgotPassword(req, res) {
   try {
-    const email = authService.normalizeEmail(req.body?.email);
+    const { email: rawEmail } = toForgotPasswordRequest(req.body);
+    const email = authService.normalizeEmail(rawEmail);
 
     if (!authService.isValidEmail(email)) {
       return res.status(400).json({
@@ -240,9 +242,7 @@ async function forgotPassword(req, res) {
     const user = await authService.getActiveUserByEmail(email);
 
     if (!user) {
-      return res.json({
-        message: 'Nếu email tồn tại, mã OTP đã được gửi.',
-      });
+      return res.json(toForgotPasswordResponse('Nếu email tồn tại, mã OTP đã được gửi.'));
     }
 
 
@@ -287,9 +287,7 @@ async function forgotPassword(req, res) {
 
     console.log(`Password reset OTP sent to: ${user.email}`);
 
-    return res.json({
-      message: 'Nếu email tồn tại, mã OTP đã được gửi.',
-    });
+    return res.json(toForgotPasswordResponse('Nếu email tồn tại, mã OTP đã được gửi.'));
 
   } catch (error) {
     console.error('Forgot password error:', error);
@@ -303,9 +301,10 @@ async function forgotPassword(req, res) {
 }
 async function resetPassword(req, res) {
   try {
-    const email = authService.normalizeEmail(req.body?.email);
-    const otp = String(req.body?.otp || '').trim();
-    const newPassword = String(req.body?.newPassword || '');
+    const resetRequest = toResetPasswordRequest(req.body);
+    const email = authService.normalizeEmail(resetRequest.email);
+    const otp = String(resetRequest.otp || '').trim();
+    const newPassword = String(resetRequest.newPassword || '');
 
     if (!authService.isValidEmail(email)) {
       return res.status(400).json({
@@ -319,9 +318,9 @@ async function resetPassword(req, res) {
       });
     }
 
-    if (newPassword.length < 6) {
+    if (!authService.isValidPassword(newPassword)) {
       return res.status(400).json({
-        message: 'Mật khẩu phải có ít nhất 6 ký tự.',
+        message: 'Password must be at least 8 characters and include uppercase, lowercase, a number, and a special character, with no spaces.',
       });
     }
 
@@ -354,9 +353,7 @@ async function resetPassword(req, res) {
     await authService.markPasswordResetUsed(resetRecord.id);
     await authService.markPasswordResetsUsedForUser(userId);
 
-    return res.json({
-      message: 'Đặt lại mật khẩu thành công.',
-    });
+    return res.json(toResetPasswordResponse('Đặt lại mật khẩu thành công.'));
 
   } catch (error) {
     console.error('Reset password error:', error);
@@ -371,13 +368,13 @@ async function resetPassword(req, res) {
 async function changePassword(req, res) {
   try {
     const userId = Number(req.auth?.userId);
-    const { currentPassword, newPassword } = req.body || {};
+    const { currentPassword, newPassword } = toChangePasswordRequest(req.body);
     if (!userId) return res.status(401).json({ message: 'Vui lòng đăng nhập lại.' });
     if (typeof currentPassword !== 'string' || !currentPassword || typeof newPassword !== 'string' || !newPassword) {
       return res.status(400).json({ message: 'Vui lòng nhập mật khẩu hiện tại và mật khẩu mới.' });
     }
-    if (newPassword.length < 6) {
-      return res.status(400).json({ message: 'Mật khẩu mới phải có ít nhất 6 ký tự.' });
+    if (!authService.isValidPassword(newPassword)) {
+      return res.status(400).json({ message: 'Password must be at least 8 characters and include uppercase, lowercase, a number, and a special character, with no spaces.' });
     }
 
     const user = await authService.getPasswordState(userId);
@@ -394,7 +391,7 @@ async function changePassword(req, res) {
 
     const passwordHash = await authService.hashPassword(newPassword, 10);
     await authService.updatePassword(userId, passwordHash);
-    return res.json({ message: 'Đổi mật khẩu thành công.' });
+    return res.json(toChangePasswordResponse('Đổi mật khẩu thành công.'));
   } catch (error) {
     console.error('Change password error:', error);
     return res.status(500).json({ message: 'Không thể đổi mật khẩu lúc này.' });

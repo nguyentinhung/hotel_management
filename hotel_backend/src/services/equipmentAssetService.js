@@ -1,6 +1,44 @@
 const equipmentAssetDao = require('../dao/equipmentAssetDao');
 const equipmentItemDao = require('../dao/equipmentItemDao');
-const EquipmentAssetModel = require('../models/equipmentAssetModel');
+
+const ASSET_STATUSES = ['AVAILABLE', 'MAINTENANCE', 'RETIRED'];
+
+function normalizeOptionalText(value, label, maxLength) {
+  if (value == null || value === '') return null;
+  if (typeof value !== 'string') throw Object.assign(new Error(`${label} must be text.`), { statusCode: 400 });
+  const normalized = value.trim();
+  if (normalized.length > maxLength) throw Object.assign(new Error(`${label} must not exceed ${maxLength} characters.`), { statusCode: 400 });
+  return normalized || null;
+}
+
+function normalizeDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw Object.assign(new Error('Purchase date must be a valid YYYY-MM-DD date.'), { statusCode: 400 });
+  }
+  const date = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== value) {
+    throw Object.assign(new Error('Purchase date must be a valid YYYY-MM-DD date.'), { statusCode: 400 });
+  }
+  return value;
+}
+
+function normalizeEquipmentAssetInput(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw Object.assign(new Error('Equipment asset data is required.'), { statusCode: 400 });
+  }
+  const assetCode = typeof input.asset_code === 'string' ? input.asset_code.trim() : '';
+  if (!assetCode || assetCode.length > 50) {
+    throw Object.assign(new Error('Asset code is required and must not exceed 50 characters.'), { statusCode: 400 });
+  }
+  const status = typeof input.status === 'string' ? input.status.trim().toUpperCase() : '';
+  if (!ASSET_STATUSES.includes(status)) {
+    throw Object.assign(new Error(`Status must be one of: ${ASSET_STATUSES.join(', ')}.`), { statusCode: 400 });
+  }
+  const serialNumber = normalizeOptionalText(input.serial_number, 'Serial number', 100);
+  const notes = normalizeOptionalText(input.notes, 'Notes', 500);
+  const purchaseDate = input.purchase_date == null || input.purchase_date === '' ? null : normalizeDate(input.purchase_date);
+  return { asset_code: assetCode, serial_number: serialNumber, status, purchase_date: purchaseDate, notes };
+}
 
 const DELETE_CONFLICT_MESSAGES = {
   current_assignment: 'Thiết bị vẫn đang được gán với phòng nên không thể xóa.',
@@ -81,14 +119,14 @@ async function getEquipmentAsset(equipmentItemId, assetId) {
 async function createEquipmentAsset(equipmentItemId, input) {
   const parsedItemId = parseIntId(equipmentItemId, 'Equipment type ID');
   if (!await requireEquipmentItem(parsedItemId)) return null;
-  return equipmentAssetDao.create(parsedItemId, EquipmentAssetModel.normalizeInput(input));
+  return equipmentAssetDao.create(parsedItemId, normalizeEquipmentAssetInput(input));
 }
 
 async function updateEquipmentAsset(equipmentItemId, assetId, input) {
   const parsedItemId = parseIntId(equipmentItemId, 'Equipment type ID');
   const parsedAssetId = parseBigIntId(assetId, 'Equipment asset ID');
   if (!await requireEquipmentItem(parsedItemId)) return null;
-  return equipmentAssetDao.update(parsedItemId, parsedAssetId, EquipmentAssetModel.normalizeInput(input));
+  return equipmentAssetDao.update(parsedItemId, parsedAssetId, normalizeEquipmentAssetInput(input));
 }
 
 async function deleteEquipmentAsset(equipmentItemId, assetId) {

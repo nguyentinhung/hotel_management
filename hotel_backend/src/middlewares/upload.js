@@ -10,8 +10,20 @@ const upload = multer({
   },
 });
 
-const uploadIdCardImage = (req, res, next) => upload.single('id_card_image')(req, res, (error) => {
-  if (!error) return next();
+const uploadIdCardImages = (req, res, next) => upload.fields([
+  { name: 'id_card_front_image', maxCount: 1 },
+  { name: 'id_card_back_image', maxCount: 1 },
+  // Keep accepting the old front image field while existing clients are updated.
+  { name: 'id_card_image', maxCount: 1 },
+])(req, res, (error) => {
+  if (!error) {
+    const files = req.files || {};
+    req.idCardImages = {
+      front: files.id_card_front_image?.[0] || files.id_card_image?.[0] || null,
+      back: files.id_card_back_image?.[0] || null,
+    };
+    return next();
+  }
   const message = error.code === 'LIMIT_FILE_SIZE'
     ? '\u1ea2nh CCCD kh\u00f4ng \u0111\u01b0\u1ee3c v\u01b0\u1ee3t qu\u00e1 5 MB.'
     : error.message || 'Kh\u00f4ng th\u1ec3 nh\u1eadn \u1ea3nh CCCD.';
@@ -20,4 +32,4 @@ const uploadIdCardImage = (req, res, next) => upload.single('id_card_image')(req
 
 const uploadRoomTypeImage = (req, res, next) => upload.single('image')(req, res, next);
 
-module.exports = { uploadIdCardImage, uploadRoomTypeImage };
+module.exports = { uploadIdCardImages, uploadRoomTypeImage };

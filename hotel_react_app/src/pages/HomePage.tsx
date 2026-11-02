@@ -1,4 +1,5 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
+import { BedDouble, MountainSnow, ShieldCheck, UsersRound } from 'lucide-react';
 import deluxeCityView from '../assets/deluxe-city-view.jpg';
 import executiveGarden from '../assets/executive-garden.webp';
 import familySuite from '../assets/family-suite.jpg';
@@ -20,6 +21,7 @@ import { checkRoomAvailability } from '../services/roomService';
 import { createReview, getMyReviewBookings } from '../services/reviewService';
 import ReviewForm from '../components/ReviewForm';
 import { resolveRole } from '../utils/role';
+import { getHotelDate } from '../utils/checkInCountdown';
 import type {
   AppUser,
   Promotion,
@@ -38,12 +40,12 @@ const daysBetween = (from: string, to: string) => {
   return Math.max(1, Math.ceil(diff / (1000 * 60 * 60 * 24)));
 };
 
-const formatDateInput = (date: Date) => date.toISOString().slice(0, 10);
+const formatDateInput = getHotelDate;
 
 const addDays = (date: string, amount: number) => {
-  const d = new Date(date);
-  d.setDate(d.getDate() + amount);
-  return formatDateInput(d);
+  const d = new Date(`${date}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + amount);
+  return d.toISOString().slice(0, 10);
 };
 
 const formatCurrency = (value: number) =>
@@ -385,7 +387,7 @@ export default function HomePage() {
       localStorage.removeItem('user');
       localStorage.removeItem('accessToken');
       localStorage.removeItem('refreshToken');
-      window.location.href = '/login';
+      window.location.href = user && user.role !== 'CUSTOMER' ? '/admin/login' : '/login';
     }
   };
 
@@ -423,7 +425,6 @@ export default function HomePage() {
             <a href="#promotions" onClick={() => setMenuOpen(false)}>Ưu đãi</a>
             <a href="#services" onClick={() => setMenuOpen(false)}>Dịch vụ</a>
             <a href="#reviews" onClick={() => setMenuOpen(false)}>Đánh giá</a>
-            <a href="#rooms" onClick={() => setMenuOpen(false)}>Khám phá</a>
             <a href="#contact" onClick={() => setMenuOpen(false)}>Liên hệ</a>
           </nav>
 
@@ -495,7 +496,6 @@ export default function HomePage() {
                 Tận hưởng không gian nghỉ dưỡng lý tưởng cho các chuyến đi công tác, nghỉ dưỡng
                 và gia đình với dịch vụ tận tâm ngay trong trung tâm thành phố.
               </p>
-              <a className="btn btn-hero" href="#rooms">Khám phá phòng <span aria-hidden="true">→</span></a>
             </div>
 
             <div className="booking-box" aria-label="Tìm phòng">
@@ -579,10 +579,10 @@ export default function HomePage() {
 
         <section className="feature-strip" aria-label="Điểm nổi bật">
           <div className="container feature-strip-inner">
-            <div><span aria-hidden="true">⌖</span><p><strong>Vị trí tuyệt đẹp</strong><small>Gần thiên nhiên, yên bình</small></p></div>
-            <div><span aria-hidden="true">▱</span><p><strong>Phòng nghỉ sang trọng</strong><small>Thiết kế tinh tế, tiện nghi</small></p></div>
-            <div><span aria-hidden="true">♧</span><p><strong>Dịch vụ tận tâm</strong><small>Đội ngũ chuyên nghiệp</small></p></div>
-            <div><span aria-hidden="true">◇</span><p><strong>Đặt phòng an toàn</strong><small>Thanh toán linh hoạt</small></p></div>
+            <div><span aria-hidden="true"><MountainSnow size={34} strokeWidth={1.7} /></span><p><strong>Vị trí tuyệt đẹp</strong><small>Gần thiên nhiên, yên bình</small></p></div>
+            <div><span aria-hidden="true"><BedDouble size={34} strokeWidth={1.7} /></span><p><strong>Phòng nghỉ sang trọng</strong><small>Thiết kế tinh tế, tiện nghi</small></p></div>
+            <div><span aria-hidden="true"><UsersRound size={34} strokeWidth={1.7} /></span><p><strong>Dịch vụ tận tâm</strong><small>Đội ngũ chuyên nghiệp</small></p></div>
+            <div><span aria-hidden="true"><ShieldCheck size={34} strokeWidth={1.7} /></span><p><strong>Đặt phòng an toàn</strong><small>Thanh toán linh hoạt</small></p></div>
           </div>
         </section>
 
@@ -597,9 +597,6 @@ export default function HomePage() {
                 Xem tất cả loại phòng
               </button>
             )}
-            <button className="btn btn-primary" type="button" onClick={openAllRooms}>
-              Xem tất cả phòng
-            </button>
           </div>
 
           {filteredRoomTypes.length === 0 ? (
@@ -866,16 +863,6 @@ export default function HomePage() {
               <span>{renderStars(averageReview || 0)}</span>
               <small>{reviews.length} đánh giá</small>
             </div>
-          </div>
-
-          <div className="review-actions">
-            {user?.role === 'CUSTOMER' ? (
-              <button className="btn btn-primary" type="button" onClick={() => void openReviewModal()}>Viết đánh giá</button>
-            ) : user ? (
-              <a className="btn btn-outline" href={getRolePath(user.role)}>Quản lý đánh giá</a>
-            ) : (
-              <a className="btn btn-outline" href="/login">Đăng nhập để đánh giá</a>
-            )}
           </div>
 
           <div className="review-grid">

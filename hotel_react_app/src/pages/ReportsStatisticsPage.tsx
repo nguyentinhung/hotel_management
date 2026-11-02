@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getAdminStatistics } from '../services/statisticsService';
+import { retryOrGoToLogin } from '../utils/sessionRetry';
+import { getHotelDate } from '../utils/checkInCountdown';
 
 type Range = { start: string; end: string };
 type PeriodRow = { period_start: string; period_label: string; [key: string]: string | number };
@@ -30,17 +32,21 @@ type Stats = {
 };
 
 const COLORS = ['#0d554e', '#edae52', '#60b79f', '#956dbc', '#e45d67', '#5591d1', '#bd77a8'];
-const day = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+const shiftDate = (date: string, days: number) => {
+  const value = new Date(`${date}T00:00:00.000Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+};
 const money = (value: number) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(value || 0);
 const dateRange = (preset: string): Range => {
-  const end = new Date(); const start = new Date(end);
-  if (preset === 'today') return { start: day(start), end: day(end) };
-  if (preset === '7days') start.setDate(start.getDate() - 6);
-  if (preset === 'month') start.setDate(1);
-  if (preset === 'year') start.setMonth(0, 1);
-  return { start: day(start), end: day(end) };
+  const end = getHotelDate(new Date());
+  if (preset === 'today') return { start: end, end };
+  if (preset === '7days') return { start: shiftDate(end, -6), end };
+  if (preset === 'month') return { start: `${end.slice(0, 7)}-01`, end };
+  if (preset === 'year') return { start: `${end.slice(0, 4)}-01-01`, end };
+  return { start: end, end };
 };
-const shortDate = (value: string) => new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit' }).format(new Date(`${value}T00:00:00`));
+const shortDate = (value: string) => new Intl.DateTimeFormat('vi-VN', { day: '2-digit', month: '2-digit', timeZone: 'UTC' }).format(new Date(`${value}T00:00:00.000Z`));
 const pct = (value: number, total: number) => total > 0 ? `${Math.round(value / total * 100)}%` : '—';
 const titleCase = (value: string) => value.toLowerCase().split('_').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
 type MetricIconName = 'users' | 'userPlus' | 'refreshCw' | 'lockKeyhole' | 'creditCard' | 'checkCircle' | 'clock' | 'xCircle' | 'banknote' | 'calendarDays' | 'chartPie' | 'userRound';
@@ -299,7 +305,7 @@ export default function ReportsStatisticsPage() {
       </div>
       <div className="report-range-caption">Khoảng áp dụng: {range.start} — {range.end}</div>
       {invalidRange && <div className="report-message report-error">Ngày bắt đầu không được lớn hơn ngày kết thúc.</div>}
-      {error && <div className="report-message report-error" role="alert">{error}<button onClick={() => void load()}>Thử lại</button></div>}
+      {error && <div className="report-message report-error" role="alert">{error}<button onClick={() => retryOrGoToLogin(error, load)}>Thử lại</button></div>}
       {loading && <div className="report-message">Đang tải dữ liệu thống kê…</div>}
       {!invalidRange && !loading && !error && data && <Section title="Tổng quan" className="report-overview"><div className="report-metrics">
         <Metric title="Tổng doanh thu" value={money(data.overview.revenue)} currentValue={data.overview.revenue} previous={data.overview.previous.revenue} note="so với kỳ trước" tone="mint" icon="banknote" />

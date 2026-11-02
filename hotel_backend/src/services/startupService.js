@@ -7,6 +7,9 @@ async function prepareRuntimeDatabase(uploadsDir, port) {
   if (!schema?.has_is_deleted) {
     throw new Error(`Database migration did not create dbo.services.is_deleted in "${schema?.database_name ?? 'unknown'}".`);
   }
+  if (!schema?.has_booking_hold) {
+    throw new Error(`Database migration did not create the booking hold fields in "${schema?.database_name ?? 'unknown'}".`);
+  }
   const legacyImages = await getLegacyRoomImages();
   for (const image of legacyImages) {
     try {

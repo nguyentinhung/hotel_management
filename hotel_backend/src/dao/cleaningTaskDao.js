@@ -179,8 +179,7 @@ async function createTask(input, { creatorUserId, requestHash }) {
         SELECT TOP (1) id, status
         FROM dbo.cleaning_tasks WITH (UPDLOCK, HOLDLOCK)
         WHERE room_id = @roomId
-          AND task_type IS NOT NULL
-          AND status IN ('PENDING_ASSIGNMENT', 'ASSIGNED', 'IN_PROGRESS');
+          AND status IN ('NOT_STARTED', 'PENDING_ASSIGNMENT', 'ASSIGNED', 'IN_PROGRESS');
       `);
     if (activeTask.recordset[0]) {
       throw statusError('This room already has an active cleaning task.', 409, 'active_task_exists');
@@ -479,6 +478,16 @@ async function listAssignableHousekeepers() {
 
 async function listCheckoutRoomAssignments(bookingId) {
   const pool = await getPool();
+  const inspectionSchema = await pool.request().query(`
+    SELECT CASE WHEN OBJECT_ID(N'dbo.cleaning_task_inspections', N'U') IS NULL
+      THEN 0 ELSE 1 END AS available;
+  `);
+  const inspectionSubmittedExpression = inspectionSchema.recordset[0]?.available
+    ? `CAST(CASE WHEN EXISTS (
+        SELECT 1 FROM dbo.cleaning_task_inspections AS inspection
+        WHERE inspection.cleaning_task_id = task.id
+      ) THEN 1 ELSE 0 END AS bit)`
+    : 'CAST(0 AS bit)';
   const result = await pool.request()
     .input('bookingId', sql.BigInt, bookingId)
     .query(`
@@ -486,10 +495,7 @@ async function listCheckoutRoomAssignments(bookingId) {
         br.room_id, room.room_number, room.status AS room_status, booking.status AS booking_status,
         CONVERT(varchar(20), task.id) AS task_id, task.status AS task_status,
         CONVERT(varchar(20), task.assigned_to) AS assigned_to, assignee.full_name AS assigned_to_name,
-        CAST(CASE WHEN EXISTS (
-          SELECT 1 FROM dbo.cleaning_task_inspections AS inspection
-          WHERE inspection.cleaning_task_id = task.id
-        ) THEN 1 ELSE 0 END AS bit) AS inspection_submitted
+        ${inspectionSubmittedExpression} AS inspection_submitted
       FROM dbo.booking_rooms AS br
       JOIN dbo.bookings AS booking ON booking.id = br.booking_id
       LEFT JOIN dbo.rooms AS room ON room.id = br.room_id
@@ -584,7 +590,7 @@ async function assignCheckoutRoomTask({ bookingId, bookingRoomId, roomId, housek
       .query(`
         SELECT TOP (1) id, task_type, status, assigned_to
         FROM dbo.cleaning_tasks WITH (UPDLOCK, HOLDLOCK)
-        WHERE room_id = @roomId AND task_type IS NOT NULL
+        WHERE room_id = @roomId
           AND status IN ('NOT_STARTED', 'PENDING_ASSIGNMENT', 'ASSIGNED', 'IN_PROGRESS');
       `);
     if (activeResult.recordset[0]) {
@@ -621,7 +627,18 @@ async function assignCheckoutRoomTask({ bookingId, bookingRoomId, roomId, housek
       console.error('Checkout cleaning assignment rollback failed:', rollbackError);
     }
     if (isUniqueConflict(error)) throw statusError('A checkout cleaning task already exists for this room.', 409, 'duplicate_conflict');
-    if (isForeignKeyConflict(error)) throw statusError('The room, booking, creator, or housekeeper reference changed before the task was saved.', 409, 'reference_conflict');
+    if (isForeignKeyConflict(error)) {
+      const sqlMessage = error.originalError?.info?.message || error.message;
+      console.error('Checkout cleaning assignment foreign key conflict:', {
+        message: sqlMessage,
+        bookingId,
+        bookingRoomId,
+        roomId,
+        housekeeperId,
+        actorUserId,
+      });
+      throw statusError('The room, booking, creator, or housekeeper reference changed before the task was saved.', 409, 'reference_conflict');
+    }
     throw error;
   }
 }
@@ -748,7 +765,20 @@ async function transitionTask(taskId, actorUserId, updateAndRecord) {
     try { await transaction.rollback(); } catch (rollbackError) {
       console.error('Cleaning task transition rollback failed:', rollbackError);
     }
-    if (isUniqueConflict(error)) throw statusError('A cleaning task uniqueness constraint rejected this change.', 409, 'duplicate_conflict');
+    if (isUniqueConflict(error)) {
+      const sqlErrors = [error, error.originalError?.info, ...(error.precedingErrors || [])]
+        .filter(Boolean)
+        .map((item) => ({ number: item.number, message: item.message || item.info?.message }));
+      console.error('Cleaning task transition unique conflict:', { taskId, sqlErrors });
+      if (sqlErrors.some(({ message }) => /uq_ct_room_active/i.test(message || ''))) {
+        throw statusError(
+          'Another cleaning task for this room is already active. Complete or cancel that task before starting this one.',
+          409,
+          'active_task_exists',
+        );
+      }
+      throw statusError('A cleaning task uniqueness constraint rejected this change.', 409, 'duplicate_conflict');
+    }
     if (isForeignKeyConflict(error)) throw statusError('A referenced task user no longer exists.', 409, 'reference_conflict');
     throw error;
   }

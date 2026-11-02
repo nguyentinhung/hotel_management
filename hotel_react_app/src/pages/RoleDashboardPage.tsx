@@ -2,12 +2,12 @@ import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 're
 import { useLocation, useNavigate } from 'react-router-dom';
 import { createFinalPayment } from '../services/paymentService';
 import ReceptionRoomBooking from '../components/ReceptionRoomBooking';
+import StayExtensionModal from '../components/StayExtensionModal';
 import RoomTypesPage from './RoomTypesPage';
 import RoomsPage from './RoomsPage';
 import ServiceListPage from './ServiceListPage';
-import BookingServicePanel from '../components/BookingServicePanel';
 import type { Role } from '../types';
-import { cancelBooking, checkRoomAvailability, finishRoomCleaning, getBookingHistory, getRoomStatuses, getRoomMaintenanceReports, getRoomTypeImageUrl, reportRoomMaintenance, resolveRoomMaintenanceReport, updateBooking, type RoomMaintenanceReport, type RoomStatusRecord } from '../services/roomService';
+import { cancelBooking, checkRoomAvailability, finishRoomCleaning, getBookingDetails, getBookingHistory, getRoomStatuses, getRoomMaintenanceReports, getRoomTypeImageUrl, reportRoomMaintenance, resolveRoomMaintenanceReport, updateBooking, type RoomMaintenanceReport, type RoomStatusRecord } from '../services/roomService';
 import type { RecentBooking, RoomAvailabilityItem } from '../types';
 import BookingRoomSelectionEditor, { type BookingRoomSelection } from '../components/BookingRoomSelectionEditor';
 import PaymentList from '../components/PaymentList';
@@ -20,6 +20,7 @@ import DataTable from '../components/DataTable';
 import { logout } from '../services/authService';
 import { resolveRole } from '../utils/role';
 import { useToast } from '../components/ToastProvider';
+import { getHotelDate } from '../utils/checkInCountdown';
 import dashboardSidebarImage from '../assets/lumiere-dashboard-sidebar.png';
 import dashboardBannerImage from '../assets/lumiere-hero.png';
 import lotusLogo from '../assets/lumiere-lotus.png';
@@ -29,6 +30,7 @@ import StaffManagementPage from './StaffManagementPage';
 import UserManagementPage from './UserManagementPage';
 import EquipmentListPage from './EquipmentListPage';
 import CleaningTaskManagement from '../components/CleaningTaskManagement';
+import { retryOrGoToLogin } from '../utils/sessionRetry';
 
 /**
  * ============================================================================
@@ -231,18 +233,20 @@ function RoomStatusPanel({ role }: { role: Role }) {
     {role === 'ADMIN' && <section className="room-status-section">
       <div className="room-management-heading"><div><h3>Báo cáo bảo trì đang mở</h3><p>Báo cáo không tự hoàn tất việc dọn phòng.</p></div><span className="room-assignment-count">{maintenanceReports.length} báo cáo</span></div>
       {maintenanceReports.length ? <div className="room-assignment-list">{maintenanceReports.map((report) => <article className="room-assignment-card" key={report.id}>
-        <div className="room-assignment-details"><strong>Phòng {report.room_number} · {report.title}</strong><span>{report.description}</span><span>Người báo: {report.reported_by_name} · {new Date(report.reported_at).toLocaleString('vi-VN')}</span></div>
+        <div className="room-assignment-details"><strong>Phòng {report.room_number} · {report.title}</strong><span>{report.description}</span><span>Người báo: {report.reported_by_name} · {new Date(report.reported_at).toLocaleString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}</span></div>
         <button className="btn btn-primary btn-sm" onClick={() => void closeMaintenanceReport(report)}>Đã bảo trì xong</button>
       </article>)}</div> : <p className="room-empty-state">Không có báo cáo bảo trì đang mở.</p>}
     </section>}
   </div>;
 }
 
-function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: { customerMode?: boolean; onBackToManagement?: () => void }) {
-  const { showToast, confirmAction } = useToast();
+function ReceptionBookingHistory({ customerMode = false, readOnly = false }: { customerMode?: boolean; readOnly?: boolean }) {
+  const { showToast, confirmActionWithInput } = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
   const [bookings, setBookings] = useState<RecentBooking[]>([]);
   const [selectedBooking, setSelectedBooking] = useState<RecentBooking | null>(null);
+  const [isExtendingStay, setIsExtendingStay] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState({ check_in_date: '', check_out_date: '', guest_full_name: '', guest_phone: '', guest_email: '', adults: 1, children: 0, special_request: '', room_selections: [] as BookingRoomSelection[] });
@@ -250,12 +254,10 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
   const [checkingRoomAvailability, setCheckingRoomAvailability] = useState(false);
   const [roomAvailabilityError, setRoomAvailabilityError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
-  const [createdFrom, setCreatedFrom] = useState('');
-  const [createdTo, setCreatedTo] = useState('');
+  const [historyStatus, setHistoryStatus] = useState('ALL');
+  const [historyPaymentStatus, setHistoryPaymentStatus] = useState('ALL');
   const [checkInFrom, setCheckInFrom] = useState('');
   const [checkInTo, setCheckInTo] = useState('');
-  const [checkOutFrom, setCheckOutFrom] = useState('');
-  const [checkOutTo, setCheckOutTo] = useState('');
   const [customerFromDate, setCustomerFromDate] = useState('');
   const [customerToDate, setCustomerToDate] = useState('');
   const [customerStatus, setCustomerStatus] = useState('ALL');
@@ -313,7 +315,7 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
     setAppliedCustomerFilters({ fromDate: customerFromDate, toDate: customerToDate, status: customerStatus });
     setCustomerPage(0);
   };
-  const openBooking = (booking: RecentBooking) => {
+  const openBooking = async (booking: RecentBooking) => {
     setSelectedBooking(booking);
     setEditing(false);
     setDraft({
@@ -328,6 +330,16 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
       room_selections: booking.room_selections?.map(({ room_type_id, quantity }) => ({ room_type_id, quantity }))
         || (booking.room_type_id ? [{ room_type_id: booking.room_type_id, quantity: 1 }] : []),
     });
+    const accessToken = localStorage.getItem('accessToken');
+    if (!accessToken) return;
+    try {
+      const result = await getBookingDetails(booking.id, accessToken);
+      setSelectedBooking((current) => current && String(current.id) === String(booking.id)
+        ? { ...current, ...result.booking }
+        : current);
+    } catch (error) {
+      console.error('Could not refresh booking detail:', error);
+    }
   };
   const bookingRoomSelections = (booking: RecentBooking): BookingRoomSelection[] =>
     booking.room_selections?.map(({ room_type_id, quantity }) => ({ room_type_id, quantity }))
@@ -374,12 +386,22 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
     finally { setSaving(false); }
   };
   const cancelSelectedBooking = async () => {
-    if (!selectedBooking || !await confirmAction({ title: 'Hủy booking?', message: `Bạn có chắc muốn hủy booking ${selectedBooking.booking_code}?`, confirmLabel: 'Hủy booking', destructive: true })) return;
+    if (!selectedBooking) return;
+    const confirmation = await confirmActionWithInput({
+      title: 'Hủy booking?',
+      message: `Bạn có chắc muốn hủy booking ${selectedBooking.booking_code}?`,
+      confirmLabel: 'Hủy booking',
+      destructive: true,
+      inputLabel: 'Ghi chú hủy (không bắt buộc)',
+      inputPlaceholder: 'Nhập ghi chú cho việc hủy booking',
+      inputMaxLength: 500,
+    });
+    if (!confirmation.confirmed) return;
     const accessToken = localStorage.getItem('accessToken');
     if (!accessToken) return showToast('Vui lòng đăng nhập lại.', 'error');
     try {
       setSaving(true);
-      await cancelBooking(selectedBooking.id, accessToken);
+      await cancelBooking(selectedBooking.id, accessToken, confirmation.input);
       await load();
       setSelectedBooking(null);
       showToast('Đã hủy booking.', 'success');
@@ -387,6 +409,20 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
     finally { setSaving(false); }
   };
   useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    if (!customerMode) return;
+    const params = new URLSearchParams(location.search);
+    const result = params.get('paymentResult');
+    if (result !== 'failed' && result !== 'invalid') return;
+    sessionStorage.removeItem('hotelManagement.vnpayReturnPath');
+    showToast(result === 'failed'
+      ? 'Giao dịch VNPay chưa hoàn tất. Booking vẫn được giữ để bạn có thể thử thanh toán lại.'
+      : 'Không xác thực được kết quả VNPay. Hãy kiểm tra trạng thái booking trước khi thử lại.', 'error');
+    params.delete('paymentResult');
+    params.delete('bookingCode');
+    const query = params.toString();
+    navigate(`${location.pathname}${query ? `?${query}` : ''}`, { replace: true });
+  }, [customerMode, location.pathname, location.search, navigate, showToast]);
   useEffect(() => {
     if (!customerMode) return;
     const timer = window.setInterval(() => setClockNow(Date.now()), 1000);
@@ -415,12 +451,6 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
     }).formatToParts(date);
     return Object.fromEntries(parts.map(({ type, value }) => [type, value]));
   };
-  const getCreatedDate = (createdAt: string | null | undefined) => {
-    const date = parseCreatedAt(createdAt);
-    if (!date) return '';
-    const parts = getVietnamCreatedAtParts(date);
-    return `${parts.year}-${parts.month}-${parts.day}`;
-  };
   const formatCreatedAt = (createdAt: string | null | undefined) => {
     const date = parseCreatedAt(createdAt);
     if (!date) return '—';
@@ -435,30 +465,33 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
       const matchesStatus = appliedCustomerFilters.status === 'ALL' || booking.status === appliedCustomerFilters.status;
       return matchesFromDate && matchesToDate && matchesStatus;
     }
-    const matchesText = `${booking.booking_code} ${booking.guest_full_name} ${booking.guest_phone} ${booking.status}`.toLowerCase().includes(query.trim().toLowerCase());
-    const createdDate = getCreatedDate(booking.created_at);
-    const matchesDateFrom = !createdFrom || createdDate >= createdFrom;
-    const matchesDateTo = !createdTo || createdDate <= createdTo;
+    const matchesText = [booking.booking_code, booking.guest_full_name, booking.guest_phone, booking.guest_email || '', booking.room_number || '', booking.room_type_name || '']
+      .some((value) => value.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
+    const matchesHistoryStatus = historyStatus === 'ALL' || booking.status === historyStatus;
     const checkInDate = String(booking.check_in_date).slice(0, 10);
-    const checkOutDate = String(booking.check_out_date).slice(0, 10);
     const matchesCheckInFrom = !checkInFrom || checkInDate >= checkInFrom;
     const matchesCheckInTo = !checkInTo || checkInDate <= checkInTo;
-    const matchesCheckOutFrom = !checkOutFrom || checkOutDate >= checkOutFrom;
-    const matchesCheckOutTo = !checkOutTo || checkOutDate <= checkOutTo;
-    return matchesText && matchesDateFrom && matchesDateTo && matchesCheckInFrom && matchesCheckInTo && matchesCheckOutFrom && matchesCheckOutTo;
+    const requiredDeposit = Number(booking.required_deposit_amount || 0);
+    const paymentStatus = booking.deposit_payment_status
+      || (booking.requires_deposit_payment === false || requiredDeposit <= 0
+        ? 'NOT_REQUIRED'
+        : Number(booking.deposit_amount || 0) >= requiredDeposit ? 'PAID'
+          : Number(booking.deposit_amount || 0) > 0 ? 'PARTIAL' : 'UNPAID');
+    const matchesPayment = historyPaymentStatus === 'ALL' || paymentStatus === historyPaymentStatus;
+    return matchesText && matchesHistoryStatus && matchesCheckInFrom && matchesCheckInTo && matchesPayment;
   });
   const customerPageCount = Math.max(1, Math.ceil(filtered.length / customerPageSize));
   const safeCustomerPage = Math.min(customerPage, customerPageCount - 1);
   const visibleCustomerBookings = filtered.slice(safeCustomerPage * customerPageSize, (safeCustomerPage + 1) * customerPageSize);
   const now = new Date();
-  const localToday = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const localToday = getHotelDate(now);
   const customerUpdateDeadline = selectedBooking
     ? Date.parse(`${String(selectedBooking.check_in_date).slice(0, 10)}T14:00:00+07:00`) - 24 * 60 * 60 * 1000
     : Number.POSITIVE_INFINITY;
-  const canEditSelectedBooking = !!selectedBooking
+  const canEditSelectedBooking = !readOnly && !!selectedBooking
     && selectedBooking.status === 'CONFIRMED'
     && (!customerMode || Date.now() <= customerUpdateDeadline);
-  const canCancelSelectedBooking = !!selectedBooking
+  const canCancelSelectedBooking = !readOnly && !!selectedBooking
     && selectedBooking.status === 'CONFIRMED'
     && (!customerMode || String(selectedBooking.check_in_date).slice(0, 10) > localToday);
   const selectedAdultsCapacity = draft.room_selections.reduce((sum, selection) =>
@@ -473,6 +506,12 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
     const roomTypeId = booking.room_selections?.find((selection) => selection.room_type_id)?.room_type_id;
     return roomTypeId || booking.room_type_id ? getRoomTypeImageUrl(roomTypeId || booking.room_type_id || 0) : null;
   };
+  const getCancellationActorLabel = (booking: RecentBooking) => {
+    if (booking.cancellation_reason_code === 'CUSTOMER_CANCELLED') return 'Customer';
+    if (booking.cancellation_reason_code === 'RECEPTIONIST_CANCELLED') return 'Receptionist';
+    if (['CHECK_IN_EXPIRED', 'PAYMENT_TIMEOUT', 'ROOMS_UNAVAILABLE'].includes(booking.cancellation_reason_code || '')) return 'System';
+    return 'Chưa ghi nhận';
+  };
   const getBookingStatusLabel = (status: string) => ({
     PENDING_PAYMENT: 'Pending Payment', CONFIRMED: 'Confirmed', CHECKED_IN: 'Checked In', CHECKED_OUT: 'Checked Out', CANCELLED: 'Cancelled', NO_SHOW: 'No Show',
   }[status] || status);
@@ -483,12 +522,21 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
   };
   const formatMoney = (amount: number) => new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(amount);
   const cancelCustomerBooking = async (booking: RecentBooking) => {
-    if (!await confirmAction({ title: 'Hủy đặt phòng?', message: `Bạn có chắc muốn hủy đặt phòng ${booking.booking_code}?`, confirmLabel: 'Hủy đặt phòng', destructive: true })) return;
+    const confirmation = await confirmActionWithInput({
+      title: 'Hủy đặt phòng?',
+      message: `Bạn có chắc muốn hủy đặt phòng ${booking.booking_code}?`,
+      confirmLabel: 'Hủy đặt phòng',
+      destructive: true,
+      inputLabel: 'Ghi chú hủy (không bắt buộc)',
+      inputPlaceholder: 'Nhập ghi chú cho việc hủy đặt phòng',
+      inputMaxLength: 500,
+    });
+    if (!confirmation.confirmed) return;
     const accessToken = localStorage.getItem('accessToken');
     if (!accessToken) return showToast('Vui lòng đăng nhập lại.', 'error');
     try {
       setSaving(true);
-      await cancelBooking(booking.id, accessToken);
+      await cancelBooking(booking.id, accessToken, confirmation.input);
       await load();
       if (selectedBooking?.id === booking.id) setSelectedBooking(null);
       showToast('Đã hủy đặt phòng.', 'success');
@@ -510,6 +558,7 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
       const method = import.meta.env.VITE_VNPAY_ENABLED === 'true' ? 'VNPAY' : 'SIMULATED';
       const payment = await createFinalPayment(booking.booking_code, method, 'DEPOSIT');
       if (payment.payment_url) {
+        sessionStorage.setItem('hotelManagement.vnpayReturnPath', '/my-bookings');
         window.location.assign(payment.payment_url);
         return;
       }
@@ -521,14 +570,10 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
     } finally { setContinuingPaymentFor(null); }
   };
   return <div className={`reception-recent-bookings-card booking-history-card${customerMode ? ' booking-history-customer' : ''}`}>
-    {customerMode && <div className="customer-booking-surface">
+    <div className="customer-booking-surface">
     <div className="booking-history-info-filter-frame">
     <div className="recent-card-header">
-      <div>{customerMode ? <><div className="customer-booking-heading"><h3>Danh sách đặt phòng</h3><span>{filtered.length} đặt phòng</span></div><p>Xem thông tin chi tiết và quản lý lịch sử đặt phòng của bạn.</p></> : <><h3>Booking History</h3><p>{filtered.length}/{bookings.length} booking, bao gồm booking đang hoạt động, đã checkout và đã hủy.</p></>}</div>
-      {!customerMode && <div className="booking-history-header-actions">
-        {onBackToManagement && <button type="button" className="booking-history-back-button" onClick={onBackToManagement}><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M19 12H5m0 0 7 7m-7-7 7-7"/></svg>Quay lại Booking Management</button>}
-        <button type="button" className="booking-history-refresh-button" onClick={refreshHistory}><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.5 9a7 7 0 0 1 11.6-2L20 12M4 12l2.9 5a7 7 0 0 0 11.6-2"/></svg>Làm mới</button>
-      </div>}
+      <div>{customerMode ? <><div className="customer-booking-heading"><h3>Danh sách đặt phòng</h3><span>{filtered.length} đặt phòng</span></div><p>Xem thông tin chi tiết và quản lý lịch sử đặt phòng của bạn.</p></> : <><h3>{readOnly ? 'View Booking History - Reception' : 'Booking History'}</h3><p>{filtered.length}/{bookings.length} booking, bao gồm booking đang hoạt động, đã checkout và đã hủy.</p></>}</div>
     </div>
     {customerMode && <div className="booking-history-filters customer-search-bar" role="search" aria-label="Tìm lịch sử đặt phòng">
       <label className="customer-search-field"><span>Từ ngày</span><input lang="en-GB" type="date" aria-label="Từ ngày (dd/mm/yyyy)" value={customerFromDate} max={customerToDate || undefined} onChange={(event) => setCustomerFromDate(event.target.value)} /></label>
@@ -539,25 +584,18 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
       <button type="button" className="customer-search-submit" onClick={applyCustomerFilters}><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8" stroke="currentColor" strokeWidth="2"/><path d="m16 16 4.5 4.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/></svg>Tìm kiếm</button>
       {filterError && <p className="customer-search-error" role="alert">{filterError}</p>}
     </div>}
-    {!customerMode && <div className="booking-history-filters">
-      <label className="booking-history-search booking-history-query"><span>Tìm theo mã, tên khách, số điện thoại hoặc trạng thái</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Nhập nội dung cần tìm" /></label>
-      <div className="booking-history-date-group"><span className="booking-history-group-title">Ngày tạo booking</span><div className="booking-history-date-range">
-        <label><span>Từ ngày</span><input type="date" value={createdFrom} max={createdTo || undefined} onChange={(event) => setCreatedFrom(event.target.value)} /></label>
-        <label><span>Đến ngày</span><input type="date" value={createdTo} min={createdFrom || undefined} onChange={(event) => setCreatedTo(event.target.value)} /></label>
-      </div></div>
-      <div className="booking-history-date-group"><span className="booking-history-group-title">Ngày nhận phòng</span><div className="booking-history-date-range">
-        <label><span>Từ ngày</span><input type="date" value={checkInFrom} max={checkInTo || undefined} onChange={(event) => setCheckInFrom(event.target.value)} /></label>
-        <label><span>Đến ngày</span><input type="date" value={checkInTo} min={checkInFrom || undefined} onChange={(event) => setCheckInTo(event.target.value)} /></label>
-      </div></div>
-      <div className="booking-history-date-group"><span className="booking-history-group-title">Ngày trả phòng</span><div className="booking-history-date-range">
-        <label><span>Từ ngày</span><input type="date" value={checkOutFrom} max={checkOutTo || undefined} onChange={(event) => setCheckOutFrom(event.target.value)} /></label>
-        <label><span>Đến ngày</span><input type="date" value={checkOutTo} min={checkOutFrom || undefined} onChange={(event) => setCheckOutTo(event.target.value)} /></label>
-      </div></div>
-      {(query || createdFrom || createdTo || checkInFrom || checkInTo || checkOutFrom || checkOutTo) && <button className="btn btn-outline btn-sm" onClick={() => { setQuery(''); setCreatedFrom(''); setCreatedTo(''); setCheckInFrom(''); setCheckInTo(''); setCheckOutFrom(''); setCheckOutTo(''); }}>Xóa bộ lọc</button>}
+        {!customerMode && <div className="booking-management-filter-grid booking-history-management-filters">
+      <label><span>Tìm booking</span><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Mã booking, tên khách, điện thoại, email..." /></label>
+      <label><span>Nhận phòng từ</span><input type="date" value={checkInFrom} onChange={(event) => setCheckInFrom(event.target.value)} /></label>
+      <label><span>Đến ngày</span><input type="date" value={checkInTo} min={checkInFrom || undefined} onChange={(event) => setCheckInTo(event.target.value)} /></label>
+      <label><span>Trạng thái booking</span><select value={historyStatus} onChange={(event) => setHistoryStatus(event.target.value)}><option value="ALL">Tất cả trạng thái</option><option value="PENDING_PAYMENT">PENDING_PAYMENT</option><option value="CONFIRMED">CONFIRMED</option><option value="CHECKED_IN">CHECKED_IN</option><option value="CHECKED_OUT">CHECKED_OUT</option><option value="CANCELLED">CANCELLED</option><option value="NO_SHOW">NO_SHOW</option></select></label>
+      <label><span>Thanh toán</span><select value={historyPaymentStatus} onChange={(event) => setHistoryPaymentStatus(event.target.value)}><option value="ALL">Tất cả thanh toán</option><option value="PAID">Đã thanh toán đủ cọc</option><option value="PENDING">Đang chờ</option><option value="PARTIAL">Thanh toán một phần</option><option value="UNPAID">Chưa thanh toán cọc</option><option value="FAILED">Thất bại</option><option value="NOT_REQUIRED">Không yêu cầu đặt cọc</option></select></label>
+      <button type="button" className="btn btn-primary btn-sm booking-management-search-submit" onClick={() => setQuery((value) => value.trim())}><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"/><path d="m16 16 4.5 4.5"/></svg>Search</button>
+      <button type="button" className="btn btn-sm dashboard-refresh-button" onClick={refreshHistory} disabled={historyLoading}><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.5 9a7 7 0 0 1 11.6-2L20 12M4 12l2.9 5a7 7 0 0 0 11.6-2"/></svg>{historyLoading ? 'Đang tải...' : 'Làm mới'}</button>
     </div>}
     </div>
     {customerMode && historyLoading && <p className="room-empty-state">Đang tải danh sách đặt phòng...</p>}
-    {customerMode && historyError && <div className="customer-history-error" role="alert"><p>{historyError}</p><button type="button" className="btn btn-outline btn-sm" onClick={refreshHistory}>Tải lại danh sách</button></div>}
+    {customerMode && historyError && <div className="customer-history-error" role="alert"><p>{historyError}</p><button type="button" className="btn btn-outline btn-sm" onClick={() => retryOrGoToLogin(historyError, refreshHistory)}>Tải lại danh sách</button></div>}
     {customerMode && !historyLoading && !historyError && bookings.length === 0 && <p className="room-empty-state">Bạn chưa có đặt phòng nào.</p>}
     {customerMode && !historyLoading && !historyError && bookings.length > 0 && <div className="customer-booking-list">
     <div className="customer-booking-cards">{visibleCustomerBookings.map((booking) => {
@@ -588,8 +626,8 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
     })}{filtered.length === 0 && <p className="room-empty-state">Không tìm thấy đặt phòng phù hợp với bộ lọc.</p>}</div>
     <div className="customer-booking-pagination"><span>{filtered.length === 0 ? 'Hiển thị 0 - 0 trên tổng số 0 đặt phòng' : `Hiển thị ${safeCustomerPage * customerPageSize + 1} - ${Math.min((safeCustomerPage + 1) * customerPageSize, filtered.length)} trên tổng số ${filtered.length} đặt phòng`}</span><div className="customer-page-controls"><button type="button" aria-label="Trang trước" disabled={safeCustomerPage === 0} onClick={() => setCustomerPage((page) => Math.max(0, page - 1))}>‹</button>{Array.from({ length: customerPageCount }, (_, index) => <button type="button" key={index} aria-label={`Trang ${index + 1}`} aria-current={safeCustomerPage === index ? 'page' : undefined} className={safeCustomerPage === index ? 'active' : ''} onClick={() => setCustomerPage(index)}>{index + 1}</button>)}<button type="button" aria-label="Trang sau" disabled={safeCustomerPage >= customerPageCount - 1} onClick={() => setCustomerPage((page) => Math.min(customerPageCount - 1, page + 1))}>›</button></div></div>
     </div>}
-    </div>}
-    {!customerMode && <div className="booking-history-list-frame">{message ? <p className="room-empty-state">{message}</p> : <DataTable className="table-wrap"><table className="reception-table booking-history-table"><thead><tr><th>Mã booking</th><th>Khách hàng</th><th>Số điện thoại</th><th>Loại phòng</th><th>Số phòng</th><th>Ngày lưu trú</th><th>Ngày tạo booking</th><th>Trạng thái booking</th><th>Tổng tiền</th></tr></thead>
+    </div>
+    {!customerMode && <div className="booking-history-list-frame">{message ? <div className="customer-history-error" role={historyError ? 'alert' : undefined}><p className="room-empty-state">{message}</p>{historyError && <button type="button" className="btn btn-outline btn-sm" onClick={() => retryOrGoToLogin(historyError, refreshHistory)}>Retry</button>}</div> : <DataTable className="table-wrap"><table className="reception-table booking-history-table"><thead><tr><th>Mã booking</th><th>Khách hàng</th><th>Số điện thoại</th><th>Loại phòng</th><th>Số phòng</th><th>Ngày lưu trú</th><th>Ngày tạo booking</th><th>Trạng thái booking</th><th>Tổng tiền</th></tr></thead>
       <tbody>{filtered.map((booking) => <tr key={booking.id} className="booking-history-row" onClick={() => openBooking(booking)} title="Nhấn để xem chi tiết booking">
         <td><strong className="booking-code-text">{booking.booking_code}</strong></td><td>{booking.guest_full_name}</td><td>{booking.guest_phone}</td><td>{booking.room_type_name || '—'}</td><td>{booking.room_number ? `P.${booking.room_number}` : 'Chưa gán'}</td>
         <td>{String(booking.check_in_date).slice(0, 10)} → {String(booking.check_out_date).slice(0, 10)}</td><td>{formatCreatedAt(booking.created_at)}</td><td><span className={`status-badge ${booking.status === 'CONFIRMED' ? 'status-confirmed' : booking.status === 'CHECKED_IN' ? 'status-checked-in' : booking.status === 'CHECKED_OUT' ? 'status-checked-out' : booking.status === 'CANCELLED' || booking.status === 'NO_SHOW' ? 'status-cancelled' : 'status-pending'}`}>{getBookingStatusLabel(booking.status)}</span></td><td>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(booking.total_amount)}</td>
@@ -619,14 +657,27 @@ function ReceptionBookingHistory({ customerMode = false, onBackToManagement }: {
           <div className="booking-detail-actions booking-edit-wide"><button className="btn btn-primary" type="submit" disabled={saving || checkingRoomAvailability || !!roomAvailabilityError || draft.adults > selectedAdultsCapacity || draft.children > selectedChildrenCapacity || draft.room_selections.reduce((sum, selection) => sum + selection.quantity, 0) < originalRoomCount}>{saving ? 'Đang lưu...' : 'Lưu thay đổi'}</button><button className="btn btn-outline" type="button" onClick={() => setEditing(false)} disabled={saving}>Quay lại</button></div>
         </form> : <>
           <dl className="booking-detail-grid"><div><dt>Khách hàng</dt><dd>{selectedBooking.guest_full_name}</dd></div><div><dt>Điện thoại</dt><dd>{selectedBooking.guest_phone}</dd></div><div><dt>Email</dt><dd>{selectedBooking.guest_email || '—'}</dd></div><div><dt>Loại phòng / phòng</dt><dd>{selectedBooking.room_type_name || '—'}{selectedBooking.room_number ? ` · P.${selectedBooking.room_number}` : ' · Chưa gán'}</dd></div><div><dt>Nhận phòng</dt><dd>{String(selectedBooking.check_in_date).slice(0, 10)}</dd></div><div><dt>Trả phòng</dt><dd>{String(selectedBooking.check_out_date).slice(0, 10)}</dd></div><div><dt>Số khách</dt><dd>{selectedBooking.adults} người lớn, {selectedBooking.children} trẻ em</dd></div><div><dt>Trạng thái</dt><dd>{selectedBooking.status}</dd></div><div><dt>Tổng tiền</dt><dd>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(selectedBooking.total_amount)}</dd></div><div><dt>Đã cọc</dt><dd>{new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(selectedBooking.deposit_amount)}</dd></div><div className="booking-detail-wide"><dt>Yêu cầu đặc biệt</dt><dd>{selectedBooking.special_request || 'Không có'}</dd></div></dl>
-          <BookingServicePanel bookingId={selectedBooking.id} canAddServices={selectedBooking.status === 'CHECKED_IN' || (selectedBooking.status === 'CONFIRMED' && String(selectedBooking.check_in_date).slice(0, 10) <= localToday && String(selectedBooking.check_out_date).slice(0, 10) > localToday)} onTotalChange={(total) => {
-            setSelectedBooking((current) => current ? { ...current, total_amount: total } : current);
-            setBookings((current) => current.map((booking) => String(booking.id) === String(selectedBooking.id) ? { ...booking, total_amount: total } : booking));
-          }} />
-          <div className="booking-detail-actions">{canEditSelectedBooking && <button type="button" className="btn btn-primary" onClick={() => setEditing(true)}>Cập nhật booking</button>}{canCancelSelectedBooking && <button type="button" className="btn btn-outline" onClick={() => void cancelSelectedBooking()} disabled={saving}>Hủy booking</button>}{selectedBooking.status === 'CONFIRMED' && customerMode && !canEditSelectedBooking && <p className="booking-manage-note">Bạn chỉ có thể cập nhật booking trước thời điểm nhận phòng ít nhất 24 giờ.</p>}<button type="button" className="btn btn-outline" onClick={() => setSelectedBooking(null)}>Đóng</button></div>
+          {selectedBooking.status === 'CANCELLED' && <dl className="booking-detail-grid booking-cancellation-grid">
+            <div className="booking-detail-wide"><dt>Lý do hủy</dt><dd>{selectedBooking.cancellation_reason_label || 'Chưa ghi nhận'}</dd></div>
+            {selectedBooking.cancellation_reason_note && <div className="booking-detail-wide"><dt>Ghi chú hủy</dt><dd>{selectedBooking.cancellation_reason_note}</dd></div>}
+            <div><dt>Thời điểm hủy</dt><dd>{selectedBooking.cancelled_at ? formatCreatedAt(selectedBooking.cancelled_at) : 'Chưa ghi nhận'}</dd></div>
+            <div><dt>Người thực hiện</dt><dd>{getCancellationActorLabel(selectedBooking)}</dd></div>
+          </dl>}
+          <div className="booking-detail-actions">{canEditSelectedBooking && <button type="button" className="btn btn-primary" onClick={() => setEditing(true)}>Cập nhật booking</button>}{!customerMode && !readOnly && selectedBooking.status === 'CHECKED_IN' && <button type="button" className="btn btn-primary stay-extension-trigger" onClick={() => setIsExtendingStay(true)}>＋ Gia hạn lưu trú</button>}{canCancelSelectedBooking && <button type="button" className="btn btn-outline" onClick={() => void cancelSelectedBooking()} disabled={saving}>Hủy booking</button>}{selectedBooking.status === 'CONFIRMED' && customerMode && !canEditSelectedBooking && <p className="booking-manage-note">Bạn chỉ có thể cập nhật booking trước thời điểm nhận phòng ít nhất 24 giờ.</p>}<button type="button" className="btn btn-outline" onClick={() => setSelectedBooking(null)}>Đóng</button></div>
         </>}
       </section>
     </div>}
+    {isExtendingStay && selectedBooking && <StayExtensionModal
+      booking={selectedBooking}
+      onClose={() => setIsExtendingStay(false)}
+      onSuccess={(extension) => {
+        setSelectedBooking((current) => current ? { ...current, check_out_date: extension.check_out_date, total_amount: extension.total_amount, balance_due: extension.balance_due } : current);
+        setBookings((current) => current.map((booking) => String(booking.id) === String(selectedBooking.id) ? { ...booking, check_out_date: extension.check_out_date, total_amount: extension.total_amount, balance_due: extension.balance_due } : booking));
+        setIsExtendingStay(false);
+        showToast('Gia hạn lưu trú thành công.', 'success');
+        void load();
+      }}
+    />}
   </div>;
 }
 
@@ -699,6 +750,8 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
             ? { label: 'Promotion Management', description: 'Xem danh sách và chi tiết các chương trình khuyến mãi.' }
             : activeModule === 'Staff Management'
               ? { label: 'Staff Management', description: 'Xem danh sách, chi tiết và quản lý thông tin nhân viên.' }
+              : activeModule === 'Booking Management' && currentRole === 'ADMIN'
+                ? { label: 'Booking Management', description: 'View booking history and booking details.' }
               : activeModule === 'Account Management'
                 ? { label: 'Account Management', description: 'Tạo, tìm kiếm, cập nhật tài khoản, khóa/mở khóa và phân quyền người dùng.' }
             : config.nav[0]);
@@ -731,7 +784,6 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
     { title: 'DỊCH VỤ & VẬN HÀNH', items: [
       { label: 'Service Management', moduleIndex: 5, icon: 'service' },
       { label: 'Cleaning Task', moduleIndex: 9, icon: 'cleaning' },
-      { label: 'Equipment Inspection', icon: 'maintenance' },
     ] },
     { title: 'THANH TOÁN', items: [
       { label: 'Payment Management', moduleIndex: 3, icon: 'payment' },
@@ -748,11 +800,14 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
   ];
 
   const adminMenuGroups: { title: string; items: { label: string; moduleIndex?: number; icon: DashboardIconName }[] }[] = [
+    { title: 'QUẢN LÝ ĐẶT PHÒNG', items: [
+      { label: 'Booking Management', icon: 'calendar' },
+    ] },
     { title: 'QUẢN LÝ PHÒNG', items: [
       { label: 'Room Management', moduleIndex: 0, icon: 'bedDouble' }, { label: 'Room Type Management', moduleIndex: 1, icon: 'room' },
     ] },
     { title: 'DỊCH VỤ & VẬN HÀNH', items: [
-      { label: 'Service Management', moduleIndex: 2, icon: 'service' }, { label: 'Cleaning Task', icon: 'cleaning' }, { label: 'Equipment Management', moduleIndex: 8, icon: 'equipment' }, { label: 'Equipment Inspection', icon: 'maintenance' },
+      { label: 'Service Management', moduleIndex: 2, icon: 'service' }, { label: 'Equipment Management', moduleIndex: 8, icon: 'equipment' },
     ] },
     { title: 'KHÁCH HÀNG', items: [
       { label: 'Customer Management', icon: 'customer' }, { label: 'Promotion Management', moduleIndex: 5, icon: 'tag' }, { label: 'Review Management', icon: 'review' },
@@ -779,7 +834,7 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
       localStorage.removeItem('user');
       localStorage.removeItem('accessToken');
       localStorage.removeItem('refreshToken');
-      window.location.href = '/login';
+      window.location.href = currentRole === 'CUSTOMER' ? '/login' : '/admin/login';
     }
   };
 
@@ -813,6 +868,7 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
                 const promotionModule = item.label === 'Promotion Management';
                 const staffModule = item.label === 'Staff Management';
                 const accountModule = item.label === 'Account Management';
+                const bookingManagementModule = currentRole === 'ADMIN' && item.label === 'Booking Management';
                 const isActive = Boolean(
                   (module && module === activeItem.label) ||
                   (invoiceModule && activeItem.label === 'Invoice Management') ||
@@ -820,9 +876,10 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
                   (reviewModule && activeItem.label === 'Review Management') ||
                   (promotionModule && activeItem.label === 'Promotion Management') ||
                   (staffModule && activeItem.label === 'Staff Management') ||
-                  (accountModule && activeItem.label === 'Account Management')
+                  (accountModule && activeItem.label === 'Account Management') ||
+                  (bookingManagementModule && activeItem.label === 'Booking Management')
                 );
-                const isDisabled = !module && !invoiceModule && !reportsModule && !reviewModule && !promotionModule && !staffModule && !accountModule;
+                const isDisabled = !module && !invoiceModule && !reportsModule && !reviewModule && !promotionModule && !staffModule && !accountModule && !bookingManagementModule;
                 return <button
                   key={item.label}
                   type="button"
@@ -837,6 +894,7 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
                     else if (promotionModule) setActiveModule('Promotion Management');
                     else if (staffModule) setActiveModule('Staff Management');
                     else if (accountModule) setActiveModule('Account Management');
+                    else if (bookingManagementModule) setActiveModule('Booking Management');
                   }}
                 >
                   <span className="dashboard-nav-icon"><DashboardNavIcon name={item.icon} /></span>
@@ -884,13 +942,20 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
           }}
         >
           <div>
-            <DashboardBreadcrumb homeTo={dashboardHomeByRole[currentRole]} currentPage={pageTitle} />
+            <DashboardBreadcrumb
+              homeTo={dashboardHomeByRole[currentRole]}
+              currentPage={pageTitle}
+              middlePage={currentRole === 'RECEPTIONIST' && activeItem.label === 'Booking History' ? 'Booking Management' : undefined}
+              onMiddleClick={() => setActiveModule(config.nav[0].label)}
+            />
             <p className="eyebrow eyebrow-soft">{currentRole === 'RECEPTIONIST' ? 'Receptionist' : currentRole === 'CUSTOMER' ? customerEmail : currentRole === 'ADMIN' && activeItem.label === 'Reports & Statistics' ? 'Admin' : config.title}</p>
             <h1 id="dashboard-page-title">{pageTitle}</h1>
             <p className="dashboard-header-subtitle">{currentRole === 'RECEPTIONIST' && activeItem.label === config.nav[3].label ? 'Manage payments, monitor transaction status and confirm payments at the front desk.' : ((currentRole === 'ADMIN' && activeItem.label === config.nav[0].label) || (currentRole === 'RECEPTIONIST' && activeItem.label === config.nav[6].label)) ? 'Quản lý thông tin, trạng thái và tình trạng phòng.' : activeItem.description}</p>
           </div>
           <div className="dashboard-header-actions">
-            <a href="/" className="btn btn-outline btn-sm">
+            {currentRole === 'RECEPTIONIST' && activeItem.label === 'Booking History' && <button type="button" className="btn btn-outline btn-sm booking-history-banner-back" onClick={() => setActiveModule(config.nav[0].label)}><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M19 12H5m0 0 7 7m-7-7 7-7" /></svg>Quay lại</button>}
+            <a href="/" className="btn btn-outline btn-sm booking-history-banner-home">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-6v-7h-4v7H4a1 1 0 0 1-1-1V10Z" /></svg>
               Trang chủ
             </a>
           </div>
@@ -910,11 +975,13 @@ export default function RoleDashboardPage({ role }: { role?: Role }) {
           ) : (currentRole === 'ADMIN' && activeItem.label === config.nav[1].label) || (currentRole === 'RECEPTIONIST' && activeItem.label === config.nav[4].label) ? (
             <div className="module-content"><RoomTypesPage readOnly={currentRole === 'RECEPTIONIST'} /></div>
           ) : currentRole === 'RECEPTIONIST' && activeModule === 'Lịch sử booking' ? (
-            <ReceptionBookingHistory onBackToManagement={() => setActiveModule(config.nav[0].label)} />
+            <ReceptionBookingHistory />
+          ) : currentRole === 'ADMIN' && activeItem.label === 'Booking Management' ? (
+            <ReceptionRoomBooking mode="management" readOnly />
           ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Booking Management' ? (
             <ReceptionRoomBooking mode="management" onViewBookingHistory={() => setActiveModule('Lịch sử booking')} />
           ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Check-in' ? (
-            <ReceptionRoomBooking mode="checkin" />
+            <ReceptionRoomBooking mode="checkin" onCheckInComplete={() => setActiveModule('Booking Management')} />
           ) : currentRole === 'RECEPTIONIST' && activeItem.label === 'Check-out' ? (
             <ReceptionRoomBooking mode="checkout" />
           ) : ['ADMIN', 'RECEPTIONIST'].includes(currentRole) && activeItem.label === 'Promotion Management' ? (

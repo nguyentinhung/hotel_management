@@ -14,7 +14,7 @@ async function getEquipmentAssets(req, res) {
   try {
     const assets = await equipmentAssetService.getEquipmentAssets(req.params.equipmentItemId);
     if (!assets) return res.status(404).json({ message: 'Equipment type not found.' });
-    return res.json(assets);
+    return res.json(toEquipmentAssetsResponse(assets));
   } catch (error) {
     if (error.statusCode === 400) return res.status(400).json({ message: error.message });
     console.error('Get equipment assets failed:', error);
@@ -26,7 +26,7 @@ async function getEquipmentAsset(req, res) {
   try {
     const asset = await equipmentAssetService.getEquipmentAsset(req.params.equipmentItemId, req.params.assetId);
     if (!asset) return res.status(404).json({ message: 'Equipment asset not found for this equipment type.' });
-    return res.json(asset);
+    return res.json(toEquipmentAssetDetailsResponse(asset));
   } catch (error) {
     if (error.statusCode === 400) return res.status(400).json({ message: error.message });
     console.error('Get equipment asset failed:', error);
@@ -34,11 +34,19 @@ async function getEquipmentAsset(req, res) {
   }
 }
 
+const { toAddEquipmentAssetRequest } = require('../dto/equipment/add-equipment-asset/add-equipment-asset-request.dto');
+const { toUpdateEquipmentAssetRequest } = require('../dto/equipment/update-equipment-asset/update-equipment-asset-request.dto');
+const { toEquipmentAssetsResponse } = require('../dto/equipment/view-equipment-assets/equipment-assets-response.dto');
+const { toAddEquipmentAssetResponse } = require('../dto/equipment/add-equipment-asset/add-equipment-asset-response.dto');
+const { toUpdateEquipmentAssetResponse } = require('../dto/equipment/update-equipment-asset/update-equipment-asset-response.dto');
+const { toEquipmentAssetDetailsResponse } = require('../dto/equipment/view-equipment-asset-details/equipment-asset-details-response.dto');
+const { toDeleteEquipmentAssetResponse } = require('../dto/equipment/delete-equipment-asset/delete-equipment-asset-response.dto');
+
 async function createEquipmentAsset(req, res) {
   try {
-    const asset = await equipmentAssetService.createEquipmentAsset(req.params.equipmentItemId, req.body);
+    const asset = await equipmentAssetService.createEquipmentAsset(req.params.equipmentItemId, toAddEquipmentAssetRequest(req.body));
     if (!asset) return res.status(404).json({ message: 'Equipment type not found.' });
-    return res.status(201).json(asset);
+    return res.status(201).json(toAddEquipmentAssetResponse(asset));
   } catch (error) {
     if (error.statusCode === 400) return res.status(400).json({ message: error.message });
     if (isUniqueConflict(error)) return res.status(409).json({ message: 'Asset code or serial number is already in use.' });
@@ -49,9 +57,9 @@ async function createEquipmentAsset(req, res) {
 
 async function updateEquipmentAsset(req, res) {
   try {
-    const asset = await equipmentAssetService.updateEquipmentAsset(req.params.equipmentItemId, req.params.assetId, req.body);
+    const asset = await equipmentAssetService.updateEquipmentAsset(req.params.equipmentItemId, req.params.assetId, toUpdateEquipmentAssetRequest(req.body));
     if (!asset) return res.status(404).json({ message: 'Equipment asset not found for this equipment type.' });
-    return res.json({ message: 'Equipment asset updated successfully.', equipmentAsset: asset });
+    return res.json(toUpdateEquipmentAssetResponse(asset));
   } catch (error) {
     if (error.statusCode === 400) return res.status(400).json({ message: error.message });
     if (isUniqueConflict(error)) return res.status(409).json({ message: 'Asset code or serial number is already in use.' });
@@ -64,7 +72,7 @@ async function deleteEquipmentAsset(req, res) {
   try {
     const deletedId = await equipmentAssetService.deleteEquipmentAsset(req.params.equipmentItemId, req.params.assetId);
     if (deletedId == null) return res.status(404).json({ message: 'Equipment asset not found for this equipment type.' });
-    return res.json({ message: 'Equipment asset deleted successfully.', id: deletedId });
+    return res.json(toDeleteEquipmentAssetResponse(deletedId));
   } catch (error) {
     if (error.statusCode === 400) return res.status(400).json({ message: error.message });
     if (error.statusCode === 409) return res.status(409).json({ message: error.message });
